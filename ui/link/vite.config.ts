@@ -10,9 +10,10 @@ function apiPlugin() {
   return {
     name: "api-server",
     configureServer(server: ViteDevServer) {
-      // GET /api/config
+      // GET /api/config — re-reads .env on every request for dev hot-reload
       server.middlewares.use((req, res, next) => {
         if (req.url !== "/api/config") return next();
+        loadDotenv({ override: true });
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({
           platforms: (process.env.PLATFORMS || "").split(",").map(s => s.trim()).filter(Boolean),

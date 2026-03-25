@@ -1,4 +1,5 @@
 import { cn } from "../lib/utils";
+import { useState } from "react";
 import type { PlatformInfo, LinkConfig } from "../types";
 
 function Spinner() {
@@ -64,6 +65,41 @@ function CardShell({
 }
 
 /* ------------------------------------------------------------------ */
+/*  Search Bar                                                         */
+/* ------------------------------------------------------------------ */
+
+function SearchBar({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="px-5 pb-3">
+      <div className="relative">
+        <svg
+          className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+        </svg>
+        <input
+          type="text"
+          placeholder="Search integrations..."
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full pl-9 pr-3 py-2 text-[13px] rounded-lg bg-card-elevated/50 border border-border/50 text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:border-border transition-colors"
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Platform Row                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -114,7 +150,7 @@ function PlatformRow({
         </div>
       ) : (
         <svg
-          className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity duration-150 shrink-0"
+          className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-all duration-150 shrink-0"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -148,9 +184,16 @@ export function LinkCard({
   connectedPlatforms,
   onConnect,
 }: LinkCardProps) {
+  const [search, setSearch] = useState("");
   const allConnected =
     platforms.length > 0 &&
     platforms.every((p) => connectedPlatforms.has(p.platform));
+
+  const filtered = search
+    ? platforms.filter((p) =>
+        p.name.toLowerCase().includes(search.toLowerCase())
+      )
+    : platforms;
 
   return (
     <CardShell>
@@ -174,9 +217,14 @@ export function LinkCard({
         </p>
       </div>
 
-      {/* Platform list */}
-      <div className="px-5 pb-5 space-y-1">
-        {platforms.map((platform) => (
+      {/* Search */}
+      {platforms.length > 3 && (
+        <SearchBar value={search} onChange={setSearch} />
+      )}
+
+      {/* Platform list — fixed height, scrollable */}
+      <div className="px-5 pb-5 max-h-[280px] overflow-y-auto scrollbar-thin space-y-1">
+        {filtered.map((platform) => (
           <PlatformRow
             key={platform.platform}
             platform={platform}
@@ -184,6 +232,11 @@ export function LinkCard({
             onConnect={() => onConnect(platform.name)}
           />
         ))}
+        {filtered.length === 0 && (
+          <p className="text-[13px] text-muted-foreground text-center py-6">
+            No integrations found
+          </p>
+        )}
       </div>
 
       {/* Success banner */}
