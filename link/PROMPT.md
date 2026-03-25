@@ -25,7 +25,7 @@ SUCCESS_MESSAGE=<YOUR_SUCCESS_MESSAGE e.g. "All apps connected! Your agent is re
 
 Optional:
 IDENTITY=<UNIQUE_USER_OR_PROJECT_IDENTIFIER>
-IDENTITY_TYPE=<email|user|team|organization|project>
+IDENTITY_TYPE=<user|team|organization|project>
 
 ## Tech Stack
 
