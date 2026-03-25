@@ -7,5 +7,5 @@
 
 ---
 
-- **[One Link](./link/)**
+- **[Link](./link/)**
   *Drop-in connection onboarding page for agencies. Your customers connect their integrations (Gmail, Slack, etc.) through a branded card — clone and deploy, or [paste a prompt](./link/PROMPT.md) into Lovable/Bolt/v0 to generate it instantly.*

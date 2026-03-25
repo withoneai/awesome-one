@@ -1,4 +1,4 @@
-# One Link
+# Link
 
 A drop-in connection onboarding page for agencies. Your customers visit the page, connect their integrations (Gmail, Slack, Google Calendar, etc.), and you're ready to go.
 
