@@ -103,7 +103,7 @@ function SearchBar({
 /*  Three-dot Menu                                                     */
 /* ------------------------------------------------------------------ */
 
-function ReconnectMenu({ onReconnect }: { onReconnect: () => void }) {
+function ReconnectMenu({ onReconnect, onDisconnect }: { onReconnect: () => void; onDisconnect: () => void }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -151,6 +151,20 @@ function ReconnectMenu({ onReconnect }: { onReconnect: () => void }) {
             </svg>
             Reconnect
           </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onDisconnect();
+            }}
+            className="w-full px-3 py-1.5 text-left text-[12px] text-red-400 hover:bg-card-elevated transition-colors flex items-center gap-2 cursor-pointer"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 6L6 18" />
+              <path d="M6 6l12 12" />
+            </svg>
+            Remove
+          </button>
         </div>
       )}
     </div>
@@ -166,11 +180,13 @@ function PlatformRow({
   isConnected,
   onConnect,
   onReconnect,
+  onDisconnect,
 }: {
   platform: PlatformInfo;
   isConnected: boolean;
   onConnect: () => void;
   onReconnect?: () => void;
+  onDisconnect?: () => void;
 }) {
   return (
     <div
@@ -206,7 +222,7 @@ function PlatformRow({
           <span className="text-[11px] font-medium text-connected">
             Connected
           </span>
-          {onReconnect && <ReconnectMenu onReconnect={onReconnect} />}
+          {onReconnect && onDisconnect && <ReconnectMenu onReconnect={onReconnect} onDisconnect={onDisconnect} />}
         </div>
       ) : (
         <svg
@@ -237,6 +253,7 @@ interface LinkCardProps {
   connectedPlatforms: Map<string, string>;
   onConnect: (platformName: string) => void;
   onReconnect: (platformName: string, connectionId: string) => void;
+  onDisconnect: (connectionId: string) => void;
 }
 
 export function LinkCard({
@@ -245,6 +262,7 @@ export function LinkCard({
   connectedPlatforms,
   onConnect,
   onReconnect,
+  onDisconnect,
 }: LinkCardProps) {
   const [search, setSearch] = useState("");
   const allConnected =
@@ -297,6 +315,11 @@ export function LinkCard({
               onReconnect={
                 connectionId
                   ? () => onReconnect(platform.name, connectionId)
+                  : undefined
+              }
+              onDisconnect={
+                connectionId
+                  ? () => onDisconnect(connectionId)
                   : undefined
               }
             />

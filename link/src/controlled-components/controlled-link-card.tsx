@@ -78,6 +78,18 @@ export function ControlledLinkCard({
     []
   );
 
+  const handleDisconnect = useCallback(
+    async (connectionId: string) => {
+      try {
+        await deleteConnection(connectionId);
+        refreshConnections();
+      } catch (err) {
+        console.error("Failed to disconnect:", err);
+      }
+    },
+    [refreshConnections]
+  );
+
   const cardContent = (() => {
     if (loading) return <LoadingCard />;
     if (error || !config)
@@ -90,6 +102,7 @@ export function ControlledLinkCard({
           connectedPlatforms={connectedPlatforms}
           onConnect={handleConnect}
           onReconnect={handleReconnect}
+          onDisconnect={handleDisconnect}
         />
       </div>
     );
