@@ -1,0 +1,123 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-card-hover: hsl(var(--card-hover));
+  --color-card-elevated: hsl(var(--card-elevated));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-border: hsl(var(--border));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-connected: hsl(var(--connected));
+  --font-sans: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+@layer base {
+  :root {
+    --background: 60 23% 97.5%;
+    --foreground: 0 0% 9.8%;
+    --card: 60 11% 92.9%;
+    --card-foreground: 0 0% 9.8%;
+    --card-hover: 60 10% 90%;
+    --card-elevated: 60 8.5% 88.4%;
+    --muted: 60 11% 92.9%;
+    --muted-foreground: 60 1.5% 39%;
+    --border: 60 8.5% 88.4%;
+    --primary: 0 0% 9.8%;
+    --primary-foreground: 60 23% 97.5%;
+    --connected: 160 59% 52%;
+
+    --card-bg: rgba(255, 255, 255, 0.85);
+    --footer-bg: rgba(232, 232, 228, 0.9);
+    --border-color: rgba(228, 228, 223, 0.4);
+  }
+
+  .dark {
+    --background: 0 0% 9.8%;
+    --foreground: 60 23% 97.5%;
+    --card: 60 1.1% 17.5%;
+    --card-foreground: 60 23% 97.5%;
+    --card-hover: 60 1% 21%;
+    --card-elevated: 60 1.6% 24.7%;
+    --muted: 60 1.1% 17.5%;
+    --muted-foreground: 60 1.4% 56.7%;
+    --border: 60 1.6% 24.7%;
+    --primary: 60 23% 97.5%;
+    --primary-foreground: 0 0% 9.8%;
+    --connected: 160 59% 52%;
+
+    --card-bg: rgba(25, 25, 25, 0.7);
+    --footer-bg: rgba(45, 45, 44, 0.6);
+    --border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  * {
+    @apply border-border;
+  }
+  html {
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+}
+
+/* Glassmorphic backdrop */
+.glass {
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+.dark .glass {
+  backdrop-filter: blur(40px) saturate(1.5);
+  -webkit-backdrop-filter: blur(40px) saturate(1.5);
+}
+
+/* Surface classes */
+.card-surface {
+  background-color: var(--card-bg);
+  border-color: var(--border-color);
+}
+.footer-surface {
+  background-color: var(--footer-bg);
+  border-color: var(--border-color);
+}
+
+/* Connected indicator glow */
+.glow-connected {
+  box-shadow: 0 0 6px hsl(var(--connected) / 0.5);
+}
+
+/* Animations */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px hsl(var(--connected) / 0.5); }
+  50% { opacity: 0.6; box-shadow: 0 0 10px hsl(var(--connected) / 0.7); }
+}
+
+.pulse-connected {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 300ms ease-out;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
