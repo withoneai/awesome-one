@@ -20,7 +20,7 @@ Edit `.env` with your values:
 ```env
 ONE_SECRET_KEY=sk_live_your_key_here
 PLATFORMS=gmail,google-calendar,slack
-COMPANY_NAME=Your Agency
+COMPANY_NAME=ACME
 COMPANY_LOGO_DARK=/logo/logo-full-dark.svg
 COMPANY_LOGO_LIGHT=/logo/logo-full-light.svg
 WELCOME_MESSAGE=To setup your agent, please connect the following apps
