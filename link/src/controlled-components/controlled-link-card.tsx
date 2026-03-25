@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useOneAuth } from "@withone/auth";
 import { useLinkData } from "../hooks/useLinkData";
+import { deleteConnection } from "../endpoints/link";
 import { LinkCard, LoadingCard, ErrorCard } from "../components/link-card";
 import { FloatingHeader } from "../components/floating-header";
 
@@ -25,17 +26,34 @@ export function ControlledLinkCard({
     null
   );
   const pendingOpen = useRef(false);
+  // Track the old connection ID to delete after successful reconnect
+  const reconnectingConnectionId = useRef<string | null>(null);
 
   const { open } = useOneAuth({
     token: { url: `${window.location.origin}/api/one-auth` },
     selectedConnection: connectingPlatform || undefined,
     appTheme: isDark ? "dark" : "light",
-    onSuccess: () => {
+    onSuccess: async () => {
+      // If reconnecting, delete the old connection first
+      if (reconnectingConnectionId.current) {
+        try {
+          await deleteConnection(reconnectingConnectionId.current);
+        } catch (err) {
+          console.error("Failed to delete old connection:", err);
+        }
+        reconnectingConnectionId.current = null;
+      }
       setConnectingPlatform(null);
       refreshConnections();
     },
-    onError: () => setConnectingPlatform(null),
-    onClose: () => setConnectingPlatform(null),
+    onError: () => {
+      reconnectingConnectionId.current = null;
+      setConnectingPlatform(null);
+    },
+    onClose: () => {
+      reconnectingConnectionId.current = null;
+      setConnectingPlatform(null);
+    },
   });
 
   useEffect(() => {
@@ -46,9 +64,19 @@ export function ControlledLinkCard({
   }, [connectingPlatform, open]);
 
   const handleConnect = useCallback((platformName: string) => {
+    reconnectingConnectionId.current = null;
     pendingOpen.current = true;
     setConnectingPlatform(platformName);
   }, []);
+
+  const handleReconnect = useCallback(
+    (platformName: string, connectionId: string) => {
+      reconnectingConnectionId.current = connectionId;
+      pendingOpen.current = true;
+      setConnectingPlatform(platformName);
+    },
+    []
+  );
 
   const cardContent = (() => {
     if (loading) return <LoadingCard />;
@@ -61,6 +89,7 @@ export function ControlledLinkCard({
           platforms={platforms}
           connectedPlatforms={connectedPlatforms}
           onConnect={handleConnect}
+          onReconnect={handleReconnect}
         />
       </div>
     );

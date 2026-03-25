@@ -13,8 +13,13 @@ interface PlatformsResponse {
   platforms: PlatformInfo[];
 }
 
+interface ConnectionRow {
+  id: string;
+  platform: string;
+}
+
 interface ConnectionsResponse {
-  rows: { platform: string }[];
+  rows: ConnectionRow[];
 }
 
 export async function fetchConfig(): Promise<LinkConfig> {
@@ -31,9 +36,20 @@ export async function fetchPlatforms(): Promise<PlatformInfo[]> {
   return data.platforms || [];
 }
 
-export async function fetchConnections(): Promise<Set<string>> {
+export async function fetchConnections(): Promise<Map<string, string>> {
   const res = await fetch("/api/connections");
-  if (!res.ok) return new Set();
+  if (!res.ok) return new Map();
   const data: ConnectionsResponse = await res.json();
-  return new Set((data.rows || []).map((c) => c.platform));
+  const map = new Map<string, string>();
+  for (const c of data.rows || []) {
+    map.set(c.platform, c.id);
+  }
+  return map;
+}
+
+export async function deleteConnection(connectionId: string): Promise<void> {
+  const res = await fetch(`/api/connections/${connectionId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("Failed to delete connection");
 }
