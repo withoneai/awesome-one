@@ -3,7 +3,7 @@
 </p>
 
 <h3 align="center">Awesome One</h3>
-<p align="center">Open-source tools, templates, and examples built on the <a href="https://withone.ai">One</a> platform. Ready to clone, customize, and deploy.</p>
+<p align="center">Open-source tools, templates, and examples built on the <a href="https://withone.ai">One</a> platform. <br />Ready to clone, customize, and deploy.</p>
 
 <p align="center">
   <a href="https://withone.ai"><strong>Website</strong></a>
@@ -22,4 +22,5 @@
 ---
 
 **[Link](./link/)**
+
 *Drop-in connection onboarding page for agencies. Your customers connect their integrations (Gmail, Slack, etc.) through a branded card. Clone and deploy, or [paste a prompt](./link/PROMPT.md) into Lovable/Bolt/v0 to generate it instantly.*
