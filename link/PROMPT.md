@@ -152,7 +152,9 @@ Build a centered card with this structure:
    - Each row shows: platform icon (from API), platform name, and a right arrow chevron
    - On hover: subtle background highlight
    - If already connected: show "Connected" text with a green pulsating dot, a three-dot menu icon, and no arrow
-   - The three-dot menu has a "Reconnect" option. On click: open the auth modal for that platform. On successful re-auth, delete the OLD connection (DELETE /api/connections/:id) then refresh the connections list. The user never sees a disconnected state.
+   - The three-dot menu has two options: "Reconnect" and "Remove" (shown in red).
+   - Reconnect: open the auth modal for that platform. On successful re-auth, delete the OLD connection (DELETE /api/connections/:id) then refresh the connections list. The user never sees a disconnected state.
+   - Remove: delete the connection (DELETE /api/connections/:id) and refresh the list. The platform immediately shows as unconnected.
    - On click (if not connected): open the auth modal for that platform
 
 4. SUCCESS BANNER (shown when ALL platforms are connected):
