@@ -140,6 +140,31 @@ app.get("/api/connections", async (c) => {
   }
 });
 
+// Delete connection — used for reconnect flow
+app.delete("/api/connections/:id", async (c) => {
+  const secretKey = getSecretKey();
+  if (!secretKey) {
+    return c.json({ error: "ONE_SECRET_KEY not configured" }, 500);
+  }
+
+  const connectionId = c.req.param("id");
+
+  try {
+    const response = await fetch(
+      `https://api.withone.ai/v1/vault/connections/${connectionId}`,
+      {
+        method: "DELETE",
+        headers: { "x-one-secret": secretKey },
+      }
+    );
+    return response.ok
+      ? c.json({ deleted: true })
+      : c.json({ error: "Failed to delete" }, response.status as 400);
+  } catch {
+    return c.json({ error: "Failed to delete" }, 500);
+  }
+});
+
 // Platforms — fetch logo and details for requested platforms
 app.get("/api/platforms", async (c) => {
   const secretKey = getSecretKey();

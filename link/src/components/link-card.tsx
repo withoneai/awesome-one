@@ -1,5 +1,5 @@
 import { cn } from "../lib/utils";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { PlatformInfo, LinkConfig } from "../types";
 
 function Spinner() {
@@ -89,12 +89,70 @@ function SearchBar({
         </svg>
         <input
           type="text"
-          placeholder="Search integrations..."
+          placeholder="Search apps..."
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className="w-full pl-9 pr-3 py-2 text-[13px] rounded-lg bg-card-elevated/50 border border-border/50 text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:border-border transition-colors"
         />
       </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Three-dot Menu                                                     */
+/* ------------------------------------------------------------------ */
+
+function ReconnectMenu({ onReconnect }: { onReconnect: () => void }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  return (
+    <div ref={menuRef} className="relative shrink-0">
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(!open);
+        }}
+        className="w-6 h-6 flex items-center justify-center rounded-md cursor-pointer text-muted-foreground hover:text-foreground hover:bg-card-elevated transition-colors"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="12" cy="5" r="2" />
+          <circle cx="12" cy="12" r="2" />
+          <circle cx="12" cy="19" r="2" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-7 z-50 w-32 rounded-lg border border-border bg-card shadow-lg py-1">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(false);
+              onReconnect();
+            }}
+            className="w-full px-3 py-1.5 text-left text-[12px] text-muted-foreground hover:text-foreground hover:bg-card-elevated transition-colors flex items-center gap-2 cursor-pointer"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+              <path d="M21 3v5h-5" />
+              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+              <path d="M8 16H3v5" />
+            </svg>
+            Reconnect
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -107,20 +165,21 @@ function PlatformRow({
   platform,
   isConnected,
   onConnect,
+  onReconnect,
 }: {
   platform: PlatformInfo;
   isConnected: boolean;
   onConnect: () => void;
+  onReconnect?: () => void;
 }) {
   return (
-    <button
+    <div
       onClick={() => !isConnected && onConnect()}
-      disabled={isConnected}
       className={cn(
         "w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition-all duration-150 group",
         "border",
         isConnected
-          ? "border-border/30 cursor-default"
+          ? "border-border/30"
           : "border-transparent hover:bg-card-elevated cursor-pointer active:scale-[0.98]"
       )}
     >
@@ -143,10 +202,11 @@ function PlatformRow({
       </div>
       {isConnected ? (
         <div className="flex items-center gap-2 shrink-0">
+          <div className="w-1.5 h-1.5 rounded-full bg-connected pulse-connected" />
           <span className="text-[11px] font-medium text-connected">
             Connected
           </span>
-          <div className="w-1.5 h-1.5 rounded-full bg-connected pulse-connected" />
+          {onReconnect && <ReconnectMenu onReconnect={onReconnect} />}
         </div>
       ) : (
         <svg
@@ -163,7 +223,7 @@ function PlatformRow({
           />
         </svg>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -174,8 +234,9 @@ function PlatformRow({
 interface LinkCardProps {
   config: LinkConfig;
   platforms: PlatformInfo[];
-  connectedPlatforms: Set<string>;
+  connectedPlatforms: Map<string, string>;
   onConnect: (platformName: string) => void;
+  onReconnect: (platformName: string, connectionId: string) => void;
 }
 
 export function LinkCard({
@@ -183,6 +244,7 @@ export function LinkCard({
   platforms,
   connectedPlatforms,
   onConnect,
+  onReconnect,
 }: LinkCardProps) {
   const [search, setSearch] = useState("");
   const allConnected =
@@ -223,15 +285,23 @@ export function LinkCard({
       )}
 
       {/* Platform list — fixed height, scrollable */}
-      <div className="px-5 pb-5 max-h-[280px] overflow-y-auto scrollbar-thin space-y-1">
-        {filtered.map((platform) => (
-          <PlatformRow
-            key={platform.platform}
-            platform={platform}
-            isConnected={connectedPlatforms.has(platform.platform)}
-            onConnect={() => onConnect(platform.name)}
-          />
-        ))}
+      <div className="px-5 pb-3 max-h-[280px] overflow-y-auto scrollbar-thin space-y-1">
+        {filtered.map((platform) => {
+          const connectionId = connectedPlatforms.get(platform.platform);
+          return (
+            <PlatformRow
+              key={platform.platform}
+              platform={platform}
+              isConnected={!!connectionId}
+              onConnect={() => onConnect(platform.name)}
+              onReconnect={
+                connectionId
+                  ? () => onReconnect(platform.name, connectionId)
+                  : undefined
+              }
+            />
+          );
+        })}
         {filtered.length === 0 && (
           <p className="text-[13px] text-muted-foreground text-center py-6">
             No integrations found
@@ -239,9 +309,9 @@ export function LinkCard({
         )}
       </div>
 
-      {/* Success banner */}
-      {allConnected && (
-        <div className="px-6 pb-5 flex justify-center">
+      {/* Success banner — fixed above footer, outside scroll area */}
+      {allConnected ? (
+        <div className="px-6 py-3 flex justify-center">
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-1.5 rounded-full bg-connected pulse-connected" />
             <span className="text-[11px] font-medium text-connected">
@@ -249,6 +319,8 @@ export function LinkCard({
             </span>
           </div>
         </div>
+      ) : (
+        <div className="pb-2" />
       )}
     </CardShell>
   );

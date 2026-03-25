@@ -68,6 +68,23 @@ function apiPlugin() {
         } catch { res.end(JSON.stringify({ rows: [] })); }
       });
 
+      // DELETE /api/connections/:id
+      server.middlewares.use(async (req, res, next) => {
+        const match = req.url?.match(/^\/api\/connections\/([^/?]+)$/);
+        if (!match || req.method !== "DELETE") return next();
+        res.setHeader("Content-Type", "application/json");
+        const secretKey = process.env.ONE_SECRET_KEY;
+        if (!secretKey) { res.statusCode = 500; res.end(JSON.stringify({ error: "ONE_SECRET_KEY not configured" })); return; }
+        try {
+          const r = await fetch(`https://api.withone.ai/v1/vault/connections/${match[1]}`, {
+            method: "DELETE",
+            headers: { "x-one-secret": secretKey },
+          });
+          res.statusCode = r.status;
+          res.end(JSON.stringify(r.ok ? { deleted: true } : { error: "Failed to delete" }));
+        } catch { res.statusCode = 500; res.end(JSON.stringify({ error: "Failed to delete" })); }
+      });
+
       // POST /api/one-auth
       server.middlewares.use(async (req, res, next) => {
         if (!req.url?.startsWith("/api/one-auth") || req.method !== "POST") return next();

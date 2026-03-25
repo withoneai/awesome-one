@@ -5,8 +5,8 @@ import { fetchConfig, fetchPlatforms, fetchConnections } from "../endpoints/link
 export function useLinkData() {
   const [config, setConfig] = useState<LinkConfig | null>(null);
   const [platforms, setPlatforms] = useState<PlatformInfo[]>([]);
-  const [connectedPlatforms, setConnectedPlatforms] = useState<Set<string>>(
-    new Set()
+  const [connectedPlatforms, setConnectedPlatforms] = useState<Map<string, string>>(
+    new Map()
   );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

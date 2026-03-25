@@ -71,9 +71,20 @@ Checks which platforms the user has already connected.
 Logic:
 1. Fetch from https://api.withone.ai/v1/connections
    - Header: x-one-secret: <ONE_SECRET_KEY>
-2. Return the response as-is. It contains: { rows: [{ platform: "gmail", ... }] }
+2. Return the response as-is. It contains: { rows: [{ id: "uuid", platform: "gmail", ... }] }
+3. The frontend needs both the `platform` name (to show connected state) and the `id` (to delete on reconnect)
 
-### 4. POST /api/one-auth
+### 4. DELETE /api/connections/:id
+
+Deletes a connection. Used for the reconnect flow — after a user successfully re-authenticates, the old connection is deleted.
+
+Logic:
+1. Extract the connection ID from the URL path
+2. DELETE to https://api.withone.ai/v1/vault/connections/{id}
+   - Header: x-one-secret: <ONE_SECRET_KEY>
+3. Return { deleted: true } on success
+
+### 5. POST /api/one-auth
 
 Token endpoint called by the @withone/auth iframe widget. This is the most critical endpoint.
 
@@ -140,7 +151,8 @@ Build a centered card with this structure:
 3. PLATFORM LIST (scrollable if many platforms, max height ~280px):
    - Each row shows: platform icon (from API), platform name, and a right arrow chevron
    - On hover: subtle background highlight
-   - If already connected: show "Connected" text with a green pulsating dot, no arrow
+   - If already connected: show "Connected" text with a green pulsating dot, a three-dot menu icon, and no arrow
+   - The three-dot menu has a "Reconnect" option. On click: open the auth modal for that platform. On successful re-auth, delete the OLD connection (DELETE /api/connections/:id) then refresh the connections list. The user never sees a disconnected state.
    - On click (if not connected): open the auth modal for that platform
 
 4. SUCCESS BANNER (shown when ALL platforms are connected):
