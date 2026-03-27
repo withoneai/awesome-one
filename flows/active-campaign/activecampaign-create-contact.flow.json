@@ -1,0 +1,98 @@
+{
+  "key": "activecampaign-create-contact",
+  "name": "Create a Contact in ActiveCampaign",
+  "description": "Create a new contact in ActiveCampaign with email, name, phone, and custom fields. Optionally tag the contact after creation.",
+  "version": "1",
+  "inputs": {
+    "activeCampaignConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "ActiveCampaign connection key",
+      "connection": { "platform": "active-campaign" }
+    },
+    "email": {
+      "type": "string",
+      "required": true,
+      "description": "Contact email address"
+    },
+    "firstName": {
+      "type": "string",
+      "required": false,
+      "description": "First name"
+    },
+    "lastName": {
+      "type": "string",
+      "required": false,
+      "description": "Last name"
+    },
+    "phone": {
+      "type": "string",
+      "required": false,
+      "description": "Phone number"
+    },
+    "fieldValues": {
+      "type": "array",
+      "required": false,
+      "description": "Custom field values. Array of {field: fieldId, value: fieldValue} objects."
+    },
+    "tagId": {
+      "type": "string",
+      "required": false,
+      "description": "Tag ID to apply to the contact after creation"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildContact",
+      "name": "Build contact payload",
+      "type": "code",
+      "code": {
+        "source": "const { email, firstName, lastName, phone, fieldValues } = $.input;\nif (!email) throw new Error('email is required');\nconst contact = { email };\nif (firstName) contact.firstName = firstName;\nif (lastName) contact.lastName = lastName;\nif (phone) contact.phone = phone;\nif (fieldValues && fieldValues.length > 0) contact.fieldValues = fieldValues;\nreturn { contact };"
+      }
+    },
+    {
+      "id": "createContact",
+      "name": "Create contact via ActiveCampaign API",
+      "type": "action",
+      "action": {
+        "platform": "active-campaign",
+        "actionId": "conn_mod_def::GJzzagLoQHU::D64WeRT1TmmUoyaJJ5t0IQ",
+        "connectionKey": "$.input.activeCampaignConnectionKey",
+        "data": "$.steps.buildContact.output"
+      }
+    },
+    {
+      "id": "prepareTag",
+      "name": "Check if tag should be applied",
+      "type": "code",
+      "code": {
+        "source": "const tagId = $.input.tagId;\nconst contactId = $.steps.createContact.response?.contact?.id;\nreturn { shouldTag: !!(tagId && contactId), contactId: contactId || '', tagId: tagId || '' };"
+      }
+    },
+    {
+      "id": "addTag",
+      "name": "Add tag to contact",
+      "type": "action",
+      "if": "$.steps.prepareTag.output.shouldTag",
+      "action": {
+        "platform": "active-campaign",
+        "actionId": "conn_mod_def::GJzz1X7lVnA::mVcMrPArQXaEMz_uM-ecUA",
+        "connectionKey": "$.input.activeCampaignConnectionKey",
+        "data": {
+          "contactTag": {
+            "contact": "$.steps.prepareTag.output.contactId",
+            "tag": "$.steps.prepareTag.output.tagId"
+          }
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createContact.response || {};\nconst contact = resp.contact || {};\nconst tagged = $.steps.addTag?.response?.contactTag ? true : false;\nreturn {\n  contactId: contact.id || '',\n  email: contact.email || $.input.email,\n  firstName: contact.firstName || '',\n  lastName: contact.lastName || '',\n  created: !!contact.id,\n  tagged,\n  summary: contact.id\n    ? `Created contact ${contact.email || $.input.email}${tagged ? ' (tagged)' : ''}`\n    : 'Failed to create contact'\n};"
+      }
+    }
+  ]
+}

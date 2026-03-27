@@ -1,0 +1,58 @@
+{
+  "key": "calendly-list-event-types",
+  "name": "List Calendly Event Types",
+  "description": "List all event types for the current Calendly user, including scheduling links, duration, and availability details.",
+  "version": "1",
+  "inputs": {
+    "calendlyConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Calendly connection key",
+      "connection": { "platform": "calendly" }
+    },
+    "active": {
+      "type": "boolean",
+      "required": false,
+      "description": "Filter by active status (true = only active, false = only inactive)"
+    }
+  },
+  "steps": [
+    {
+      "id": "getCurrentUser",
+      "name": "Get current Calendly user URI",
+      "type": "action",
+      "action": {
+        "platform": "calendly",
+        "actionId": "conn_mod_def::GJ1CuU4b8Vc::7IQskt_KTzKutFpBIR2Uwg",
+        "connectionKey": "$.input.calendlyConnectionKey"
+      }
+    },
+    {
+      "id": "buildQuery",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const user = $.steps.getCurrentUser.response?.resource || $.steps.getCurrentUser.response || {};\nconst userUri = user.uri || '';\nif (!userUri) throw new Error('Could not determine current user URI');\nconst params = { user: userUri };\nif ($.input.active !== undefined) params.active = String($.input.active);\nreturn { params };"
+      }
+    },
+    {
+      "id": "listEventTypes",
+      "name": "List event types",
+      "type": "action",
+      "action": {
+        "platform": "calendly",
+        "actionId": "conn_mod_def::GJ1CqXgQaDM::Axz-At86SF-Z9PH0cP-x7Q",
+        "connectionKey": "$.input.calendlyConnectionKey",
+        "queryParams": "$.steps.buildQuery.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listEventTypes.response || {};\nconst types = resp.collection || [];\nreturn {\n  eventTypes: types.map(t => ({\n    uri: t.uri,\n    name: t.name,\n    slug: t.slug,\n    active: t.active,\n    duration: t.duration,\n    schedulingUrl: t.scheduling_url,\n    type: t.type,\n    color: t.color,\n    description: t.description_plain || t.description_html || ''\n  })),\n  count: types.length,\n  summary: `Found ${types.length} event type${types.length === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}

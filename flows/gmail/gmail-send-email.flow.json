@@ -1,0 +1,111 @@
+{
+  "key": "gmail-send-email",
+  "name": "Send Email via Gmail",
+  "description": "Compose and send an email through Gmail. Handles MIME encoding, base64url conversion, HTML formatting, CC/BCC, and reply threading automatically.",
+  "version": "1",
+  "inputs": {
+    "gmailConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key",
+      "connection": { "platform": "gmail" }
+    },
+    "to": {
+      "type": "string",
+      "required": true,
+      "description": "Recipient email address(es), comma-separated"
+    },
+    "subject": {
+      "type": "string",
+      "required": true,
+      "description": "Email subject line"
+    },
+    "body": {
+      "type": "string",
+      "required": true,
+      "description": "Email body (plain text or HTML)"
+    },
+    "isHtml": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Set true if body is already HTML. Otherwise plain text is auto-converted."
+    },
+    "from": {
+      "type": "string",
+      "required": false,
+      "description": "Sender address (defaults to authenticated user)"
+    },
+    "cc": {
+      "type": "string",
+      "required": false,
+      "description": "CC recipients, comma-separated"
+    },
+    "bcc": {
+      "type": "string",
+      "required": false,
+      "description": "BCC recipients, comma-separated"
+    },
+    "replyTo": {
+      "type": "string",
+      "required": false,
+      "description": "Reply-To address"
+    },
+    "threadId": {
+      "type": "string",
+      "required": false,
+      "description": "Thread ID to attach this email to (for replies)"
+    },
+    "inReplyTo": {
+      "type": "string",
+      "required": false,
+      "description": "Message-ID of the email being replied to"
+    },
+    "references": {
+      "type": "string",
+      "required": false,
+      "description": "Space-separated chain of Message-IDs for threading"
+    },
+    "labelIds": {
+      "type": "array",
+      "required": false,
+      "description": "Label IDs to apply. Defaults to ['INBOX', 'UNREAD']."
+    }
+  },
+  "steps": [
+    {
+      "id": "buildMimeMessage",
+      "name": "Build MIME message and base64url-encode it",
+      "type": "code",
+      "code": {
+        "source": "const { to, subject, body, isHtml, from, cc, bcc, replyTo, inReplyTo, references } = $.input;\n\nif (!to || !subject || !body) throw new Error('to, subject, and body are required');\n\n// Encode non-ASCII subjects per RFC 2047\nfunction encodeSubject(s) {\n  if (!/[^\\x00-\\x7F]/.test(s)) return s;\n  const bytes = new TextEncoder().encode(s);\n  let binary = '';\n  bytes.forEach(b => binary += String.fromCharCode(b));\n  return '=?UTF-8?B?' + btoa(binary) + '?=';\n}\n\n// Normalize literal \\n sequences to real newlines, then convert to HTML\nfunction textToHtml(text) {\n  const normalized = text.replace(/\\\\n/g, '\\n');\n  const escaped = normalized.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  return '<div style=\"font-family:Arial,sans-serif\">' + escaped.replace(/\\n/g, '<br>') + '</div>';\n}\n\nconst htmlBody = isHtml ? body : textToHtml(body);\n\n// Build MIME headers\nconst headers = [\n  'MIME-Version: 1.0',\n  'From: ' + (from || 'me'),\n  'To: ' + to,\n  'Subject: ' + encodeSubject(subject),\n  'Content-Type: text/html; charset=UTF-8'\n];\n\nif (cc) headers.push('Cc: ' + cc);\nif (bcc) headers.push('Bcc: ' + bcc);\nif (replyTo) headers.push('Reply-To: ' + replyTo);\nif (inReplyTo) headers.push('In-Reply-To: ' + inReplyTo);\nif (references) headers.push('References: ' + references);\n\n// Join with CRLF, add blank line, then body\nconst mimeMessage = headers.join('\\r\\n') + '\\r\\n\\r\\n' + htmlBody;\n\n// Base64url encode\nconst encoder = new TextEncoder();\nconst data = encoder.encode(mimeMessage);\nlet binary = '';\nfor (let i = 0; i < data.length; i++) binary += String.fromCharCode(data[i]);\nconst base64 = btoa(binary);\nconst base64url = base64.replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');\n\nconst labelIds = $.input.labelIds && $.input.labelIds.length > 0 ? $.input.labelIds : ['INBOX', 'UNREAD'];\nconst threadId = $.input.threadId || undefined;\n\nreturn { raw: base64url, labelIds, threadId };"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send the encoded email via Gmail API",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odhCpd3I::gujvYoneSk6NFWltse9bGg",
+        "connectionKey": "$.input.gmailConnectionKey",
+        "pathVars": {
+          "userId": "me"
+        },
+        "data": {
+          "raw": "$.steps.buildMimeMessage.output.raw",
+          "labelIds": "$.steps.buildMimeMessage.output.labelIds",
+          "threadId": "$.steps.buildMimeMessage.output.threadId"
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.sendEmail.response || {};\nconst to = $.input.to;\nconst cc = $.input.cc;\nconst bcc = $.input.bcc;\n\nconst toList = to.split(',').map(e => e.trim()).filter(Boolean);\nconst ccList = cc ? cc.split(',').map(e => e.trim()).filter(Boolean) : [];\nconst bccList = bcc ? bcc.split(',').map(e => e.trim()).filter(Boolean) : [];\nconst total = toList.length + ccList.length + bccList.length;\n\nreturn {\n  messageId: resp.id || '',\n  threadId: resp.threadId || '',\n  labelIds: resp.labelIds || [],\n  recipients: { to: toList, cc: ccList, bcc: bccList },\n  subject: $.input.subject,\n  sent: !!resp.id,\n  summary: resp.id\n    ? `Sent \"${$.input.subject}\" to ${total} recipient${total === 1 ? '' : 's'}`\n    : 'Failed to send email'\n};"
+      }
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "key": "github-commit-history",
+  "name": "Get Commit History",
+  "description": "Fetch commit history for a repository with full details. Supports filtering by branch, author, path, and date range. Handles the list+detail pattern for commit data.",
+  "version": "1",
+  "inputs": {
+    "githubConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "GitHub connection key",
+      "connection": { "platform": "github" }
+    },
+    "owner": {
+      "type": "string",
+      "required": true,
+      "description": "Repository owner (user or org)"
+    },
+    "repo": {
+      "type": "string",
+      "required": true,
+      "description": "Repository name"
+    },
+    "branch": {
+      "type": "string",
+      "required": false,
+      "description": "Branch name (defaults to repo's default branch)"
+    },
+    "author": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by commit author (GitHub username or email)"
+    },
+    "path": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by file path (only commits touching this path)"
+    },
+    "since": {
+      "type": "string",
+      "required": false,
+      "description": "Only commits after this date (ISO 8601 format, e.g., 2024-01-01T00:00:00Z)"
+    },
+    "until": {
+      "type": "string",
+      "required": false,
+      "description": "Only commits before this date (ISO 8601 format)"
+    },
+    "maxResults": {
+      "type": "number",
+      "required": false,
+      "default": 20,
+      "description": "Number of commits to return (1-100)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const { branch, author, path, since, until, maxResults } = $.input;\nconst params = {\n  per_page: String(Math.max(1, Math.min(100, maxResults || 20)))\n};\nif (branch) params.sha = branch;\nif (author) params.author = author;\nif (path) params.path = path;\nif (since) params.since = since;\nif (until) params.until = until;\nreturn { params };"
+      }
+    },
+    {
+      "id": "listCommits",
+      "name": "List commits from the repository",
+      "type": "action",
+      "action": {
+        "platform": "github",
+        "actionId": "conn_mod_def::GCmaFkUctCM::4e9h36E8QValq_8TFWnTOg",
+        "connectionKey": "$.input.githubConnectionKey",
+        "pathVars": {
+          "owner": "$.input.owner",
+          "repo": "$.input.repo"
+        },
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Parse and format commit data",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listCommits.response || [];\nconst commits = (Array.isArray(resp) ? resp : []).map(c => ({\n  sha: c.sha,\n  shortSha: c.sha?.substring(0, 7) || '',\n  message: c.commit?.message || '',\n  messageFirstLine: (c.commit?.message || '').split('\\n')[0],\n  author: {\n    name: c.commit?.author?.name || '',\n    email: c.commit?.author?.email || '',\n    login: c.author?.login || '',\n    date: c.commit?.author?.date || ''\n  },\n  committer: {\n    name: c.commit?.committer?.name || '',\n    login: c.committer?.login || ''\n  },\n  stats: c.stats || null,\n  url: c.html_url,\n  verified: c.commit?.verification?.verified || false\n}));\n\n// Build summary stats\nconst authors = [...new Set(commits.map(c => c.author.login || c.author.name).filter(Boolean))];\nconst dateRange = commits.length > 0\n  ? { from: commits[commits.length - 1].author.date, to: commits[0].author.date }\n  : null;\n\nreturn {\n  commits,\n  totalFound: commits.length,\n  repo: $.input.owner + '/' + $.input.repo,\n  branch: $.input.branch || 'default',\n  uniqueAuthors: authors,\n  dateRange,\n  filters: {\n    author: $.input.author || 'any',\n    path: $.input.path || 'any',\n    since: $.input.since || 'any',\n    until: $.input.until || 'any'\n  },\n  summary: 'Found ' + commits.length + ' commit' + (commits.length === 1 ? '' : 's') + ' in ' + $.input.owner + '/' + $.input.repo + ($.input.branch ? ' on ' + $.input.branch : '') + ' by ' + authors.length + ' author' + (authors.length === 1 ? '' : 's')\n};"
+      }
+    }
+  ]
+}

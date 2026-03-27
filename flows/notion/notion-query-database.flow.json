@@ -1,0 +1,72 @@
+{
+  "key": "notion-query-database",
+  "name": "Query a Notion Database",
+  "description": "Query a Notion database with filters, sorts, and pagination. Returns pages matching the filter criteria with their properties.",
+  "version": "1",
+  "inputs": {
+    "notionConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Notion connection key",
+      "connection": { "platform": "notion" }
+    },
+    "databaseId": {
+      "type": "string",
+      "required": true,
+      "description": "Notion database ID"
+    },
+    "filter": {
+      "type": "object",
+      "required": false,
+      "description": "Notion filter object. Example: {\"property\": \"Status\", \"select\": {\"equals\": \"Done\"}}"
+    },
+    "sorts": {
+      "type": "array",
+      "required": false,
+      "description": "Array of sort objects. Example: [{\"property\": \"Created\", \"direction\": \"descending\"}]"
+    },
+    "pageSize": {
+      "type": "number",
+      "required": false,
+      "default": 25,
+      "description": "Number of results per page (max 100)"
+    },
+    "startCursor": {
+      "type": "string",
+      "required": false,
+      "description": "Pagination cursor from a previous response"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build database query",
+      "type": "code",
+      "code": {
+        "source": "const { filter, sorts, pageSize, startCursor } = $.input;\nconst body = { page_size: Math.min(pageSize || 25, 100) };\nif (filter) body.filter = filter;\nif (sorts && sorts.length > 0) body.sorts = sorts;\nif (startCursor) body.start_cursor = startCursor;\nreturn body;"
+      }
+    },
+    {
+      "id": "queryDatabase",
+      "name": "Query database via Notion API",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5EnL2xERY::ib0N5v41TveieFZQUV-vuQ",
+        "connectionKey": "$.input.notionConnectionKey",
+        "pathVars": {
+          "dataSourceId": "$.input.databaseId"
+        },
+        "data": "$.steps.buildQuery.output"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.queryDatabase.response || {};\nconst results = resp.results || [];\n\nfunction extractTitle(props) {\n  for (const key of Object.keys(props)) {\n    const prop = props[key];\n    if (prop.type === 'title' && prop.title && prop.title.length > 0) {\n      return prop.title.map(t => t.plain_text || '').join('');\n    }\n  }\n  return '';\n}\n\nreturn {\n  pages: results.map(p => ({\n    id: p.id,\n    title: extractTitle(p.properties || {}),\n    url: p.url || '',\n    properties: p.properties || {},\n    createdTime: p.created_time,\n    lastEditedTime: p.last_edited_time\n  })),\n  count: results.length,\n  hasMore: resp.has_more || false,\n  nextCursor: resp.next_cursor || null,\n  summary: `Retrieved ${results.length} page${results.length === 1 ? '' : 's'} from database`\n};"
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "key": "netlify-list-sites",
+  "name": "List Netlify Sites",
+  "description": "List all sites in your Netlify account. Returns site IDs, names, URLs, and deploy status.",
+  "version": "1",
+  "inputs": {
+    "netlifyConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Netlify connection key",
+      "connection": { "platform": "netlify" }
+    }
+  },
+  "steps": [
+    {
+      "id": "listSites",
+      "name": "List all Netlify sites",
+      "type": "action",
+      "action": {
+        "platform": "netlify",
+        "actionId": "conn_mod_def::GJ5BP3pIYwA::sqd9N8qzRMGEmGLiLpihQg",
+        "connectionKey": "$.input.netlifyConnectionKey"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format site list",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listSites.response || [];\nconst sites = (Array.isArray(resp) ? resp : []).map(s => ({\n  id: s.id || '',\n  name: s.name || '',\n  url: s.ssl_url || s.url || '',\n  adminUrl: s.admin_url || '',\n  state: s.state || '',\n  createdAt: s.created_at || '',\n  updatedAt: s.updated_at || ''\n}));\n\nreturn {\n  sites,\n  totalSites: sites.length,\n  summary: `Found ${sites.length} Netlify site${sites.length === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}

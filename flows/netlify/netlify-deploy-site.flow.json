@@ -1,0 +1,67 @@
+{
+  "key": "netlify-deploy-site",
+  "name": "Deploy a Netlify Site",
+  "description": "Trigger a new deploy for a Netlify site. Supports production deploys, deploy previews, branch targeting, and custom deploy titles.",
+  "version": "1",
+  "inputs": {
+    "netlifyConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Netlify connection key",
+      "connection": { "platform": "netlify" }
+    },
+    "siteId": {
+      "type": "string",
+      "required": true,
+      "description": "Netlify site ID to deploy"
+    },
+    "production": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Set true for a production deploy"
+    },
+    "branch": {
+      "type": "string",
+      "required": false,
+      "description": "Branch to deploy from"
+    },
+    "title": {
+      "type": "string",
+      "required": false,
+      "description": "Title for this deploy"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build deploy query params",
+      "type": "code",
+      "code": {
+        "source": "const { production, branch, title } = $.input;\nconst params = {};\nif (production) params.production = 'true';\nif (branch) params.branch = branch;\nif (title) params.title = title;\nreturn { params };"
+      }
+    },
+    {
+      "id": "createDeploy",
+      "name": "Create site deploy",
+      "type": "action",
+      "action": {
+        "platform": "netlify",
+        "actionId": "conn_mod_def::GJ5BNKCPGL0::BleJube2SSi0hNuBEglgVQ",
+        "connectionKey": "$.input.netlifyConnectionKey",
+        "pathVars": {
+          "siteId": "$.input.siteId"
+        },
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format deploy result",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createDeploy.response || {};\nreturn {\n  deployId: resp.id || '',\n  siteId: resp.site_id || '',\n  state: resp.state || '',\n  url: resp.ssl_url || resp.url || '',\n  deployUrl: resp.deploy_ssl_url || resp.deploy_url || '',\n  adminUrl: resp.admin_url || '',\n  branch: resp.branch || '',\n  context: resp.context || '',\n  title: resp.title || '',\n  createdAt: resp.created_at || '',\n  summary: resp.id ? `Deploy ${resp.id} created (state: ${resp.state || 'unknown'}) for ${resp.ssl_url || resp.url || 'site'}` : 'Failed to create deploy'\n};"
+      }
+    }
+  ]
+}

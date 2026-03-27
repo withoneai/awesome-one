@@ -1,0 +1,54 @@
+{
+  "key": "zendesk-search-tickets",
+  "name": "Search Zendesk Tickets",
+  "description": "Search for tickets in Zendesk. Returns ticket details including subject, status, priority, and assignee. Supports sorting and filtering by external ID.",
+  "version": "1",
+  "inputs": {
+    "zendeskConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Zendesk connection key",
+      "connection": { "platform": "zendesk" }
+    },
+    "sortOrder": {
+      "type": "string",
+      "required": false,
+      "default": "desc",
+      "description": "Sort order: asc or desc"
+    },
+    "externalId": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by external ID"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build search parameters",
+      "type": "code",
+      "code": {
+        "source": "const params = {};\nif ($.input.sortOrder) params.sort_order = $.input.sortOrder;\nif ($.input.externalId) params.external_id = $.input.externalId;\nreturn { params };"
+      }
+    },
+    {
+      "id": "searchTickets",
+      "name": "Search tickets via Zendesk API",
+      "type": "action",
+      "action": {
+        "platform": "zendesk",
+        "actionId": "conn_mod_def::GABnnI_a8O4::DIJZSkogQ1iZMuULQLGjRQ",
+        "connectionKey": "$.input.zendeskConnectionKey",
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format search results",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.searchTickets.response || {};\nconst tickets = (resp.tickets || []).map(t => ({\n  id: t.id || '',\n  subject: t.subject || '',\n  status: t.status || '',\n  priority: t.priority || '',\n  type: t.type || '',\n  createdAt: t.created_at || '',\n  updatedAt: t.updated_at || '',\n  tags: t.tags || [],\n  assigneeId: t.assignee_id || null\n}));\n\nconst meta = resp.meta || {};\nreturn {\n  tickets,\n  totalTickets: tickets.length,\n  hasMore: meta.has_more || false,\n  afterCursor: meta.after_cursor || null,\n  summary: `Found ${tickets.length} ticket${tickets.length === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}

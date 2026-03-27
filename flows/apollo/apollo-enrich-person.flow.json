@@ -1,0 +1,79 @@
+{
+  "key": "apollo-enrich-person",
+  "name": "Enrich a Person",
+  "description": "Enrich a single person's data using Apollo's People Enrichment API. Match by email, name+domain, LinkedIn URL, or Apollo person ID. Returns title, employer, employment history, location, seniority, and more.",
+  "version": "1",
+  "inputs": {
+    "apolloConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Apollo connection key",
+      "connection": { "platform": "apollo" }
+    },
+    "email": {
+      "type": "string",
+      "required": false,
+      "description": "Person's email address (strongest match signal)"
+    },
+    "firstName": {
+      "type": "string",
+      "required": false,
+      "description": "First name (use with lastName and domain for best results)"
+    },
+    "lastName": {
+      "type": "string",
+      "required": false,
+      "description": "Last name"
+    },
+    "domain": {
+      "type": "string",
+      "required": false,
+      "description": "Employer domain (no www. or @). Example: apollo.io"
+    },
+    "linkedinUrl": {
+      "type": "string",
+      "required": false,
+      "description": "LinkedIn profile URL"
+    },
+    "apolloPersonId": {
+      "type": "string",
+      "required": false,
+      "description": "Apollo person ID (from a previous search)"
+    },
+    "revealPersonalEmails": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Set true to reveal personal emails (consumes credits, blocked in GDPR regions)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build enrichment query parameters",
+      "type": "code",
+      "code": {
+        "source": "const i = $.input;\nconst params = {};\n\nif (i.email) params.email = i.email;\nif (i.firstName) params.first_name = i.firstName;\nif (i.lastName) params.last_name = i.lastName;\nif (i.domain) params.domain = i.domain;\nif (i.linkedinUrl) params.linkedin_url = i.linkedinUrl;\nif (i.apolloPersonId) params.id = i.apolloPersonId;\nif (i.revealPersonalEmails) params.reveal_personal_emails = 'true';\n\n// Validate at least one identifier is provided\nconst hasId = i.email || i.linkedinUrl || i.apolloPersonId || (i.firstName && i.domain) || (i.firstName && i.lastName);\nif (!hasId) throw new Error('Provide at least one identifier: email, linkedinUrl, apolloPersonId, or firstName+domain/lastName');\n\nreturn { params };"
+      }
+    },
+    {
+      "id": "enrichPerson",
+      "name": "Call Apollo People Enrichment API",
+      "type": "action",
+      "action": {
+        "platform": "apollo",
+        "actionId": "conn_mod_def::GJz1-5Pqiyg::USYoxmHNRM2-z8l50tKI_w",
+        "connectionKey": "$.input.apolloConnectionKey",
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Extract and format enriched person data",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.enrichPerson.response || {};\nconst p = resp.person;\n\nif (!p) return { found: false, summary: 'No match found. Try providing more identifiers (email, domain, LinkedIn URL).' };\n\nconst org = p.organization || {};\nconst employment = (p.employment_history || []).map(e => ({\n  title: e.title,\n  company: e.organization_name,\n  current: e.current || false,\n  startDate: e.start_date,\n  endDate: e.end_date\n}));\n\nreturn {\n  found: true,\n  person: {\n    id: p.id,\n    name: p.name,\n    firstName: p.first_name,\n    lastName: p.last_name,\n    title: p.title,\n    headline: p.headline,\n    email: p.email || null,\n    emailStatus: p.email_status || null,\n    linkedinUrl: p.linkedin_url || null,\n    city: p.city,\n    state: p.state,\n    country: p.country,\n    seniority: p.seniority,\n    departments: p.departments || [],\n    isLikelyToEngage: p.is_likely_to_engage || false\n  },\n  organization: {\n    id: org.id,\n    name: org.name,\n    domain: org.primary_domain,\n    industry: org.industry,\n    employees: org.estimated_num_employees,\n    revenue: org.annual_revenue_printed,\n    linkedinUrl: org.linkedin_url\n  },\n  employment,\n  summary: `Enriched: ${p.name} - ${p.title || 'Unknown title'} at ${org.name || 'Unknown company'}`\n};"
+      }
+    }
+  ]
+}

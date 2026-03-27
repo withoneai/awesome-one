@@ -1,0 +1,72 @@
+{
+  "key": "jira-add-comment",
+  "name": "Add a Comment to a Jira Issue",
+  "description": "Adds a comment to a Jira issue. Converts plain text to Atlassian Document Format (ADF) automatically. Supports optional visibility restrictions (group or role).",
+  "version": "1",
+  "inputs": {
+    "jiraConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Jira connection key",
+      "connection": { "platform": "jira" }
+    },
+    "jiraCloudId": {
+      "type": "string",
+      "required": true,
+      "description": "Jira Cloud site ID (UUID). Get it via the Get Sites action."
+    },
+    "issueIdOrKey": {
+      "type": "string",
+      "required": true,
+      "description": "Issue ID or key (e.g., 'PROJ-123')"
+    },
+    "comment": {
+      "type": "string",
+      "required": true,
+      "description": "Comment text (plain text, auto-converted to ADF)"
+    },
+    "visibilityType": {
+      "type": "string",
+      "required": false,
+      "description": "Restrict visibility: 'group' or 'role'"
+    },
+    "visibilityValue": {
+      "type": "string",
+      "required": false,
+      "description": "Group name or role name to restrict visibility to"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildComment",
+      "name": "Build ADF comment payload",
+      "type": "code",
+      "code": {
+        "source": "const { comment, visibilityType, visibilityValue } = $.input;\n\nif (!comment) throw new Error('comment text is required');\n\n// Convert plain text to ADF, preserving line breaks as separate paragraphs\nconst paragraphs = comment.split('\\n');\nconst adfContent = paragraphs.map(line => ({\n  type: 'paragraph',\n  content: line.trim() ? [{ type: 'text', text: line }] : []\n}));\n\nconst payload = {\n  body: {\n    type: 'doc',\n    version: 1,\n    content: adfContent\n  }\n};\n\nif (visibilityType && visibilityValue) {\n  payload.visibility = {\n    type: visibilityType,\n    value: visibilityValue,\n    identifier: visibilityValue\n  };\n}\n\nreturn payload;"
+      }
+    },
+    {
+      "id": "addComment",
+      "name": "Post the comment to the issue",
+      "type": "action",
+      "action": {
+        "platform": "jira",
+        "actionId": "conn_mod_def::GJ4qWiVfkSM::sbJJ-I2yQjGHyJq0D_evxA",
+        "connectionKey": "$.input.jiraConnectionKey",
+        "pathVars": {
+          "jiraCloudId": "$.input.jiraCloudId",
+          "issueIdOrKey": "$.input.issueIdOrKey"
+        },
+        "data": "$.steps.buildComment.output"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.addComment.response || {};\nconst issueKey = $.input.issueIdOrKey;\n\nreturn {\n  commentId: resp.id || '',\n  issueKey,\n  author: resp.author ? resp.author.displayName : '',\n  created: resp.created || '',\n  visibility: resp.visibility || null,\n  success: !!resp.id,\n  summary: resp.id\n    ? `Added comment ${resp.id} to ${issueKey}`\n    : `Failed to add comment to ${issueKey}`\n};"
+      }
+    }
+  ]
+}

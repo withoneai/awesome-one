@@ -1,0 +1,83 @@
+{
+  "key": "hubspot-create-contact",
+  "name": "Create a Contact in HubSpot",
+  "description": "Create a new contact in HubSpot CRM with standard and custom properties. Supports optional association with a company.",
+  "version": "1",
+  "inputs": {
+    "hubspotConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "HubSpot connection key",
+      "connection": { "platform": "hubspot" }
+    },
+    "email": {
+      "type": "string",
+      "required": true,
+      "description": "Contact email address"
+    },
+    "firstName": {
+      "type": "string",
+      "required": false,
+      "description": "First name"
+    },
+    "lastName": {
+      "type": "string",
+      "required": false,
+      "description": "Last name"
+    },
+    "phone": {
+      "type": "string",
+      "required": false,
+      "description": "Phone number"
+    },
+    "company": {
+      "type": "string",
+      "required": false,
+      "description": "Company name"
+    },
+    "jobTitle": {
+      "type": "string",
+      "required": false,
+      "description": "Job title"
+    },
+    "lifecycleStage": {
+      "type": "string",
+      "required": false,
+      "description": "Lifecycle stage (e.g., 'subscriber', 'lead', 'opportunity', 'customer')"
+    },
+    "customProperties": {
+      "type": "object",
+      "required": false,
+      "description": "Additional custom properties as key-value pairs (all values must be strings)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPayload",
+      "name": "Build contact payload",
+      "type": "code",
+      "code": {
+        "source": "const { email, firstName, lastName, phone, company, jobTitle, lifecycleStage, customProperties } = $.input;\nif (!email) throw new Error('email is required');\nconst properties = { email };\nif (firstName) properties.firstname = firstName;\nif (lastName) properties.lastname = lastName;\nif (phone) properties.phone = phone;\nif (company) properties.company = company;\nif (jobTitle) properties.jobtitle = jobTitle;\nif (lifecycleStage) properties.lifecyclestage = lifecycleStage;\nif (customProperties) Object.assign(properties, customProperties);\nreturn { properties };"
+      }
+    },
+    {
+      "id": "createContact",
+      "name": "Create contact via HubSpot API",
+      "type": "action",
+      "action": {
+        "platform": "hubspot",
+        "actionId": "conn_mod_def::GJ3kRa59YdQ::k6o-IYauSoqishpRytOX-Q",
+        "connectionKey": "$.input.hubspotConnectionKey",
+        "data": "$.steps.buildPayload.output"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createContact.response || {};\nreturn {\n  contactId: resp.id || '',\n  properties: resp.properties || {},\n  createdAt: resp.createdAt || '',\n  created: !!resp.id,\n  summary: resp.id\n    ? `Created contact ${resp.properties?.email || $.input.email} (ID: ${resp.id})`\n    : 'Failed to create contact'\n};"
+      }
+    }
+  ]
+}

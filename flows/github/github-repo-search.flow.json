@@ -1,0 +1,111 @@
+{
+  "key": "github-repo-search",
+  "name": "Search and Inspect Repositories",
+  "description": "Search GitHub repositories and fetch detailed information. Handles the search+detail pattern: finds repos matching a query, then fetches full metadata including languages, topics, and recent commits.",
+  "version": "1",
+  "inputs": {
+    "githubConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "GitHub connection key",
+      "connection": { "platform": "github" }
+    },
+    "query": {
+      "type": "string",
+      "required": true,
+      "description": "Search query using GitHub search syntax (e.g., 'language:typescript stars:>100', 'org:withoneai')"
+    },
+    "sort": {
+      "type": "string",
+      "required": false,
+      "default": "best-match",
+      "description": "Sort by: stars, forks, help-wanted-issues, updated, or best-match"
+    },
+    "maxResults": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Number of repositories to return (1-30)"
+    },
+    "includeCommits": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Fetch recent commits for each repo (adds one API call per repo)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build search parameters",
+      "type": "code",
+      "code": {
+        "source": "const { query, sort, maxResults } = $.input;\nif (!query) throw new Error('query is required');\nconst params = {\n  q: query,\n  per_page: String(Math.max(1, Math.min(30, maxResults || 5)))\n};\nif (sort && sort !== 'best-match') params.sort = sort;\nreturn { params };"
+      }
+    },
+    {
+      "id": "searchRepos",
+      "name": "Search repositories",
+      "type": "action",
+      "action": {
+        "platform": "github",
+        "actionId": "conn_mod_def::GDHSkn2N6LI::TSvz_OHwQ_SqqG5oRQBIcw",
+        "connectionKey": "$.input.githubConnectionKey",
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "checkResults",
+      "name": "Extract repositories from search response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.searchRepos.response || {};\nconst items = resp.items || [];\nconst fetchCount = $.input.includeCommits ? items.length : 0;\nreturn { repos: items, count: fetchCount, totalCount: resp.total_count || 0, actualCount: items.length };"
+      }
+    },
+    {
+      "id": "fetchDetails",
+      "name": "Fetch additional details for each repo",
+      "type": "loop",
+      "if": "$.steps.checkResults.output.count > 0",
+      "loop": {
+        "over": "$.steps.checkResults.output.repos",
+        "as": "repo",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "getCommits",
+            "name": "Get recent commits",
+            "type": "action",
+            "onError": { "strategy": "continue" },
+            "action": {
+              "platform": "github",
+              "actionId": "conn_mod_def::GCmaFkUctCM::4e9h36E8QValq_8TFWnTOg",
+              "connectionKey": "$.input.githubConnectionKey",
+              "pathVars": {
+                "owner": "$.loop.repo.owner.login",
+                "repo": "$.loop.repo.name"
+              },
+              "queryParams": { "per_page": "5" }
+            }
+          },
+          {
+            "id": "parseCommits",
+            "name": "Parse commit data",
+            "type": "code",
+            "code": {
+              "source": "const commits = $.steps.getCommits?.response || [];\nreturn {\n  fullName: $.loop.repo.full_name,\n  recentCommits: (Array.isArray(commits) ? commits : []).slice(0, 5).map(c => ({\n    sha: c.sha?.substring(0, 7) || '',\n    message: (c.commit?.message || '').split('\\n')[0].substring(0, 80),\n    author: c.commit?.author?.name || c.author?.login || 'unknown',\n    date: c.commit?.author?.date || ''\n  }))\n};"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Compile final result",
+      "type": "code",
+      "code": {
+        "source": "const repos = $.steps.checkResults.output.repos || [];\nconst commitIterations = $.steps.fetchDetails?.response?.iterations || [];\n\nconst commitMap = {};\ncommitIterations.forEach(iter => {\n  const parsed = iter?.parseCommits?.output;\n  if (parsed) commitMap[parsed.fullName] = parsed.recentCommits;\n});\n\nconst result = repos.map(r => {\n  const item = {\n    fullName: r.full_name,\n    description: (r.description || '').substring(0, 200),\n    language: r.language,\n    stars: r.stargazers_count || 0,\n    forks: r.forks_count || 0,\n    openIssues: r.open_issues_count || 0,\n    topics: r.topics || [],\n    isPrivate: r.private || false,\n    defaultBranch: r.default_branch || 'main',\n    updatedAt: r.updated_at,\n    url: r.html_url\n  };\n  if (commitMap[r.full_name]) item.recentCommits = commitMap[r.full_name];\n  return item;\n});\n\nreturn {\n  repositories: result,\n  totalFound: result.length,\n  totalAvailable: $.steps.checkResults.output.totalCount,\n  query: $.input.query,\n  summary: 'Found ' + result.length + ' of ' + $.steps.checkResults.output.totalCount + ' repositories matching \"' + $.input.query + '\"'\n};"
+      }
+    }
+  ]
+}

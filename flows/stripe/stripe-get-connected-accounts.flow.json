@@ -1,0 +1,69 @@
+{
+  "key": "stripe-get-connected-accounts",
+  "name": "List Stripe Connected Accounts",
+  "description": "Lists connected accounts (Stripe Connect). Compresses responses by removing deeply nested settings, requirements, and dashboard fields while preserving account identity, capabilities, and status.",
+  "version": "1",
+  "inputs": {
+    "stripeConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Stripe connection key (must be a platform/Connect account)",
+      "connection": { "platform": "stripe" }
+    },
+    "createdAfter": {
+      "type": "number",
+      "required": false,
+      "description": "Filter accounts created after this Unix timestamp"
+    },
+    "createdBefore": {
+      "type": "number",
+      "required": false,
+      "description": "Filter accounts created before this Unix timestamp"
+    },
+    "limit": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Number of accounts to return (1-100)"
+    },
+    "startingAfter": {
+      "type": "string",
+      "required": false,
+      "description": "Cursor for pagination (account ID to start after)"
+    },
+    "expand": {
+      "type": "array",
+      "required": false,
+      "description": "Fields to expand"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const { createdAfter, createdBefore, limit, startingAfter, expand } = $.input;\n\nconst params = {};\nif (createdAfter) params['created[gte]'] = String(createdAfter);\nif (createdBefore) params['created[lte]'] = String(createdBefore);\nif (limit) params.limit = String(Math.max(1, Math.min(100, limit)));\nif (startingAfter) params.starting_after = startingAfter;\n\nif (expand && expand.length > 0) {\n  expand.forEach((field, i) => {\n    params[`expand[${i}]`] = field;\n  });\n}\n\nreturn { params };"
+      }
+    },
+    {
+      "id": "listAccounts",
+      "name": "Fetch connected accounts from Stripe",
+      "type": "action",
+      "action": {
+        "platform": "stripe",
+        "actionId": "conn_mod_def::GHEfXXy9PlM::C9ElluwuTJ6t55dex_Y0tA",
+        "connectionKey": "$.input.stripeConnectionKey",
+        "queryParams": "$.steps.buildQuery.output.params"
+      }
+    },
+    {
+      "id": "compressResults",
+      "name": "Strip deeply nested verbose fields from each account",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listAccounts.response || {};\nconst accounts = resp.data || [];\n\nfunction deleteNested(obj, path) {\n  const parts = path.split('.');\n  let current = obj;\n  for (let i = 0; i < parts.length - 1; i++) {\n    if (!current || typeof current !== 'object') return;\n    current = current[parts[i]];\n  }\n  if (current && typeof current === 'object') {\n    delete current[parts[parts.length - 1]];\n  }\n}\n\nconst keysToRemove = [\n  'business_profile.annual_revenue', 'business_profile.estimated_worker_count',\n  'business_profile.support_address', 'business_profile.support_email',\n  'business_profile.support_phone', 'business_profile.support_url',\n  'controller.fees', 'controller.losses', 'controller.requirement_collection',\n  'controller.stripe_dashboard',\n  'external_accounts.has_more', 'external_accounts.total_count', 'external_accounts.url',\n  'future_requirements.alternatives', 'future_requirements.current_deadline',\n  'future_requirements.disabled_reason', 'future_requirements.errors',\n  'future_requirements.past_due', 'future_requirements.pending_verification',\n  'login_links',\n  'requirements.alternatives', 'requirements.current_deadline',\n  'requirements.errors', 'requirements.pending_verification',\n  'settings.bacs_debit_payments', 'settings.branding', 'settings.card_issuing',\n  'settings.card_payments.decline_on', 'settings.card_payments.statement_descriptor_prefix',\n  'settings.card_payments.statement_descriptor_prefix_kanji',\n  'settings.card_payments.statement_descriptor_prefix_kana',\n  'settings.dashboard.display_name', 'settings.dashboard.timezone',\n  'settings.invoices',\n  'settings.payments.statement_descriptor', 'settings.payments.statement_descriptor_kana',\n  'settings.payments.statement_descriptor_kanji',\n  'settings.payouts.debit_negative_balances', 'settings.payouts.schedule',\n  'settings.payouts.statement_descriptor', 'settings.sepa_debit_payments',\n  'tos_acceptance.service_agreement', 'tos_acceptance.user_agent'\n];\n\nconst compressed = accounts.map(account => {\n  const c = JSON.parse(JSON.stringify(account));\n  keysToRemove.forEach(path => deleteNested(c, path));\n  return c;\n});\n\nreturn {\n  accounts: compressed,\n  totalReturned: compressed.length,\n  hasMore: resp.has_more || false,\n  summary: `Retrieved ${compressed.length} connected account${compressed.length === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "key": "github-list-issues",
+  "name": "List and Read Repository Issues",
+  "description": "List issues from a GitHub repository with full details. Handles the list+detail pattern: first lists issues matching filters, then fetches each issue's full content including labels, assignees, and comments.",
+  "version": "1",
+  "inputs": {
+    "githubConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "GitHub connection key",
+      "connection": { "platform": "github" }
+    },
+    "owner": {
+      "type": "string",
+      "required": true,
+      "description": "Repository owner (user or org)"
+    },
+    "repo": {
+      "type": "string",
+      "required": true,
+      "description": "Repository name"
+    },
+    "state": {
+      "type": "string",
+      "required": false,
+      "default": "open",
+      "description": "Filter by state: open, closed, or all"
+    },
+    "labels": {
+      "type": "string",
+      "required": false,
+      "description": "Comma-separated list of label names to filter by"
+    },
+    "assignee": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by assignee username. Use '*' for any, 'none' for unassigned."
+    },
+    "sort": {
+      "type": "string",
+      "required": false,
+      "default": "created",
+      "description": "Sort by: created, updated, or comments"
+    },
+    "maxResults": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Number of issues to return (1-100)"
+    },
+    "includeComments": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Fetch comments for each issue (adds one API call per issue)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const { state, labels, assignee, sort, maxResults } = $.input;\nconst params = {};\nparams.state = state || 'open';\nparams.sort = sort || 'created';\nparams.per_page = String(Math.max(1, Math.min(100, maxResults || 10)));\nif (labels) params.labels = labels;\nif (assignee) params.assignee = assignee;\nreturn { params };"
+      }
+    },
+    {
+      "id": "listIssues",
+      "name": "List issues from the repository",
+      "type": "action",
+      "action": {
+        "platform": "github",
+        "actionId": "conn_mod_def::GCXXDNfknD4::dqAYPXx9RHCqkVp3BiMZ3Q",
+        "connectionKey": "$.input.githubConnectionKey",
+        "pathVars": {
+          "owner": "$.input.owner",
+          "repo": "$.input.repo"
+        },
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "filterIssues",
+      "name": "Filter out pull requests (GitHub returns PRs in issues endpoint)",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listIssues.response || [];\nconst issues = (Array.isArray(resp) ? resp : []).filter(i => !i.pull_request);\nconst shouldFetchComments = $.input.includeComments && issues.length > 0;\nreturn { issues, count: shouldFetchComments ? issues.length : 0 };"
+      }
+    },
+    {
+      "id": "fetchComments",
+      "name": "Fetch comments for each issue",
+      "type": "loop",
+      "if": "$.steps.filterIssues.output.count > 0",
+      "loop": {
+        "over": "$.steps.filterIssues.output.issues",
+        "as": "issue",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "getComments",
+            "name": "Get comments for this issue",
+            "type": "action",
+            "onError": { "strategy": "continue" },
+            "action": {
+              "platform": "github",
+              "actionId": "conn_mod_def::GDHR3UCjO-I::QMAOPBxLRNOHCWasVwHkog",
+              "connectionKey": "$.input.githubConnectionKey",
+              "pathVars": {
+                "owner": "$.input.owner",
+                "repo": "$.input.repo",
+                "issue_number": "$.loop.issue.number"
+              },
+              "queryParams": { "per_page": "10" }
+            }
+          },
+          {
+            "id": "parseComments",
+            "name": "Parse comment data",
+            "type": "code",
+            "code": {
+              "source": "const comments = $.steps.getComments?.response || [];\nreturn {\n  issueNumber: $.loop.issue.number,\n  comments: (Array.isArray(comments) ? comments : []).map(c => ({\n    id: c.id,\n    author: c.user?.login || 'unknown',\n    body: c.body?.substring(0, 500) || '',\n    createdAt: c.created_at\n  }))\n};"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Compile final result",
+      "type": "code",
+      "code": {
+        "source": "const issues = $.steps.filterIssues.output.issues || [];\nconst commentIterations = $.steps.fetchComments?.response?.iterations || [];\n\nconst commentMap = {};\ncommentIterations.forEach(iter => {\n  const parsed = iter?.parseComments?.output;\n  if (parsed) commentMap[parsed.issueNumber] = parsed.comments;\n});\n\nconst result = issues.map(i => {\n  const item = {\n    number: i.number,\n    title: i.title,\n    state: i.state,\n    author: i.user?.login || 'unknown',\n    assignees: (i.assignees || []).map(a => a.login),\n    labels: (i.labels || []).map(l => typeof l === 'string' ? l : l.name),\n    createdAt: i.created_at,\n    updatedAt: i.updated_at,\n    body: (i.body || '').substring(0, 500),\n    commentsCount: i.comments || 0,\n    url: i.html_url\n  };\n  if (commentMap[i.number]) item.comments = commentMap[i.number];\n  return item;\n});\n\nreturn {\n  issues: result,\n  totalFound: result.length,\n  repo: $.input.owner + '/' + $.input.repo,\n  filters: { state: $.input.state || 'open', labels: $.input.labels || 'any', assignee: $.input.assignee || 'any' },\n  summary: 'Found ' + result.length + ' issue' + (result.length === 1 ? '' : 's') + ' in ' + $.input.owner + '/' + $.input.repo\n};"
+      }
+    }
+  ]
+}

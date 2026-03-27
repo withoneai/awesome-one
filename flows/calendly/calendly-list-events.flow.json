@@ -1,0 +1,74 @@
+{
+  "key": "calendly-list-events",
+  "name": "List Scheduled Events from Calendly",
+  "description": "List scheduled events from Calendly with optional date range and status filtering. Fetches the current user URI automatically.",
+  "version": "1",
+  "inputs": {
+    "calendlyConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Calendly connection key",
+      "connection": { "platform": "calendly" }
+    },
+    "status": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by status: 'active' or 'canceled'"
+    },
+    "minStartTime": {
+      "type": "string",
+      "required": false,
+      "description": "Minimum start time in ISO 8601 format"
+    },
+    "maxStartTime": {
+      "type": "string",
+      "required": false,
+      "description": "Maximum start time in ISO 8601 format"
+    },
+    "count": {
+      "type": "number",
+      "required": false,
+      "default": 20,
+      "description": "Number of events to return"
+    }
+  },
+  "steps": [
+    {
+      "id": "getCurrentUser",
+      "name": "Get current Calendly user URI",
+      "type": "action",
+      "action": {
+        "platform": "calendly",
+        "actionId": "conn_mod_def::GJ1CuU4b8Vc::7IQskt_KTzKutFpBIR2Uwg",
+        "connectionKey": "$.input.calendlyConnectionKey"
+      }
+    },
+    {
+      "id": "buildQuery",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const user = $.steps.getCurrentUser.response?.resource || $.steps.getCurrentUser.response || {};\nconst userUri = user.uri || '';\nif (!userUri) throw new Error('Could not determine current user URI');\nconst params = { user: userUri, count: String($.input.count || 20) };\nif ($.input.status) params.status = $.input.status;\nif ($.input.minStartTime) params.min_start_time = $.input.minStartTime;\nif ($.input.maxStartTime) params.max_start_time = $.input.maxStartTime;\nreturn { params, userUri };"
+      }
+    },
+    {
+      "id": "listEvents",
+      "name": "List scheduled events",
+      "type": "action",
+      "action": {
+        "platform": "calendly",
+        "actionId": "conn_mod_def::GJ1Ct_k8rnk::drsZp-rYRNutesYvaXyxMQ",
+        "connectionKey": "$.input.calendlyConnectionKey",
+        "queryParams": "$.steps.buildQuery.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listEvents.response || {};\nconst events = resp.collection || [];\nreturn {\n  events: events.map(e => ({\n    uri: e.uri,\n    name: e.name,\n    status: e.status,\n    startTime: e.start_time,\n    endTime: e.end_time,\n    eventType: e.event_type,\n    location: e.location || {},\n    inviteesCount: e.invitees_counter?.total || 0\n  })),\n  count: events.length,\n  pagination: resp.pagination || {},\n  summary: `Found ${events.length} scheduled event${events.length === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}

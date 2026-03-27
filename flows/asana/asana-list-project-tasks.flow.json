@@ -1,0 +1,62 @@
+{
+  "key": "asana-list-project-tasks",
+  "name": "List Project Tasks in Asana",
+  "description": "Lists all tasks in an Asana project with full details. Handles the two-step pattern: list task references from the project, then fetch each task's full details including assignee, due date, and completion status.",
+  "version": "1",
+  "inputs": {
+    "asanaConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Asana connection key",
+      "connection": { "platform": "asana" }
+    },
+    "projectGid": {
+      "type": "string",
+      "required": true,
+      "description": "Project GID to list tasks from"
+    },
+    "completedSince": {
+      "type": "string",
+      "required": false,
+      "description": "Only return tasks completed after this date (ISO 8601). Use 'now' to exclude completed tasks."
+    },
+    "limit": {
+      "type": "number",
+      "required": false,
+      "default": 50,
+      "description": "Max number of tasks to return (1-100)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const { completedSince, limit } = $.input;\nconst params = {};\nif (completedSince) params.completed_since = completedSince;\nparams.limit = String(Math.max(1, Math.min(100, limit || 50)));\nparams.opt_fields = 'gid,name,assignee,assignee.name,due_on,completed,completed_at,notes,tags,tags.name,permalink_url,memberships.section.name';\nreturn { params };"
+      }
+    },
+    {
+      "id": "listTasks",
+      "name": "List tasks in the project",
+      "type": "action",
+      "action": {
+        "platform": "asana",
+        "actionId": "conn_mod_def::GJ0Bk2jM_T0::FjnidkW2RUaBsB5eoIK9Sw",
+        "connectionKey": "$.input.asanaConnectionKey",
+        "pathVars": {
+          "projectGid": "$.input.projectGid"
+        },
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the task list",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listTasks.response || {};\nconst tasks = (resp.data || []).map(t => ({\n  gid: t.gid,\n  name: t.name,\n  assignee: t.assignee ? (t.assignee.name || t.assignee.gid) : 'unassigned',\n  dueOn: t.due_on || null,\n  completed: !!t.completed,\n  completedAt: t.completed_at || null,\n  section: t.memberships && t.memberships[0] && t.memberships[0].section ? t.memberships[0].section.name : null,\n  tags: (t.tags || []).map(tag => tag.name || tag.gid),\n  permalink: t.permalink_url || '',\n  notes: t.notes ? t.notes.substring(0, 200) : ''\n}));\n\nconst open = tasks.filter(t => !t.completed).length;\nconst done = tasks.filter(t => t.completed).length;\n\nreturn {\n  tasks,\n  totalCount: tasks.length,\n  openCount: open,\n  completedCount: done,\n  projectGid: $.input.projectGid,\n  hasMore: !!resp.next_page,\n  summary: `Found ${tasks.length} task${tasks.length === 1 ? '' : 's'} (${open} open, ${done} completed)`\n};"
+      }
+    }
+  ]
+}

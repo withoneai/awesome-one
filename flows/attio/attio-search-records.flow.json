@@ -1,0 +1,74 @@
+{
+  "key": "attio-search-records",
+  "name": "Search Records in Attio",
+  "description": "Queries people, companies, or any custom object in Attio with optional filtering and sorting. Returns records with all attribute values.",
+  "version": "1",
+  "inputs": {
+    "attioConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Attio connection key",
+      "connection": { "platform": "attio" }
+    },
+    "object": {
+      "type": "string",
+      "required": true,
+      "description": "Object slug or ID to search (e.g., 'people', 'companies', or a custom object slug)"
+    },
+    "filter": {
+      "type": "object",
+      "required": false,
+      "default": {},
+      "description": "Attio filter object. See Attio filtering guide. Pass {} for no filter."
+    },
+    "sorts": {
+      "type": "array",
+      "required": false,
+      "description": "Array of sort objects. Each: { direction: 'asc'|'desc', attribute: 'slug' }."
+    },
+    "limit": {
+      "type": "number",
+      "required": false,
+      "default": 50,
+      "description": "Max records to return (default 50, max 500)"
+    },
+    "offset": {
+      "type": "number",
+      "required": false,
+      "default": 0,
+      "description": "Number of records to skip for pagination"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildBody",
+      "name": "Build query body with filter, sorts, and pagination",
+      "type": "code",
+      "code": {
+        "source": "const { filter, sorts, limit, offset } = $.input;\n\nconst body = {\n  filter: filter || {},\n  limit: Math.max(1, Math.min(500, limit || 50)),\n  offset: offset || 0\n};\n\nif (sorts && Array.isArray(sorts) && sorts.length > 0) {\n  body.sorts = sorts;\n}\n\nreturn body;"
+      }
+    },
+    {
+      "id": "queryRecords",
+      "name": "Query records via Attio API",
+      "type": "action",
+      "action": {
+        "platform": "attio",
+        "actionId": "conn_mod_def::GJ0CbN-LPiU::A6h6M9QkS0Cs2Lt9CdPH7Q",
+        "connectionKey": "$.input.attioConnectionKey",
+        "pathVars": {
+          "object": "$.input.object"
+        },
+        "data": "$.steps.buildBody.output"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response with extracted records",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.queryRecords.response || {};\nconst records = resp.data || [];\n\nconst formatted = records.map(r => {\n  const id = r.id || {};\n  const result = {\n    recordId: id.record_id || '',\n    webUrl: r.web_url || '',\n    createdAt: r.created_at || ''\n  };\n\n  // Extract common readable values\n  const vals = r.values || {};\n  for (const [key, arr] of Object.entries(vals)) {\n    if (!Array.isArray(arr) || arr.length === 0) continue;\n    const v = arr[0];\n    if (v.full_name) result[key] = v.full_name;\n    else if (v.email_address) result[key] = v.email_address;\n    else if (v.domain) result[key] = v.domain;\n    else if (v.value !== undefined) result[key] = v.value;\n    else if (v.first_name || v.last_name) result[key] = [v.first_name, v.last_name].filter(Boolean).join(' ');\n  }\n\n  return result;\n});\n\nreturn {\n  records: formatted,\n  totalReturned: formatted.length,\n  object: $.input.object,\n  summary: `Found ${formatted.length} ${$.input.object} record${formatted.length === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "key": "jira-create-issue",
+  "name": "Create a Jira Issue",
+  "description": "Creates a Jira Cloud issue with proper Atlassian Document Format (ADF) for the description field. Handles project/issue-type lookup by key, ADF encoding, labels, priority, and optional subtask creation.",
+  "version": "1",
+  "inputs": {
+    "jiraConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Jira connection key",
+      "connection": { "platform": "jira" }
+    },
+    "jiraCloudId": {
+      "type": "string",
+      "required": true,
+      "description": "Jira Cloud site ID (UUID). Get it via the Get Sites action."
+    },
+    "projectKey": {
+      "type": "string",
+      "required": true,
+      "description": "Project key (e.g., 'ENG', 'PROJ')"
+    },
+    "issueTypeId": {
+      "type": "string",
+      "required": true,
+      "description": "Issue type ID (e.g., '10001' for Task). Use Get Create Issue Metadata to find valid IDs."
+    },
+    "summary": {
+      "type": "string",
+      "required": true,
+      "description": "Issue summary (title)"
+    },
+    "description": {
+      "type": "string",
+      "required": false,
+      "description": "Plain text description. Auto-converted to Atlassian Document Format (ADF)."
+    },
+    "priority": {
+      "type": "string",
+      "required": false,
+      "description": "Priority name (e.g., 'High', 'Medium', 'Low')"
+    },
+    "labels": {
+      "type": "array",
+      "required": false,
+      "description": "Array of label strings to apply"
+    },
+    "assigneeAccountId": {
+      "type": "string",
+      "required": false,
+      "description": "Account ID of the assignee"
+    },
+    "parentKey": {
+      "type": "string",
+      "required": false,
+      "description": "Parent issue key for subtask creation (e.g., 'PROJ-123')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPayload",
+      "name": "Build issue creation payload with ADF description",
+      "type": "code",
+      "code": {
+        "source": "const { projectKey, issueTypeId, summary, description, priority, labels, assigneeAccountId, parentKey } = $.input;\n\nif (!projectKey || !issueTypeId || !summary) throw new Error('projectKey, issueTypeId, and summary are required');\n\n// Convert plain text to Atlassian Document Format (ADF)\nfunction textToAdf(text) {\n  if (!text) return undefined;\n  const paragraphs = text.split('\\n').filter(line => line.trim() !== '');\n  return {\n    type: 'doc',\n    version: 1,\n    content: paragraphs.map(p => ({\n      type: 'paragraph',\n      content: [{ type: 'text', text: p }]\n    }))\n  };\n}\n\nconst fields = {\n  project: { key: projectKey },\n  issuetype: { id: issueTypeId },\n  summary: summary\n};\n\nif (description) fields.description = textToAdf(description);\nif (priority) fields.priority = { name: priority };\nif (labels && labels.length > 0) fields.labels = labels;\nif (assigneeAccountId) fields.assignee = { accountId: assigneeAccountId };\nif (parentKey) fields.parent = { key: parentKey };\n\nreturn { fields };"
+      }
+    },
+    {
+      "id": "createIssue",
+      "name": "Create the issue via Jira API",
+      "type": "action",
+      "action": {
+        "platform": "jira",
+        "actionId": "conn_mod_def::GJ4qeeOHWcA::Sdqh-9IBQV-VrJ3JHPYrpA",
+        "connectionKey": "$.input.jiraConnectionKey",
+        "pathVars": {
+          "jiraCloudId": "$.input.jiraCloudId"
+        },
+        "data": "$.steps.buildPayload.output"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createIssue.response || {};\nconst projectKey = $.input.projectKey;\n\nreturn {\n  id: resp.id || '',\n  key: resp.key || '',\n  self: resp.self || '',\n  projectKey: projectKey,\n  summary: $.input.summary,\n  created: !!resp.id,\n  summary_text: resp.id\n    ? `Created ${resp.key}: \"${$.input.summary}\" in project ${projectKey}`\n    : 'Failed to create issue'\n};"
+      }
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "key": "serp-api-google-search",
+  "name": "Google Search via SerpApi",
+  "description": "Run a Google search and get structured SERP results including organic results, local pack, knowledge graph, and related questions. Supports location targeting, language, pagination, and device emulation.",
+  "version": "1",
+  "inputs": {
+    "serpApiConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "SerpApi connection key",
+      "connection": { "platform": "serp-api" }
+    },
+    "query": {
+      "type": "string",
+      "required": true,
+      "description": "Search query (supports Google operators like site:, inurl:, intitle:)"
+    },
+    "location": {
+      "type": "string",
+      "required": false,
+      "description": "Location to search from (e.g., 'Austin, Texas, United States')"
+    },
+    "gl": {
+      "type": "string",
+      "required": false,
+      "description": "Country code (e.g., us, uk, fr)"
+    },
+    "hl": {
+      "type": "string",
+      "required": false,
+      "description": "Language code (e.g., en, es, fr)"
+    },
+    "num": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Number of results per page"
+    },
+    "start": {
+      "type": "number",
+      "required": false,
+      "default": 0,
+      "description": "Result offset for pagination (0 = first page, 10 = second page)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build search query parameters",
+      "type": "code",
+      "code": {
+        "source": "const { query, location, gl, hl, num, start } = $.input;\nif (!query) throw new Error('query is required');\n\nconst params = { engine: 'google', q: query };\nif (location) params.location = location;\nif (gl) params.gl = gl;\nif (hl) params.hl = hl;\nif (num && num !== 10) params.num = String(num);\nif (start) params.start = String(start);\n\nreturn { params };"
+      }
+    },
+    {
+      "id": "search",
+      "name": "Execute Google search via SerpApi",
+      "type": "action",
+      "action": {
+        "platform": "serp-api",
+        "actionId": "conn_mod_def::GJ6Zy-104j8::od3CVwSAS0GWFerwMQjcKw",
+        "connectionKey": "$.input.serpApiConnectionKey",
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Extract and format search results",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.search.response || {};\nconst info = resp.search_information || {};\nconst organic = (resp.organic_results || []).map(r => ({\n  position: r.position,\n  title: r.title || '',\n  link: r.link || '',\n  snippet: r.snippet || '',\n  displayedLink: r.displayed_link || ''\n}));\n\nconst localResults = (resp.local_results?.places || []).map(p => ({\n  title: p.title || '',\n  type: p.type || '',\n  address: p.address || '',\n  rating: p.rating || null,\n  reviews: p.reviews || 0\n}));\n\nconst knowledgeGraph = resp.knowledge_graph ? {\n  title: resp.knowledge_graph.title || '',\n  type: resp.knowledge_graph.type || '',\n  description: resp.knowledge_graph.description || ''\n} : null;\n\nreturn {\n  query: $.input.query,\n  totalResults: info.total_results || 0,\n  organicResults: organic,\n  localResults,\n  knowledgeGraph,\n  relatedSearches: (resp.related_searches || []).map(r => r.query || ''),\n  summary: `Found ${organic.length} organic result${organic.length === 1 ? '' : 's'} for \"${$.input.query}\"${info.total_results ? ` (${info.total_results.toLocaleString()} total)` : ''}`\n};"
+      }
+    }
+  ]
+}

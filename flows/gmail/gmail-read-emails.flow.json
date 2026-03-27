@@ -1,0 +1,110 @@
+{
+  "key": "gmail-read-emails",
+  "name": "Read Emails from Gmail",
+  "description": "Search and read emails from Gmail with full content. Handles the two-step list+detail pattern: first lists message IDs matching a query, then fetches each message's full content with decoded headers and body.",
+  "version": "1",
+  "inputs": {
+    "gmailConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key",
+      "connection": { "platform": "gmail" }
+    },
+    "query": {
+      "type": "string",
+      "required": false,
+      "description": "Gmail search query (same syntax as Gmail search bar). Examples: 'from:alice', 'subject:invoice after:2024/01/01', 'is:unread label:INBOX'"
+    },
+    "label": {
+      "type": "string",
+      "required": false,
+      "description": "Gmail label to filter by (e.g., 'INBOX', 'SENT', 'STARRED')"
+    },
+    "maxResults": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Number of emails to return (1-100)"
+    },
+    "pageToken": {
+      "type": "string",
+      "required": false,
+      "description": "Pagination token from a previous response to get the next page"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build search query and params",
+      "type": "code",
+      "code": {
+        "source": "const { query, label, maxResults, pageToken } = $.input;\nconst max = Math.max(1, Math.min(100, maxResults || 10));\n\nlet q = '';\nif (label) q += 'label:' + label;\nif (query) q += (q ? ' ' : '') + query;\n\nconst params = { maxResults: String(max) };\nif (q) params.q = q;\nif (pageToken) params.pageToken = pageToken;\n\nreturn { params, q, max };"
+      }
+    },
+    {
+      "id": "listMessages",
+      "name": "List message IDs matching the query",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailConnectionKey",
+        "pathVars": { "userId": "me" },
+        "queryParams": "$.steps.buildQuery.output.params"
+      }
+    },
+    {
+      "id": "checkResults",
+      "name": "Check if any messages were found",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listMessages.response || {};\nconst messages = resp.messages || [];\nreturn { messageRefs: messages, count: messages.length, nextPageToken: resp.nextPageToken || null };"
+      }
+    },
+    {
+      "id": "fetchMessages",
+      "name": "Fetch full content for each message",
+      "type": "loop",
+      "if": "$.steps.checkResults.output.count > 0",
+      "loop": {
+        "over": "$.steps.checkResults.output.messageRefs",
+        "as": "msg",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "getMessage",
+            "name": "Get full message content",
+            "type": "action",
+            "onError": { "strategy": "continue" },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GJ3ocvMGOS8::D__3BgQSSzWtDUoOqLuX2A",
+              "connectionKey": "$.input.gmailConnectionKey",
+              "pathVars": {
+                "userId": "me",
+                "id": "$.loop.msg.id"
+              },
+              "queryParams": { "format": "full" }
+            }
+          },
+          {
+            "id": "parseMessage",
+            "name": "Extract headers and decode body",
+            "type": "code",
+            "code": {
+              "source": "const resp = $.steps.getMessage?.response;\nif (!resp || !resp.payload) return null;\n\nconst headers = resp.payload.headers || [];\nconst getH = (name) => (headers.find(h => h.name.toLowerCase() === name.toLowerCase()) || {}).value || '';\n\nfunction decodeBase64Url(data) {\n  try {\n    const fixed = data.replace(/-/g, '+').replace(/_/g, '/');\n    const padded = fixed + '='.repeat((4 - fixed.length % 4) % 4);\n    return atob(padded);\n  } catch { return ''; }\n}\n\nfunction extractBody(payload) {\n  if (payload.body && payload.body.data) return decodeBase64Url(payload.body.data);\n  if (payload.parts) {\n    for (const p of payload.parts) {\n      if (p.mimeType === 'text/plain' && p.body && p.body.data) return decodeBase64Url(p.body.data);\n    }\n    for (const p of payload.parts) {\n      if (p.mimeType === 'text/html' && p.body && p.body.data) return decodeBase64Url(p.body.data);\n    }\n    for (const p of payload.parts) {\n      if (p.parts) {\n        const nested = extractBody(p);\n        if (nested) return nested;\n      }\n    }\n  }\n  return resp.snippet || '';\n}\n\nconst body = extractBody(resp.payload);\nconst maxLen = 2000;\n\nreturn {\n  messageId: resp.id,\n  threadId: resp.threadId || '',\n  labelIds: resp.labelIds || [],\n  from: getH('From'),\n  to: getH('To'),\n  subject: getH('Subject'),\n  date: getH('Date'),\n  snippet: resp.snippet || body.substring(0, 100),\n  body: body.length > maxLen ? body.substring(0, maxLen) + '...' : body,\n  historyId: resp.historyId || '',\n  internalDate: resp.internalDate || ''\n};"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Compile final result",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.fetchMessages?.response?.iterations || [];\nconst emails = iterations.map(r => r?.parseMessage?.output).filter(Boolean);\nconst nextPageToken = $.steps.checkResults.output.nextPageToken;\nconst q = $.steps.buildQuery.output.q;\nconst max = $.steps.buildQuery.output.max;\n\nconst result = {\n  emails,\n  totalFound: emails.length,\n  requestedCount: max,\n  query: q || 'No query specified',\n  summary: `Retrieved ${emails.length} email${emails.length === 1 ? '' : 's'}${q ? ' matching \"' + q + '\"' : ''}`\n};\n\nif (nextPageToken) result.nextPageToken = nextPageToken;\n\nreturn result;"
+      }
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "key": "jira-transition-issue",
+  "name": "Transition a Jira Issue",
+  "description": "Moves a Jira issue through its workflow. First fetches available transitions for the issue, matches the target status by name, then performs the transition. Optionally adds a comment and sets a resolution.",
+  "version": "1",
+  "inputs": {
+    "jiraConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Jira connection key",
+      "connection": { "platform": "jira" }
+    },
+    "jiraCloudId": {
+      "type": "string",
+      "required": true,
+      "description": "Jira Cloud site ID (UUID). Get it via the Get Sites action."
+    },
+    "issueIdOrKey": {
+      "type": "string",
+      "required": true,
+      "description": "Issue ID or key (e.g., 'PROJ-123' or '10001')"
+    },
+    "targetStatus": {
+      "type": "string",
+      "required": true,
+      "description": "Target status name to transition to (e.g., 'In Progress', 'Done', 'To Do'). Case-insensitive match."
+    },
+    "comment": {
+      "type": "string",
+      "required": false,
+      "description": "Optional comment to add during the transition"
+    },
+    "resolution": {
+      "type": "string",
+      "required": false,
+      "description": "Resolution name (e.g., 'Fixed', 'Won\\'t Do') -- only for transitions to Done-category statuses"
+    }
+  },
+  "steps": [
+    {
+      "id": "getTransitions",
+      "name": "Fetch available transitions for the issue",
+      "type": "action",
+      "action": {
+        "platform": "jira",
+        "actionId": "conn_mod_def::GJ4qe5JzXH4::-j_7Sd24TPuHjYW4JW_MuQ",
+        "connectionKey": "$.input.jiraConnectionKey",
+        "pathVars": {
+          "jiraCloudId": "$.input.jiraCloudId",
+          "issueIdOrKey": "$.input.issueIdOrKey"
+        }
+      }
+    },
+    {
+      "id": "findTransition",
+      "name": "Match target status to an available transition",
+      "type": "code",
+      "code": {
+        "source": "const transitions = ($.steps.getTransitions.response || {}).transitions || [];\nconst target = $.input.targetStatus.toLowerCase();\n\nconst match = transitions.find(t => t.name.toLowerCase() === target || (t.to && t.to.name && t.to.name.toLowerCase() === target));\n\nif (!match) {\n  const available = transitions.map(t => `${t.name} (id: ${t.id}, to: ${t.to ? t.to.name : 'unknown'})`).join(', ');\n  throw new Error(`No transition found for target status \"${$.input.targetStatus}\". Available transitions: ${available || 'none'}`);\n}\n\n// Build transition payload\nconst payload = { transition: { id: match.id } };\n\nif ($.input.comment) {\n  payload.update = {\n    comment: [{\n      add: {\n        body: {\n          type: 'doc',\n          version: 1,\n          content: [{\n            type: 'paragraph',\n            content: [{ type: 'text', text: $.input.comment }]\n          }]\n        }\n      }\n    }]\n  };\n}\n\nif ($.input.resolution) {\n  payload.fields = payload.fields || {};\n  payload.fields.resolution = { name: $.input.resolution };\n}\n\nreturn { payload, transitionId: match.id, transitionName: match.name, targetStatusName: match.to ? match.to.name : match.name };"
+      }
+    },
+    {
+      "id": "performTransition",
+      "name": "Execute the workflow transition",
+      "type": "action",
+      "action": {
+        "platform": "jira",
+        "actionId": "conn_mod_def::GJ4qfCdCUXo::EHXg3vKkR9eBZqXkKHkbZg",
+        "connectionKey": "$.input.jiraConnectionKey",
+        "pathVars": {
+          "jiraCloudId": "$.input.jiraCloudId",
+          "issueIdOrKey": "$.input.issueIdOrKey"
+        },
+        "data": "$.steps.findTransition.output.payload"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const transitionName = $.steps.findTransition.output.transitionName;\nconst targetStatus = $.steps.findTransition.output.targetStatusName;\nconst issueKey = $.input.issueIdOrKey;\n\nreturn {\n  issueKey,\n  transitionId: $.steps.findTransition.output.transitionId,\n  transitionName,\n  newStatus: targetStatus,\n  hadComment: !!$.input.comment,\n  hadResolution: !!$.input.resolution,\n  success: true,\n  summary: `Transitioned ${issueKey} via \"${transitionName}\" to \"${targetStatus}\"${$.input.comment ? ' with comment' : ''}${$.input.resolution ? ' (resolution: ' + $.input.resolution + ')' : ''}`\n};"
+      }
+    }
+  ]
+}

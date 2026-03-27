@@ -1,0 +1,100 @@
+{
+  "key": "apollo-search-orgs",
+  "name": "Search Organizations (Company Search)",
+  "description": "Search Apollo's company database by name, domain, location, employee count, revenue, funding, technologies, and more. Returns paginated results with company metadata.",
+  "version": "1",
+  "inputs": {
+    "apolloConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Apollo connection key",
+      "connection": { "platform": "apollo" }
+    },
+    "name": {
+      "type": "string",
+      "required": false,
+      "description": "Organization name (partial match supported). Example: 'apollo'"
+    },
+    "domains": {
+      "type": "array",
+      "required": false,
+      "description": "Organization domains (up to 1000). Examples: ['apollo.io', 'microsoft.com']"
+    },
+    "locations": {
+      "type": "array",
+      "required": false,
+      "description": "HQ locations (cities, states, countries). Examples: ['texas', 'tokyo']"
+    },
+    "excludeLocations": {
+      "type": "array",
+      "required": false,
+      "description": "Exclude HQ locations. Examples: ['minnesota', 'ireland']"
+    },
+    "employeeRanges": {
+      "type": "array",
+      "required": false,
+      "description": "Employee count ranges as 'min,max' strings. Examples: ['1,10', '250,500']"
+    },
+    "revenueMin": {
+      "type": "number",
+      "required": false,
+      "description": "Minimum revenue (integer, no currency symbols). Example: 500000"
+    },
+    "revenueMax": {
+      "type": "number",
+      "required": false,
+      "description": "Maximum revenue (integer, no currency symbols). Example: 50000000"
+    },
+    "technologies": {
+      "type": "array",
+      "required": false,
+      "description": "Technologies in use. Use underscores for spaces. Examples: ['salesforce', 'google_analytics']"
+    },
+    "keywords": {
+      "type": "array",
+      "required": false,
+      "description": "Keyword tags. Examples: ['mining', 'sales strategy']"
+    },
+    "page": {
+      "type": "number",
+      "required": false,
+      "default": 1,
+      "description": "Page number (1-500)"
+    },
+    "perPage": {
+      "type": "number",
+      "required": false,
+      "default": 25,
+      "description": "Results per page (1-100)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build query parameters from inputs",
+      "type": "code",
+      "code": {
+        "source": "const i = $.input;\nconst params = {};\nconst page = Math.max(1, Math.min(500, i.page || 1));\nconst perPage = Math.max(1, Math.min(100, i.perPage || 25));\nparams.page = String(page);\nparams.per_page = String(perPage);\n\nif (i.name) params.q_organization_name = i.name;\nif (i.domains && i.domains.length) {\n  i.domains.forEach((d, idx) => { params['q_organization_domains_list[' + idx + ']'] = d; });\n}\nif (i.locations && i.locations.length) {\n  i.locations.forEach((l, idx) => { params['organization_locations[' + idx + ']'] = l; });\n}\nif (i.excludeLocations && i.excludeLocations.length) {\n  i.excludeLocations.forEach((l, idx) => { params['organization_not_locations[' + idx + ']'] = l; });\n}\nif (i.employeeRanges && i.employeeRanges.length) {\n  i.employeeRanges.forEach((r, idx) => { params['organization_num_employees_ranges[' + idx + ']'] = r; });\n}\nif (i.revenueMin != null) params['revenue_range[min]'] = String(i.revenueMin);\nif (i.revenueMax != null) params['revenue_range[max]'] = String(i.revenueMax);\nif (i.technologies && i.technologies.length) {\n  i.technologies.forEach((t, idx) => { params['currently_using_any_of_technology_uids[' + idx + ']'] = t; });\n}\nif (i.keywords && i.keywords.length) {\n  i.keywords.forEach((k, idx) => { params['q_organization_keyword_tags[' + idx + ']'] = k; });\n}\n\nreturn { params, page, perPage };"
+      }
+    },
+    {
+      "id": "searchOrgs",
+      "name": "Search Apollo organizations database",
+      "type": "action",
+      "action": {
+        "platform": "apollo",
+        "actionId": "conn_mod_def::GJz2AXYS8Hw::nYfwc352SyqMeSNf-v4kmQ",
+        "connectionKey": "$.input.apolloConnectionKey",
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResults",
+      "name": "Format and summarize results",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.searchOrgs.response || {};\nconst orgs = (resp.organizations || []).map(o => ({\n  id: o.id,\n  name: o.name,\n  domain: o.primary_domain,\n  website: o.website_url,\n  linkedin: o.linkedin_url,\n  phone: o.phone,\n  foundedYear: o.founded_year,\n  alexaRanking: o.alexa_ranking\n}));\n\nconst pagination = resp.pagination || {};\nconst totalEntries = pagination.total_entries || 0;\nconst page = $.steps.buildParams.output.page;\nconst perPage = $.steps.buildParams.output.perPage;\n\nreturn {\n  organizations: orgs,\n  totalEntries,\n  page,\n  perPage,\n  totalPages: pagination.total_pages || 0,\n  count: orgs.length,\n  summary: totalEntries > 0\n    ? `Found ${totalEntries.toLocaleString()} organizations (showing page ${page}, ${orgs.length} results)`\n    : 'No organizations matched your search criteria'\n};"
+      }
+    }
+  ]
+}

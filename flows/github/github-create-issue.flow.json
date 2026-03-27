@@ -1,0 +1,82 @@
+{
+  "key": "github-create-issue",
+  "name": "Create GitHub Issue",
+  "description": "Create an issue in a GitHub repository with title, body, labels, assignees, and milestone. Handles markdown formatting and label validation.",
+  "version": "1",
+  "inputs": {
+    "githubConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "GitHub connection key",
+      "connection": { "platform": "github" }
+    },
+    "owner": {
+      "type": "string",
+      "required": true,
+      "description": "Repository owner (user or org)"
+    },
+    "repo": {
+      "type": "string",
+      "required": true,
+      "description": "Repository name"
+    },
+    "title": {
+      "type": "string",
+      "required": true,
+      "description": "Issue title"
+    },
+    "body": {
+      "type": "string",
+      "required": false,
+      "description": "Issue body (supports GitHub-flavored markdown)"
+    },
+    "labels": {
+      "type": "array",
+      "required": false,
+      "description": "Label names to apply (e.g., ['bug', 'priority:high'])"
+    },
+    "assignees": {
+      "type": "array",
+      "required": false,
+      "description": "GitHub usernames to assign"
+    },
+    "milestone": {
+      "type": "number",
+      "required": false,
+      "description": "Milestone number to associate with"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPayload",
+      "name": "Build issue creation payload",
+      "type": "code",
+      "code": {
+        "source": "const { title, body, labels, assignees, milestone } = $.input;\nif (!title) throw new Error('title is required');\n\nconst payload = { title };\nif (body) payload.body = body;\nif (labels && labels.length > 0) payload.labels = labels;\nif (assignees && assignees.length > 0) payload.assignees = assignees;\nif (milestone) payload.milestone = milestone;\n\nreturn { payload };"
+      }
+    },
+    {
+      "id": "createIssue",
+      "name": "Create the issue via GitHub API",
+      "type": "action",
+      "action": {
+        "platform": "github",
+        "actionId": "conn_mod_def::GCXXCKZmYuk::Q6Ob6mmnRoavWZmGB2-K9g",
+        "connectionKey": "$.input.githubConnectionKey",
+        "pathVars": {
+          "owner": "$.input.owner",
+          "repo": "$.input.repo"
+        },
+        "data": "$.steps.buildPayload.output.payload"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createIssue.response || {};\nreturn {\n  issueNumber: resp.number,\n  title: resp.title,\n  state: resp.state,\n  url: resp.html_url,\n  labels: (resp.labels || []).map(l => l.name || l),\n  assignees: (resp.assignees || []).map(a => a.login),\n  createdAt: resp.created_at,\n  created: !!resp.number,\n  summary: resp.number\n    ? 'Created issue #' + resp.number + ': ' + resp.title + ' in ' + $.input.owner + '/' + $.input.repo\n    : 'Failed to create issue'\n};"
+      }
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+{
+  "key": "asana-create-project-with-sections",
+  "name": "Create Project with Sections in Asana",
+  "description": "Creates a new Asana project and sets up sections (columns for board view, or groups for list view). Handles the multi-step orchestration: create project, then create each section sequentially.",
+  "version": "1",
+  "inputs": {
+    "asanaConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Asana connection key",
+      "connection": { "platform": "asana" }
+    },
+    "name": {
+      "type": "string",
+      "required": true,
+      "description": "Project name"
+    },
+    "workspaceGid": {
+      "type": "string",
+      "required": true,
+      "description": "Workspace GID where the project will be created"
+    },
+    "teamGid": {
+      "type": "string",
+      "required": false,
+      "description": "Team GID to create the project under. Required for organization workspaces."
+    },
+    "layout": {
+      "type": "string",
+      "required": false,
+      "default": "board",
+      "description": "Project layout: 'board' (kanban) or 'list'"
+    },
+    "sections": {
+      "type": "array",
+      "required": false,
+      "default": ["To Do", "In Progress", "Done"],
+      "description": "Array of section names to create in order"
+    },
+    "notes": {
+      "type": "string",
+      "required": false,
+      "description": "Project description"
+    },
+    "color": {
+      "type": "string",
+      "required": false,
+      "description": "Project color (e.g., 'dark-green', 'dark-blue', 'dark-red', 'light-orange')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildProjectData",
+      "name": "Build project payload",
+      "type": "code",
+      "code": {
+        "source": "const { name, workspaceGid, teamGid, layout, notes, color } = $.input;\n\nif (!name || !workspaceGid) throw new Error('name and workspaceGid are required');\n\nconst data = {\n  data: {\n    name,\n    workspace: workspaceGid,\n    default_view: layout || 'board'\n  }\n};\n\nif (teamGid) data.data.team = teamGid;\nif (notes) data.data.notes = notes;\nif (color) data.data.color = color;\n\nreturn data;"
+      }
+    },
+    {
+      "id": "createProject",
+      "name": "Create the project",
+      "type": "action",
+      "action": {
+        "platform": "asana",
+        "actionId": "conn_mod_def::GJ0Bawb3mf4::pqp2OSmlQGeWkjw2bInUnw",
+        "connectionKey": "$.input.asanaConnectionKey",
+        "data": "$.steps.buildProjectData.output"
+      }
+    },
+    {
+      "id": "prepareSections",
+      "name": "Prepare section list",
+      "type": "code",
+      "code": {
+        "source": "const sections = $.input.sections && $.input.sections.length > 0 ? $.input.sections : ['To Do', 'In Progress', 'Done'];\nconst projectGid = $.steps.createProject.response?.data?.gid;\nif (!projectGid) throw new Error('Project creation failed - no GID returned');\nreturn { sections: sections.map(name => ({ name })), projectGid };"
+      }
+    },
+    {
+      "id": "createSections",
+      "name": "Create each section in the project",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.prepareSections.output.sections",
+        "as": "section",
+        "maxConcurrency": 1,
+        "steps": [
+          {
+            "id": "createSection",
+            "name": "Create a section",
+            "type": "action",
+            "action": {
+              "platform": "asana",
+              "actionId": "conn_mod_def::GJ0BfEFfym8::raAyuUYGRHSpshZqnwy5vw",
+              "connectionKey": "$.input.asanaConnectionKey",
+              "pathVars": {
+                "projectGid": "$.steps.prepareSections.output.projectGid"
+              },
+              "data": {
+                "data": {
+                  "name": "$.loop.section.name"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const project = $.steps.createProject.response?.data || {};\nconst iterations = $.steps.createSections?.response?.iterations || [];\nconst createdSections = iterations.map(r => {\n  const s = r?.createSection?.response?.data;\n  return s ? { gid: s.gid, name: s.name } : null;\n}).filter(Boolean);\n\nreturn {\n  projectGid: project.gid || '',\n  name: project.name || '',\n  layout: project.default_view || $.input.layout || 'board',\n  permalink: project.permalink_url || '',\n  sections: createdSections,\n  sectionCount: createdSections.length,\n  summary: `Created project \"${project.name || $.input.name}\" with ${createdSections.length} section${createdSections.length === 1 ? '' : 's'}: ${createdSections.map(s => s.name).join(', ')}`\n};"
+      }
+    }
+  ]
+}

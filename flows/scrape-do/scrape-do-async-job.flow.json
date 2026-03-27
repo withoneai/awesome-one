@@ -1,0 +1,70 @@
+{
+  "key": "scrape-do-async-job",
+  "name": "Create Async Scraping Job with Scrape.do",
+  "description": "Create an asynchronous web scraping job with Scrape.do. Supports multiple target URLs, geo-targeting, device emulation, rendering, proxy options, and markdown output for LLM workflows.",
+  "version": "1",
+  "inputs": {
+    "scrapeDoConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Scrape.do connection key",
+      "connection": { "platform": "scrape-do" }
+    },
+    "targets": {
+      "type": "array",
+      "required": true,
+      "description": "Array of URLs to scrape"
+    },
+    "geoCode": {
+      "type": "string",
+      "required": false,
+      "description": "Country code for geo-targeting (e.g., US, GB, DE)"
+    },
+    "device": {
+      "type": "string",
+      "required": false,
+      "description": "Device to emulate: desktop, mobile, tablet"
+    },
+    "output": {
+      "type": "string",
+      "required": false,
+      "default": "raw",
+      "description": "Output format: raw or markdown (markdown is ideal for LLM workflows)"
+    },
+    "super": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Use residential proxies for harder-to-scrape sites"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildBody",
+      "name": "Build scraping job request",
+      "type": "code",
+      "code": {
+        "source": "const { targets, geoCode, device, output, super: useSuper } = $.input;\nif (!targets || !targets.length) throw new Error('targets array is required with at least one URL');\n\nconst body = { Targets: targets };\nif (geoCode) body.GeoCode = geoCode;\nif (device) body.Device = device;\nif (output && output !== 'raw') body.Output = output;\nif (useSuper) body.Super = true;\n\nreturn { body };"
+      }
+    },
+    {
+      "id": "createJob",
+      "name": "Create async scraping job",
+      "type": "action",
+      "action": {
+        "platform": "scrape-do",
+        "actionId": "conn_mod_def::GJ6X_uiDhuc::kvRKDHEfSHKTRowl57IIPQ",
+        "connectionKey": "$.input.scrapeDoConnectionKey",
+        "data": "$.steps.buildBody.output.body"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format job creation result",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createJob.response || {};\nreturn {\n  jobId: resp.JobID || '',\n  taskIds: resp.TaskIDs || [],\n  message: resp.Message || '',\n  targetCount: $.input.targets.length,\n  summary: resp.JobID ? `Created scraping job ${resp.JobID} with ${(resp.TaskIDs || []).length} task(s) for ${$.input.targets.length} URL(s)` : 'Failed to create scraping job'\n};"
+      }
+    }
+  ]
+}

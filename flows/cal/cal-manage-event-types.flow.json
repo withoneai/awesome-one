@@ -1,0 +1,79 @@
+{
+  "key": "cal-manage-event-types",
+  "name": "List Event Types and Check Availability on Cal.com",
+  "description": "List your Cal.com event types or check available slots for a specific event type.",
+  "version": "1",
+  "inputs": {
+    "calConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Cal.com connection key",
+      "connection": { "platform": "cal-com" }
+    },
+    "operation": {
+      "type": "string",
+      "required": true,
+      "description": "Operation: 'list-event-types' or 'get-slots'"
+    },
+    "eventTypeId": {
+      "type": "string",
+      "required": false,
+      "description": "Event type ID (required for get-slots)"
+    },
+    "startTime": {
+      "type": "string",
+      "required": false,
+      "description": "Start of availability window in ISO 8601 (required for get-slots)"
+    },
+    "endTime": {
+      "type": "string",
+      "required": false,
+      "description": "End of availability window in ISO 8601 (required for get-slots)"
+    }
+  },
+  "steps": [
+    {
+      "id": "route",
+      "name": "Route to the correct operation",
+      "type": "code",
+      "code": {
+        "source": "const op = ($.input.operation || '').toLowerCase();\nif (op !== 'list-event-types' && op !== 'get-slots') throw new Error('operation must be \"list-event-types\" or \"get-slots\"');\nif (op === 'get-slots' && (!$.input.eventTypeId || !$.input.startTime || !$.input.endTime)) throw new Error('get-slots requires eventTypeId, startTime, and endTime');\nreturn { op };"
+      }
+    },
+    {
+      "id": "listEventTypes",
+      "name": "List event types",
+      "type": "action",
+      "if": "$.steps.route.output.op === 'list-event-types'",
+      "action": {
+        "platform": "cal-com",
+        "actionId": "conn_mod_def::GJ1AIttlHew::eRhyfhySRPqVF2J0s_KUqg",
+        "connectionKey": "$.input.calConnectionKey"
+      }
+    },
+    {
+      "id": "getSlots",
+      "name": "Get available slots for an event type",
+      "type": "action",
+      "if": "$.steps.route.output.op === 'get-slots'",
+      "action": {
+        "platform": "cal-com",
+        "actionId": "conn_mod_def::GJ1AhZMPqcg::nDkv6m-rTM2fmZcn7X9ZbA",
+        "connectionKey": "$.input.calConnectionKey",
+        "queryParams": {
+          "eventTypeId": "$.input.eventTypeId",
+          "startTime": "$.input.startTime",
+          "endTime": "$.input.endTime"
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const op = $.steps.route.output.op;\nif (op === 'list-event-types') {\n  const resp = $.steps.listEventTypes?.response || {};\n  const types = resp.data?.eventTypes || resp.event_types || resp.data || [];\n  const list = Array.isArray(types) ? types : [];\n  return {\n    eventTypes: list.map(t => ({ id: t.id, title: t.title, slug: t.slug, length: t.length, description: t.description })),\n    count: list.length,\n    summary: `Found ${list.length} event type${list.length === 1 ? '' : 's'}`\n  };\n} else {\n  const resp = $.steps.getSlots?.response || {};\n  const slots = resp.data?.slots || resp.slots || resp.data || {};\n  const allSlots = Object.values(slots).flat();\n  return {\n    slots,\n    totalSlots: allSlots.length,\n    summary: `Found ${allSlots.length} available slot${allSlots.length === 1 ? '' : 's'}`\n  };\n}"
+      }
+    }
+  ]
+}

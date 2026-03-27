@@ -1,0 +1,69 @@
+{
+  "key": "attio-add-note",
+  "name": "Add a Note to an Attio Record",
+  "description": "Creates a note attached to a person, company, or any object record in Attio. Supports plaintext or markdown formatting.",
+  "version": "1",
+  "inputs": {
+    "attioConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Attio connection key",
+      "connection": { "platform": "attio" }
+    },
+    "parentObject": {
+      "type": "string",
+      "required": true,
+      "description": "Object slug the record belongs to (e.g., 'people', 'companies')"
+    },
+    "parentRecordId": {
+      "type": "string",
+      "required": true,
+      "description": "UUID of the record to attach the note to"
+    },
+    "title": {
+      "type": "string",
+      "required": true,
+      "description": "Note title (plaintext only)"
+    },
+    "content": {
+      "type": "string",
+      "required": true,
+      "description": "Note content body"
+    },
+    "format": {
+      "type": "string",
+      "required": false,
+      "default": "plaintext",
+      "description": "Content format: 'plaintext' or 'markdown'"
+    }
+  },
+  "steps": [
+    {
+      "id": "createNote",
+      "name": "Create the note via Attio API",
+      "type": "action",
+      "action": {
+        "platform": "attio",
+        "actionId": "conn_mod_def::GJ0CZWRtEuU::n-NZ0VSqT3ym9zT9fBrefQ",
+        "connectionKey": "$.input.attioConnectionKey",
+        "data": {
+          "data": {
+            "parent_object": "$.input.parentObject",
+            "parent_record_id": "$.input.parentRecordId",
+            "title": "$.input.title",
+            "format": "$.input.format",
+            "content": "$.input.content"
+          }
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createNote.response || {};\nconst data = resp.data || {};\nconst id = data.id || {};\n\nreturn {\n  noteId: id.note_id || '',\n  parentObject: data.parent_object || $.input.parentObject,\n  parentRecordId: data.parent_record_id || $.input.parentRecordId,\n  title: data.title || $.input.title,\n  createdAt: data.created_at || '',\n  summary: id.note_id\n    ? `Created note \"${$.input.title}\" on ${$.input.parentObject} record ${$.input.parentRecordId}`\n    : 'Failed to create note'\n};"
+      }
+    }
+  ]
+}

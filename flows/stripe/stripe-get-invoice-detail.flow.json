@@ -1,0 +1,56 @@
+{
+  "key": "stripe-get-invoice-detail",
+  "name": "Get Stripe Invoice Detail",
+  "description": "Retrieves a single Stripe invoice by ID with compressed output. Strips verbose metadata while preserving line items, amounts, customer info, and status.",
+  "version": "1",
+  "inputs": {
+    "stripeConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Stripe connection key",
+      "connection": { "platform": "stripe" }
+    },
+    "invoiceId": {
+      "type": "string",
+      "required": true,
+      "description": "The invoice ID (e.g., 'in_1abc...')"
+    },
+    "expand": {
+      "type": "array",
+      "required": false,
+      "description": "Fields to expand (e.g., ['customer', 'subscription', 'charge'])"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build query params with expand fields",
+      "type": "code",
+      "code": {
+        "source": "const { invoiceId, expand } = $.input;\nif (!invoiceId) throw new Error('invoiceId is required');\n\nconst params = {};\nif (expand && expand.length > 0) {\n  expand.forEach((field, i) => {\n    params[`expand[${i}]`] = field;\n  });\n}\n\nreturn { params, invoiceId };"
+      }
+    },
+    {
+      "id": "getInvoice",
+      "name": "Fetch the invoice from Stripe",
+      "type": "action",
+      "action": {
+        "platform": "stripe",
+        "actionId": "conn_mod_def::GHEgBiG8uU8::yzrlMIKqQkGSh7sxgkjl-g",
+        "connectionKey": "$.input.stripeConnectionKey",
+        "pathVars": {
+          "INVOICE": "$.steps.buildQuery.output.invoiceId"
+        },
+        "queryParams": "$.steps.buildQuery.output.params"
+      }
+    },
+    {
+      "id": "compressResult",
+      "name": "Strip verbose fields from the invoice",
+      "type": "code",
+      "code": {
+        "source": "const inv = $.steps.getInvoice.response || {};\n\nif (inv.error) {\n  return { success: false, error: inv.error.message || 'Failed to retrieve invoice', details: inv.error };\n}\n\nconst keysToRemove = [\n  'object', 'account_tax_ids', 'amount_overpaid', 'application',\n  'application_fee_amount', 'attempt_count', 'attempted', 'auto_advance',\n  'automatically_finalizes_at', 'charge', 'confirmation_secret',\n  'custom_fields', 'customer_address', 'customer_phone', 'customer_shipping',\n  'customer_tax_exempt', 'customer_tax_ids', 'default_payment_method',\n  'default_source', 'default_tax_rates', 'discount', 'effective_at',\n  'ending_balance', 'footer', 'from_invoice', 'last_finalization_error',\n  'latest_revision', 'livemode', 'metadata', 'next_payment_attempt',\n  'on_behalf_of', 'parent', 'payment_settings', 'payments',\n  'post_payment_credit_notes_amount', 'pre_payment_credit_notes_amount',\n  'quote', 'receipt_number', 'rendering', 'shipping_cost', 'shipping_details',\n  'starting_balance', 'statement_descriptor', 'test_clock', 'threshold_reason',\n  'total_pretax_credit_amounts', 'webhooks_delivered_at'\n];\n\nconst lineKeysToRemove = ['object', 'livemode', 'metadata', 'parent', 'pretax_credit_amounts', 'pricing', 'taxes'];\n\nconst c = { ...inv };\nkeysToRemove.forEach(k => delete c[k]);\n\nif (c.lines && c.lines.data) {\n  c.lines.data = c.lines.data.map(line => {\n    const l = { ...line };\n    lineKeysToRemove.forEach(k => delete l[k]);\n    return l;\n  });\n}\n\nreturn {\n  success: true,\n  invoice: c,\n  summary: `Invoice ${c.id || inv.id}: ${c.status || 'unknown'} - ${(c.currency || 'usd').toUpperCase()} ${((c.amount_due || 0) / 100).toFixed(2)}`\n};"
+      }
+    }
+  ]
+}

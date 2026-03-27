@@ -1,0 +1,83 @@
+{
+  "key": "hubspot-search-crm-objects",
+  "name": "Search CRM Objects in HubSpot",
+  "description": "Search any HubSpot CRM object type (contacts, companies, deals, tickets, etc.) using filters, free-text search, and property selection.",
+  "version": "1",
+  "inputs": {
+    "hubspotConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "HubSpot connection key",
+      "connection": { "platform": "hubspot" }
+    },
+    "objectType": {
+      "type": "string",
+      "required": true,
+      "description": "CRM object type: 'contacts', 'companies', 'deals', 'tickets', or a custom object type"
+    },
+    "searchTerm": {
+      "type": "string",
+      "required": false,
+      "description": "Free-text search term"
+    },
+    "filterProperty": {
+      "type": "string",
+      "required": false,
+      "description": "Property name to filter by"
+    },
+    "filterOperator": {
+      "type": "string",
+      "required": false,
+      "default": "EQ",
+      "description": "Filter operator: 'EQ', 'NEQ', 'CONTAINS', 'GT', 'LT', 'GTE', 'LTE'"
+    },
+    "filterValue": {
+      "type": "string",
+      "required": false,
+      "description": "Value to filter by"
+    },
+    "properties": {
+      "type": "array",
+      "required": false,
+      "description": "Properties to return in results"
+    },
+    "limit": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Number of results (max 100)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildSearch",
+      "name": "Build search payload",
+      "type": "code",
+      "code": {
+        "source": "const { objectType, searchTerm, filterProperty, filterOperator, filterValue, properties, limit } = $.input;\nif (!objectType) throw new Error('objectType is required');\nconst body = { limit: Math.min(limit || 10, 100) };\nif (searchTerm) body.query = searchTerm;\nif (properties && properties.length > 0) body.properties = properties;\nif (filterProperty && filterValue) {\n  body.filterGroups = [{\n    filters: [{\n      propertyName: filterProperty,\n      operator: filterOperator || 'EQ',\n      value: filterValue\n    }]\n  }];\n}\nreturn body;"
+      }
+    },
+    {
+      "id": "searchObjects",
+      "name": "Search CRM objects via HubSpot API",
+      "type": "action",
+      "action": {
+        "platform": "hubspot",
+        "actionId": "conn_mod_def::GJ3kO2fhBr4::VOH0GD9xT-WtubhgYB2qWw",
+        "connectionKey": "$.input.hubspotConnectionKey",
+        "pathVars": {
+          "objectType": "$.input.objectType"
+        },
+        "data": "$.steps.buildSearch.output"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.searchObjects.response || {};\nconst results = resp.results || [];\nreturn {\n  objects: results.map(o => ({\n    id: o.id,\n    properties: o.properties || {},\n    createdAt: o.createdAt,\n    updatedAt: o.updatedAt\n  })),\n  objectType: $.input.objectType,\n  total: resp.total || results.length,\n  count: results.length,\n  paging: resp.paging || null,\n  summary: `Found ${resp.total || results.length} ${$.input.objectType} record${(resp.total || results.length) === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}

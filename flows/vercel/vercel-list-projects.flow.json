@@ -1,0 +1,58 @@
+{
+  "key": "vercel-list-projects",
+  "name": "List Vercel Projects",
+  "description": "List all projects in your Vercel account or team. Supports filtering by name and pagination.",
+  "version": "1",
+  "inputs": {
+    "vercelConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Vercel connection key",
+      "connection": { "platform": "vercel" }
+    },
+    "search": {
+      "type": "string",
+      "required": false,
+      "description": "Search projects by name"
+    },
+    "teamId": {
+      "type": "string",
+      "required": false,
+      "description": "Team ID to list projects for"
+    },
+    "limit": {
+      "type": "string",
+      "required": false,
+      "description": "Max number of projects to return"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const params = {};\nif ($.input.search) params.search = $.input.search;\nif ($.input.teamId) params.teamId = $.input.teamId;\nif ($.input.limit) params.limit = $.input.limit;\nreturn { params };"
+      }
+    },
+    {
+      "id": "listProjects",
+      "name": "List Vercel projects",
+      "type": "action",
+      "action": {
+        "platform": "vercel",
+        "actionId": "conn_mod_def::GIi2eAZ5wsc::9YW3-ETsTJ6KD_Tg41KmtA",
+        "connectionKey": "$.input.vercelConnectionKey",
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format project list",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listProjects.response || {};\nconst projects = (resp.projects || []).map(p => ({\n  id: p.id || '',\n  name: p.name || '',\n  framework: p.framework || '',\n  updatedAt: p.updatedAt ? new Date(p.updatedAt).toISOString() : '',\n  paused: p.paused || false\n}));\n\nreturn {\n  projects,\n  totalProjects: projects.length,\n  nextPage: resp.pagination?.next || null,\n  summary: `Found ${projects.length} Vercel project${projects.length === 1 ? '' : 's'}${$.input.search ? ` matching \"${$.input.search}\"` : ''}`\n};"
+      }
+    }
+  ]
+}

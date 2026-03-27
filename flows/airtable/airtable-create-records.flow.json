@@ -1,0 +1,62 @@
+{
+  "key": "airtable-create-records",
+  "name": "Create Records in Airtable",
+  "description": "Create one or more records in an Airtable base table. Handles field mapping and batch record creation.",
+  "version": "1",
+  "inputs": {
+    "airtableConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Airtable connection key",
+      "connection": { "platform": "airtable" }
+    },
+    "baseId": {
+      "type": "string",
+      "required": true,
+      "description": "Airtable base ID (starts with 'app')"
+    },
+    "tableIdOrName": {
+      "type": "string",
+      "required": true,
+      "description": "Table ID or name"
+    },
+    "records": {
+      "type": "array",
+      "required": true,
+      "description": "Array of record objects, each with a 'fields' object. Example: [{\"fields\": {\"Name\": \"Alice\", \"Email\": \"alice@example.com\"}}]"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPayload",
+      "name": "Validate and build request payload",
+      "type": "code",
+      "code": {
+        "source": "const { records } = $.input;\nif (!records || !Array.isArray(records) || records.length === 0) throw new Error('records must be a non-empty array');\nif (records.length > 10) throw new Error('Airtable allows max 10 records per request. Split into batches.');\nconst formatted = records.map(r => ({ fields: r.fields || r }));\nreturn { records: formatted };"
+      }
+    },
+    {
+      "id": "createRecords",
+      "name": "Create records via Airtable API",
+      "type": "action",
+      "action": {
+        "platform": "airtable",
+        "actionId": "conn_mod_def::GJz_XidaPDk::SxO92xzKQEWMDdWGK1gUAQ",
+        "connectionKey": "$.input.airtableConnectionKey",
+        "pathVars": {
+          "baseId": "$.input.baseId",
+          "tableIdOrName": "$.input.tableIdOrName"
+        },
+        "data": "$.steps.buildPayload.output"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createRecords.response || {};\nconst created = resp.records || [];\nreturn {\n  records: created.map(r => ({ id: r.id, fields: r.fields, createdTime: r.createdTime })),\n  count: created.length,\n  summary: `Created ${created.length} record${created.length === 1 ? '' : 's'} in ${$.input.tableIdOrName}`\n};"
+      }
+    }
+  ]
+}

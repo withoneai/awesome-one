@@ -1,0 +1,74 @@
+{
+  "key": "personal-ai-send-message",
+  "name": "Send Message to Personal AI",
+  "description": "Send a message to a Personal AI persona and get an AI-generated response. Supports session continuity, context injection, document references, and memory stacking.",
+  "version": "1",
+  "inputs": {
+    "personalAiConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Personal AI connection key",
+      "connection": { "platform": "personal-ai" }
+    },
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "Message to send to the AI"
+    },
+    "domainName": {
+      "type": "string",
+      "required": true,
+      "description": "The hyphenated domain name of the AI persona (found under the AI's name in Persona view)"
+    },
+    "context": {
+      "type": "string",
+      "required": false,
+      "description": "Additional context for the AI response (e.g., 'Reply in one sentence')"
+    },
+    "sessionId": {
+      "type": "string",
+      "required": false,
+      "description": "Session ID to continue an existing conversation"
+    },
+    "userName": {
+      "type": "string",
+      "required": false,
+      "description": "Name of the user sending the message"
+    },
+    "isStack": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Set true to also add the message to the AI's memory"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildBody",
+      "name": "Build request body",
+      "type": "code",
+      "code": {
+        "source": "const { text, domainName, context, sessionId, userName, isStack } = $.input;\nif (!text || !domainName) throw new Error('text and domainName are required');\n\nconst body = { Text: text, DomainName: domainName };\nif (context) body.Context = context;\nif (sessionId) body.SessionId = sessionId;\nif (userName) body.UserName = userName;\nif (isStack) body.is_stack = true;\n\nreturn { body };"
+      }
+    },
+    {
+      "id": "sendMessage",
+      "name": "Send message to Personal AI",
+      "type": "action",
+      "action": {
+        "platform": "personal-ai",
+        "actionId": "conn_mod_def::GJ6CmP04u9A::YxtvHt2ZSViHGpz4ddNrFQ",
+        "connectionKey": "$.input.personalAiConnectionKey",
+        "data": "$.steps.buildBody.output.body"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format AI response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.sendMessage.response || {};\nreturn {\n  aiMessage: resp.ai_message || '',\n  aiScore: resp.ai_score || 0,\n  aiName: resp.ai_name || '',\n  sessionId: resp.SessionId || '',\n  summary: resp.ai_message ? `${resp.ai_name || 'AI'} responded (score: ${(resp.ai_score || 0).toFixed(1)})` : 'No response received'\n};"
+      }
+    }
+  ]
+}

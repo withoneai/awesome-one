@@ -1,0 +1,98 @@
+{
+  "key": "asana-search-tasks",
+  "name": "Search Tasks in Asana",
+  "description": "Searches for tasks in an Asana workspace using filters like assignee, project, completion status, due dates, and text. Returns enriched results with assignee names, sections, and tags.",
+  "version": "1",
+  "inputs": {
+    "asanaConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Asana connection key",
+      "connection": { "platform": "asana" }
+    },
+    "workspaceGid": {
+      "type": "string",
+      "required": true,
+      "description": "Workspace GID to search within"
+    },
+    "text": {
+      "type": "string",
+      "required": false,
+      "description": "Text to search for in task names and descriptions"
+    },
+    "assignee": {
+      "type": "string",
+      "required": false,
+      "description": "Assignee GID or 'me' to filter by assignment"
+    },
+    "projectGid": {
+      "type": "string",
+      "required": false,
+      "description": "Project GID to search within"
+    },
+    "completed": {
+      "type": "boolean",
+      "required": false,
+      "description": "Filter by completion status. Omit to return both."
+    },
+    "dueOnBefore": {
+      "type": "string",
+      "required": false,
+      "description": "Return tasks due on or before this date (YYYY-MM-DD)"
+    },
+    "dueOnAfter": {
+      "type": "string",
+      "required": false,
+      "description": "Return tasks due on or after this date (YYYY-MM-DD)"
+    },
+    "isBlocked": {
+      "type": "boolean",
+      "required": false,
+      "description": "Filter for tasks that are blocked by dependencies"
+    },
+    "sortBy": {
+      "type": "string",
+      "required": false,
+      "default": "modified_at",
+      "description": "Sort field: 'due_date', 'created_at', 'completed_at', 'likes', or 'modified_at'"
+    },
+    "sortAscending": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Sort ascending (true) or descending (false)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildSearchParams",
+      "name": "Build search query parameters",
+      "type": "code",
+      "code": {
+        "source": "const { text, assignee, projectGid, completed, dueOnBefore, dueOnAfter, isBlocked, sortBy, sortAscending } = $.input;\n\nconst params = {\n  opt_fields: 'gid,name,assignee,assignee.name,due_on,completed,completed_at,notes,tags,tags.name,permalink_url,memberships.section.name'\n};\n\nif (text) params.text = text;\nif (assignee) params['assignee.any'] = assignee;\nif (projectGid) params['projects.any'] = projectGid;\nif (completed === true) params.completed = 'true';\nif (completed === false) params.completed = 'false';\nif (dueOnBefore) params['due_on.before'] = dueOnBefore;\nif (dueOnAfter) params['due_on.after'] = dueOnAfter;\nif (isBlocked === true) params.is_blocked = 'true';\nif (isBlocked === false) params.is_blocked = 'false';\n\nparams.sort_by = sortBy || 'modified_at';\nparams.sort_ascending = String(sortAscending === true);\n\nreturn { params };"
+      }
+    },
+    {
+      "id": "searchTasks",
+      "name": "Search tasks in the workspace",
+      "type": "action",
+      "action": {
+        "platform": "asana",
+        "actionId": "conn_mod_def::GJ0BmJsc69Q::2k2XfYayTCahfyAcdAYtYA",
+        "connectionKey": "$.input.asanaConnectionKey",
+        "pathVars": {
+          "workspaceGid": "$.input.workspaceGid"
+        },
+        "queryParams": "$.steps.buildSearchParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format search results",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.searchTasks.response || {};\nconst tasks = (resp.data || []).map(t => ({\n  gid: t.gid,\n  name: t.name,\n  assignee: t.assignee ? (t.assignee.name || t.assignee.gid) : 'unassigned',\n  dueOn: t.due_on || null,\n  completed: !!t.completed,\n  completedAt: t.completed_at || null,\n  section: t.memberships && t.memberships[0] && t.memberships[0].section ? t.memberships[0].section.name : null,\n  tags: (t.tags || []).map(tag => tag.name || tag.gid),\n  permalink: t.permalink_url || '',\n  notes: t.notes ? t.notes.substring(0, 200) : ''\n}));\n\nconst open = tasks.filter(t => !t.completed).length;\nconst done = tasks.filter(t => t.completed).length;\nconst filters = [];\nif ($.input.text) filters.push('text: \"' + $.input.text + '\"');\nif ($.input.assignee) filters.push('assignee: ' + $.input.assignee);\nif ($.input.projectGid) filters.push('project: ' + $.input.projectGid);\nif ($.input.completed !== undefined) filters.push($.input.completed ? 'completed' : 'incomplete');\n\nreturn {\n  tasks,\n  totalCount: tasks.length,\n  openCount: open,\n  completedCount: done,\n  filters: filters.join(', ') || 'none',\n  hasMore: !!resp.next_page,\n  summary: `Found ${tasks.length} task${tasks.length === 1 ? '' : 's'} (${open} open, ${done} completed)${filters.length ? ' matching: ' + filters.join(', ') : ''}`\n};"
+      }
+    }
+  ]
+}

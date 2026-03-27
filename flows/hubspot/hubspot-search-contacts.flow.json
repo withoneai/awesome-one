@@ -1,0 +1,75 @@
+{
+  "key": "hubspot-search-contacts",
+  "name": "Search Contacts in HubSpot",
+  "description": "Search HubSpot CRM contacts using filters (email, name, company, etc.) with support for property selection and sorting.",
+  "version": "1",
+  "inputs": {
+    "hubspotConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "HubSpot connection key",
+      "connection": { "platform": "hubspot" }
+    },
+    "searchTerm": {
+      "type": "string",
+      "required": false,
+      "description": "Free-text search term (searches across default searchable properties)"
+    },
+    "filterProperty": {
+      "type": "string",
+      "required": false,
+      "description": "Property name to filter by (e.g., 'email', 'company', 'lifecyclestage')"
+    },
+    "filterOperator": {
+      "type": "string",
+      "required": false,
+      "default": "EQ",
+      "description": "Filter operator: 'EQ', 'NEQ', 'CONTAINS', 'GT', 'LT', 'GTE', 'LTE', 'HAS_PROPERTY', etc."
+    },
+    "filterValue": {
+      "type": "string",
+      "required": false,
+      "description": "Value to filter by"
+    },
+    "properties": {
+      "type": "array",
+      "required": false,
+      "description": "Properties to return. Default: ['email', 'firstname', 'lastname', 'phone', 'company']"
+    },
+    "limit": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Number of results (max 100)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildSearch",
+      "name": "Build search request",
+      "type": "code",
+      "code": {
+        "source": "const { searchTerm, filterProperty, filterOperator, filterValue, properties, limit } = $.input;\nconst body = { limit: Math.min(limit || 10, 100) };\nbody.properties = properties || ['email', 'firstname', 'lastname', 'phone', 'company', 'lifecyclestage'];\nif (searchTerm) body.query = searchTerm;\nif (filterProperty && filterValue) {\n  body.filterGroups = [{\n    filters: [{\n      propertyName: filterProperty,\n      operator: filterOperator || 'EQ',\n      value: filterValue\n    }]\n  }];\n}\nreturn body;"
+      }
+    },
+    {
+      "id": "searchContacts",
+      "name": "Search contacts via HubSpot API",
+      "type": "action",
+      "action": {
+        "platform": "hubspot",
+        "actionId": "conn_mod_def::GJ3kSC2Sp7I::L6cYnwOfTUatg0cXeWjCBA",
+        "connectionKey": "$.input.hubspotConnectionKey",
+        "data": "$.steps.buildSearch.output"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.searchContacts.response || {};\nconst results = resp.results || [];\nreturn {\n  contacts: results.map(c => ({\n    id: c.id,\n    properties: c.properties || {},\n    createdAt: c.createdAt,\n    updatedAt: c.updatedAt\n  })),\n  total: resp.total || results.length,\n  count: results.length,\n  paging: resp.paging || null,\n  summary: `Found ${resp.total || results.length} contact${(resp.total || results.length) === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "key": "github-pr-review",
+  "name": "Review Pull Requests",
+  "description": "List and review pull requests in a repository. Fetches PRs with full details including diff stats, reviews, and review comments. Handles the multi-step orchestration: list PRs, fetch details, fetch reviews.",
+  "version": "1",
+  "inputs": {
+    "githubConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "GitHub connection key",
+      "connection": { "platform": "github" }
+    },
+    "owner": {
+      "type": "string",
+      "required": true,
+      "description": "Repository owner (user or org)"
+    },
+    "repo": {
+      "type": "string",
+      "required": true,
+      "description": "Repository name"
+    },
+    "state": {
+      "type": "string",
+      "required": false,
+      "default": "open",
+      "description": "Filter by state: open, closed, or all"
+    },
+    "sort": {
+      "type": "string",
+      "required": false,
+      "default": "created",
+      "description": "Sort by: created, updated, or popularity"
+    },
+    "maxResults": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Number of PRs to return (1-30)"
+    },
+    "includeReviews": {
+      "type": "boolean",
+      "required": false,
+      "default": true,
+      "description": "Fetch review status for each PR"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const { state, sort, maxResults } = $.input;\nconst params = {};\nparams.state = state || 'open';\nparams.sort = sort || 'created';\nparams.per_page = String(Math.max(1, Math.min(30, maxResults || 5)));\nreturn { params };"
+      }
+    },
+    {
+      "id": "listPRs",
+      "name": "List pull requests from the repository",
+      "type": "action",
+      "action": {
+        "platform": "github",
+        "actionId": "conn_mod_def::GCQEZpOKR3c::U8SIvgvaTbqv8fihVUwuQA",
+        "connectionKey": "$.input.githubConnectionKey",
+        "pathVars": {
+          "owner": "$.input.owner",
+          "repo": "$.input.repo"
+        },
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "checkResults",
+      "name": "Check if any PRs were found",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listPRs.response || [];\nconst prs = Array.isArray(resp) ? resp : [];\nreturn { prs, count: prs.length };"
+      }
+    },
+    {
+      "id": "fetchDetails",
+      "name": "Fetch full details and reviews for each PR",
+      "type": "loop",
+      "if": "$.steps.checkResults.output.count > 0",
+      "loop": {
+        "over": "$.steps.checkResults.output.prs",
+        "as": "pr",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "getPR",
+            "name": "Get full PR details (includes diff stats)",
+            "type": "action",
+            "onError": { "strategy": "continue" },
+            "action": {
+              "platform": "github",
+              "actionId": "conn_mod_def::GCQFO0Cix4Q::F7A7hKBzTbeyHnMR3lgHRg",
+              "connectionKey": "$.input.githubConnectionKey",
+              "pathVars": {
+                "owner": "$.input.owner",
+                "repo": "$.input.repo",
+                "pull_number": "$.loop.pr.number"
+              }
+            }
+          },
+          {
+            "id": "getReviews",
+            "name": "Get reviews for this PR",
+            "type": "action",
+            "onError": { "strategy": "continue" },
+            "action": {
+              "platform": "github",
+              "actionId": "conn_mod_def::GDHSjBOz8es::rTL7yBWCSsy-Dr8zJAruyg",
+              "connectionKey": "$.input.githubConnectionKey",
+              "pathVars": {
+                "owner": "$.input.owner",
+                "repo": "$.input.repo",
+                "pull_number": "$.loop.pr.number"
+              }
+            }
+          },
+          {
+            "id": "parsePR",
+            "name": "Parse PR and review data",
+            "type": "code",
+            "code": {
+              "source": "const pr = $.steps.getPR?.response || $.loop.pr;\nconst reviews = $.steps.getReviews?.response || [];\n\nconst reviewList = (Array.isArray(reviews) ? reviews : []).map(r => ({\n  user: r.user?.login || 'unknown',\n  state: r.state,\n  submittedAt: r.submitted_at\n}));\n\nconst latestByUser = {};\nreviewList.forEach(r => {\n  if (!latestByUser[r.user] || new Date(r.submittedAt) > new Date(latestByUser[r.user].submittedAt)) {\n    latestByUser[r.user] = r;\n  }\n});\n\nconst approved = Object.values(latestByUser).filter(r => r.state === 'APPROVED').length;\nconst changesRequested = Object.values(latestByUser).filter(r => r.state === 'CHANGES_REQUESTED').length;\n\nreturn {\n  number: pr.number,\n  title: pr.title,\n  state: pr.state,\n  draft: pr.draft || false,\n  author: pr.user?.login || 'unknown',\n  head: pr.head?.ref || '',\n  base: pr.base?.ref || '',\n  additions: pr.additions || 0,\n  deletions: pr.deletions || 0,\n  changedFiles: pr.changed_files || 0,\n  mergeable: pr.mergeable,\n  mergeableState: pr.mergeable_state || '',\n  labels: (pr.labels || []).map(l => l.name || l),\n  assignees: (pr.assignees || []).map(a => a.login),\n  reviewSummary: { approved, changesRequested, total: reviewList.length },\n  reviews: reviewList,\n  createdAt: pr.created_at,\n  updatedAt: pr.updated_at,\n  url: pr.html_url\n};"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Compile final result",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.fetchDetails?.response?.iterations || [];\nconst prs = iterations.map(r => r?.parsePR?.output).filter(Boolean);\n\nreturn {\n  pullRequests: prs,\n  totalFound: prs.length,\n  repo: $.input.owner + '/' + $.input.repo,\n  filters: { state: $.input.state || 'open' },\n  summary: 'Found ' + prs.length + ' pull request' + (prs.length === 1 ? '' : 's') + ' in ' + $.input.owner + '/' + $.input.repo\n};"
+      }
+    }
+  ]
+}

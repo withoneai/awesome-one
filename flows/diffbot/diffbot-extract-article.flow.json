@@ -1,0 +1,65 @@
+{
+  "key": "diffbot-extract-article",
+  "name": "Extract Article with Diffbot",
+  "description": "Extract clean article text, metadata, tags, and images from any URL using Diffbot's Article API. Handles multi-page concatenation, NLP analysis, and comment extraction automatically.",
+  "version": "1",
+  "inputs": {
+    "diffbotConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Diffbot connection key",
+      "connection": { "platform": "diffbot" }
+    },
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "URL of the article/blog post to extract"
+    },
+    "discussion": {
+      "type": "boolean",
+      "required": false,
+      "default": true,
+      "description": "Set false to disable comment extraction"
+    },
+    "maxTags": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Maximum number of auto-generated tags to return"
+    },
+    "fields": {
+      "type": "string",
+      "required": false,
+      "description": "Optional fields to return: links, extlinks, meta, querystring, breadcrumb, quotes (comma-separated)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build query parameters for Diffbot API",
+      "type": "code",
+      "code": {
+        "source": "const { url, discussion, maxTags, fields } = $.input;\nif (!url) throw new Error('url is required');\n\nconst params = { url };\nif (discussion === false) params.discussion = 'false';\nif (maxTags && maxTags !== 10) params.maxTags = String(maxTags);\nif (fields) params.fields = fields;\n\nreturn { params };"
+      }
+    },
+    {
+      "id": "extractArticle",
+      "name": "Call Diffbot Article API",
+      "type": "action",
+      "action": {
+        "platform": "diffbot",
+        "actionId": "conn_mod_def::GJ2To17xqMI::mITwa3lZQaCynW7ziCeEWw",
+        "connectionKey": "$.input.diffbotConnectionKey",
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Extract and format article data",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.extractArticle.response || {};\nconst objects = resp.objects || [];\nconst article = objects[0] || {};\n\nreturn {\n  title: article.title || resp.title || '',\n  author: article.author || '',\n  date: article.date || '',\n  text: article.text || '',\n  html: article.html || '',\n  siteName: article.siteName || '',\n  pageUrl: article.pageUrl || $.input.url,\n  language: resp.humanLanguage || '',\n  sentiment: article.sentiment || null,\n  tags: (article.tags || []).map(t => ({ label: t.label, score: t.score, count: t.count })),\n  categories: (article.categories || []).map(c => ({ name: c.name, score: c.score })),\n  images: (article.images || []).map(i => ({ url: i.url, width: i.naturalWidth, height: i.naturalHeight, primary: i.primary || false })),\n  numPages: article.numPages || 1,\n  summary: article.title ? `Extracted \"${article.title}\" by ${article.author || 'unknown'} from ${article.siteName || 'unknown site'}` : 'No article found at URL'\n};"
+      }
+    }
+  ]
+}

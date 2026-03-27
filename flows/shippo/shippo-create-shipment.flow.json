@@ -1,0 +1,137 @@
+{
+  "key": "shippo-create-shipment",
+  "name": "Create Shipment and Get Rates via Shippo",
+  "description": "Create a new shipment with sender/recipient addresses and package dimensions via Shippo. Returns available shipping rates from multiple carriers. The parcels field is always sent as an array to prevent common 400 errors.",
+  "version": "1",
+  "inputs": {
+    "shippoConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Shippo connection key",
+      "connection": { "platform": "shippo" }
+    },
+    "fromName": {
+      "type": "string",
+      "required": true,
+      "description": "Sender name"
+    },
+    "fromStreet1": {
+      "type": "string",
+      "required": true,
+      "description": "Sender street address"
+    },
+    "fromCity": {
+      "type": "string",
+      "required": true,
+      "description": "Sender city"
+    },
+    "fromState": {
+      "type": "string",
+      "required": true,
+      "description": "Sender state"
+    },
+    "fromZip": {
+      "type": "string",
+      "required": true,
+      "description": "Sender ZIP code"
+    },
+    "fromCountry": {
+      "type": "string",
+      "required": true,
+      "default": "US",
+      "description": "Sender country code (e.g., US)"
+    },
+    "toName": {
+      "type": "string",
+      "required": true,
+      "description": "Recipient name"
+    },
+    "toStreet1": {
+      "type": "string",
+      "required": true,
+      "description": "Recipient street address"
+    },
+    "toCity": {
+      "type": "string",
+      "required": true,
+      "description": "Recipient city"
+    },
+    "toState": {
+      "type": "string",
+      "required": true,
+      "description": "Recipient state"
+    },
+    "toZip": {
+      "type": "string",
+      "required": true,
+      "description": "Recipient ZIP code"
+    },
+    "toCountry": {
+      "type": "string",
+      "required": true,
+      "default": "US",
+      "description": "Recipient country code"
+    },
+    "length": {
+      "type": "string",
+      "required": true,
+      "description": "Package length"
+    },
+    "width": {
+      "type": "string",
+      "required": true,
+      "description": "Package width"
+    },
+    "height": {
+      "type": "string",
+      "required": true,
+      "description": "Package height"
+    },
+    "distanceUnit": {
+      "type": "string",
+      "required": false,
+      "default": "in",
+      "description": "Distance unit: in or cm"
+    },
+    "weight": {
+      "type": "string",
+      "required": true,
+      "description": "Package weight"
+    },
+    "massUnit": {
+      "type": "string",
+      "required": false,
+      "default": "lb",
+      "description": "Mass unit: lb, kg, g, oz"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildShipment",
+      "name": "Build shipment request body",
+      "type": "code",
+      "code": {
+        "source": "const i = $.input;\nreturn {\n  body: {\n    address_from: {\n      name: i.fromName,\n      street1: i.fromStreet1,\n      city: i.fromCity,\n      state: i.fromState,\n      zip: i.fromZip,\n      country: i.fromCountry || 'US'\n    },\n    address_to: {\n      name: i.toName,\n      street1: i.toStreet1,\n      city: i.toCity,\n      state: i.toState,\n      zip: i.toZip,\n      country: i.toCountry || 'US'\n    },\n    parcels: [{\n      length: i.length,\n      width: i.width,\n      height: i.height,\n      distance_unit: i.distanceUnit || 'in',\n      weight: i.weight,\n      mass_unit: i.massUnit || 'lb'\n    }]\n  }\n};"
+      }
+    },
+    {
+      "id": "createShipment",
+      "name": "Create shipment via Shippo",
+      "type": "action",
+      "action": {
+        "platform": "shippo",
+        "actionId": "conn_mod_def::GEf2IVsPhus::k5I9cS3nSdGlXpRyTGBQDw",
+        "connectionKey": "$.input.shippoConnectionKey",
+        "data": "$.steps.buildShipment.output.body"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format shipment and rates",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createShipment.response || {};\nconst rates = (resp.rates || []).map(r => ({\n  provider: r.provider || '',\n  servicelevel: r.servicelevel?.name || r.servicelevel_name || '',\n  amount: r.amount || '',\n  currency: r.currency || 'USD',\n  estimatedDays: r.estimated_days || r.days || null,\n  objectId: r.object_id || ''\n}));\n\nreturn {\n  shipmentId: resp.object_id || '',\n  status: resp.status || '',\n  rates,\n  rateCount: rates.length,\n  from: `${$.input.fromCity}, ${$.input.fromState}`,\n  to: `${$.input.toCity}, ${$.input.toState}`,\n  summary: resp.object_id ? `Shipment ${resp.object_id} created with ${rates.length} rate${rates.length === 1 ? '' : 's'} available` : 'Failed to create shipment'\n};"
+      }
+    }
+  ]
+}

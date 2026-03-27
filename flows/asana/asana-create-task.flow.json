@@ -1,0 +1,112 @@
+{
+  "key": "asana-create-task",
+  "name": "Create Task in Asana",
+  "description": "Creates a task in Asana with optional project and section assignment. Handles the multi-step pattern: create task, then optionally add it to a specific section within the project.",
+  "version": "1",
+  "inputs": {
+    "asanaConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Asana connection key",
+      "connection": { "platform": "asana" }
+    },
+    "name": {
+      "type": "string",
+      "required": true,
+      "description": "Task name"
+    },
+    "workspaceGid": {
+      "type": "string",
+      "required": true,
+      "description": "Workspace GID where the task will be created"
+    },
+    "projectGid": {
+      "type": "string",
+      "required": false,
+      "description": "Project GID to add the task to"
+    },
+    "sectionGid": {
+      "type": "string",
+      "required": false,
+      "description": "Section GID to place the task in (requires projectGid)"
+    },
+    "assignee": {
+      "type": "string",
+      "required": false,
+      "description": "Assignee GID or email address"
+    },
+    "notes": {
+      "type": "string",
+      "required": false,
+      "description": "Task description (plain text)"
+    },
+    "htmlNotes": {
+      "type": "string",
+      "required": false,
+      "description": "Task description (HTML). Overrides notes if both provided."
+    },
+    "dueOn": {
+      "type": "string",
+      "required": false,
+      "description": "Due date in YYYY-MM-DD format"
+    },
+    "tags": {
+      "type": "array",
+      "required": false,
+      "description": "Array of tag GIDs to apply"
+    },
+    "priority": {
+      "type": "string",
+      "required": false,
+      "description": "Priority: 'high', 'medium', 'low', or custom field value"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildTaskData",
+      "name": "Build task payload",
+      "type": "code",
+      "code": {
+        "source": "const { name, workspaceGid, projectGid, assignee, notes, htmlNotes, dueOn, tags } = $.input;\n\nif (!name || !workspaceGid) throw new Error('name and workspaceGid are required');\n\nconst data = {\n  data: {\n    name,\n    workspace: workspaceGid\n  }\n};\n\nif (projectGid) data.data.projects = [projectGid];\nif (assignee) data.data.assignee = assignee;\nif (htmlNotes) {\n  data.data.html_notes = htmlNotes;\n} else if (notes) {\n  data.data.notes = notes;\n}\nif (dueOn) data.data.due_on = dueOn;\nif (tags && tags.length > 0) data.data.tags = tags;\n\nreturn data;"
+      }
+    },
+    {
+      "id": "createTask",
+      "name": "Create the task via Asana API",
+      "type": "action",
+      "action": {
+        "platform": "asana",
+        "actionId": "conn_mod_def::GJ0BjZE573g::hRws6xOKRGC8Xxv8Q09cLQ",
+        "connectionKey": "$.input.asanaConnectionKey",
+        "data": "$.steps.buildTaskData.output"
+      }
+    },
+    {
+      "id": "addToSection",
+      "name": "Move task to specified section",
+      "type": "action",
+      "if": "$.input.sectionGid",
+      "action": {
+        "platform": "asana",
+        "actionId": "conn_mod_def::GJ0Be7uRrrE::WDFMGLjJT1ae4k1iHhqsZg",
+        "connectionKey": "$.input.asanaConnectionKey",
+        "pathVars": {
+          "sectionGid": "$.input.sectionGid"
+        },
+        "data": {
+          "data": {
+            "task": "$.steps.createTask.response.data.gid"
+          }
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const task = $.steps.createTask.response?.data || {};\nconst sectionResult = $.steps.addToSection?.response || null;\n\nreturn {\n  taskGid: task.gid || '',\n  name: task.name || '',\n  assignee: task.assignee ? (task.assignee.name || task.assignee.gid) : 'unassigned',\n  dueOn: task.due_on || null,\n  projectGid: $.input.projectGid || null,\n  sectionGid: $.input.sectionGid || null,\n  movedToSection: !!sectionResult,\n  permalink: task.permalink_url || '',\n  summary: `Created task \"${task.name || $.input.name}\"${task.assignee ? ' assigned to ' + (task.assignee.name || task.assignee.gid) : ''}${task.due_on ? ' due ' + task.due_on : ''}`\n};"
+      }
+    }
+  ]
+}
