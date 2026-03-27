@@ -1,0 +1,187 @@
+{
+  "key": "n8n-3954-logo-generator-drive",
+  "name": "AI logo concept generator with brand research and Drive storage",
+  "description": "Researches a brand or company using Exa, uses Claude AI to generate detailed logo design concepts and style guidelines based on brand analysis, saves the design brief to Google Drive, and sends a summary via Gmail.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3954,
+    "url": "https://n8n.io/workflows/3954",
+    "originalName": "Generate logos and images with consistent visual styles using Imagen 3.0",
+    "totalViews": 23973,
+    "rank": 262,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for brand research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key for saving design briefs",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending the design brief",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "driveFolderId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive folder ID for saving design documents"
+    },
+    "designerEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to send the logo design brief to"
+    },
+    "brandName": {
+      "type": "string",
+      "required": true,
+      "description": "Brand or company name (e.g. 'TechFlow Solutions')"
+    },
+    "brandDescription": {
+      "type": "string",
+      "required": true,
+      "description": "Brief description of the brand (e.g. 'B2B SaaS workflow automation platform')"
+    },
+    "designPreferences": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Any design preferences (e.g. 'modern, minimalist, blue tones')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildResearchQuery",
+      "name": "Build brand research query",
+      "type": "code",
+      "code": {
+        "source": "var query = $.input.brandName + ' ' + $.input.brandDescription + ' brand visual identity logo design';\nreturn { query: query };"
+      }
+    },
+    {
+      "id": "researchBrand",
+      "name": "Research brand and competitor visuals with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildResearchQuery.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "useAutoprompt": true,
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile brand research",
+      "type": "code",
+      "code": {
+        "source": "var results = $.steps.researchBrand.response.results || [];\nvar researchText = '';\nresults.forEach(function(r, i) {\n  researchText += 'SOURCE ' + (i + 1) + ': ' + (r.title || '') + '\\n';\n  researchText += (r.text || '').slice(0, 1500) + '\\n\\n';\n});\nreturn { researchText: researchText, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for logo concept generation",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileResearch.output;\nvar prompt = 'You are a senior brand designer and visual identity specialist. Generate detailed logo design concepts for the following brand.\\n\\n';\nprompt += 'BRAND NAME: ' + $.input.brandName + '\\n';\nprompt += 'DESCRIPTION: ' + $.input.brandDescription + '\\n';\nif ($.input.designPreferences) prompt += 'PREFERENCES: ' + $.input.designPreferences + '\\n';\nprompt += '\\nBRAND/INDUSTRY RESEARCH (' + data.sourceCount + ' sources):\\n' + data.researchText + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Analyze the brand identity and competitive landscape\\n';\nprompt += '- Generate 3 distinct logo concepts with different styles\\n';\nprompt += '- For each concept: describe the visual, typography, color palette, and symbolism\\n';\nprompt += '- Include a complete brand style guide\\n';\nprompt += '- Provide detailed text-to-image prompts a designer could use\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"brandAnalysis\": { \"personality\": \"...\", \"values\": [\"...\"], \"targetAudience\": \"...\", \"competitorStyles\": \"...\" },\\n';\nprompt += '  \"concepts\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"name\": \"Concept name\",\\n';\nprompt += '      \"style\": \"Modern|Classic|Playful|Minimal|Bold\",\\n';\nprompt += '      \"description\": \"Detailed visual description\",\\n';\nprompt += '      \"typography\": \"Font style recommendation\",\\n';\nprompt += '      \"colors\": { \"primary\": \"#hex\", \"secondary\": \"#hex\", \"accent\": \"#hex\" },\\n';\nprompt += '      \"symbolism\": \"What the design represents\",\\n';\nprompt += '      \"imagePrompt\": \"Text-to-image prompt for generating this logo\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"styleGuide\": { \"fonts\": [\"...\"], \"colorPalette\": [\"#hex\"], \"doNots\": [\"...\"], \"usageGuidelines\": \"...\" }\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3954-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiDesign",
+      "name": "Run Claude AI for logo concept generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3954-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiDesign.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { brandAnalysis: {}, concepts: [], styleGuide: {} }; }"
+      }
+    },
+    {
+      "id": "buildDocument",
+      "name": "Build design brief document",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar date = new Date().toISOString().split('T')[0];\nvar doc = '# Logo Design Brief: ' + $.input.brandName + '\\n\\n';\ndoc += '**Date:** ' + date + '\\n\\n';\nvar ba = ai.brandAnalysis || {};\nif (ba.personality) {\n  doc += '## Brand Analysis\\n';\n  doc += '- **Personality:** ' + ba.personality + '\\n';\n  doc += '- **Values:** ' + (ba.values || []).join(', ') + '\\n';\n  doc += '- **Target Audience:** ' + (ba.targetAudience || '') + '\\n';\n  doc += '- **Competitor Styles:** ' + (ba.competitorStyles || '') + '\\n\\n';\n}\nvar concepts = ai.concepts || [];\nconcepts.forEach(function(c, i) {\n  doc += '## Concept ' + (i + 1) + ': ' + (c.name || 'Untitled') + '\\n';\n  doc += '**Style:** ' + (c.style || '') + '\\n\\n';\n  doc += c.description + '\\n\\n';\n  doc += '**Typography:** ' + (c.typography || '') + '\\n';\n  if (c.colors) {\n    doc += '**Colors:** Primary: ' + (c.colors.primary || '') + ', Secondary: ' + (c.colors.secondary || '') + ', Accent: ' + (c.colors.accent || '') + '\\n';\n  }\n  doc += '**Symbolism:** ' + (c.symbolism || '') + '\\n\\n';\n  doc += '**Image Prompt:** ' + (c.imagePrompt || '') + '\\n\\n';\n});\nvar sg = ai.styleGuide || {};\nif (sg.fonts || sg.colorPalette) {\n  doc += '## Style Guide\\n';\n  if (sg.fonts) doc += '**Fonts:** ' + (sg.fonts || []).join(', ') + '\\n';\n  if (sg.colorPalette) doc += '**Color Palette:** ' + (sg.colorPalette || []).join(', ') + '\\n';\n  if (sg.doNots) doc += '**Do Nots:** ' + (sg.doNots || []).join(', ') + '\\n';\n  if (sg.usageGuidelines) doc += '**Usage:** ' + sg.usageGuidelines + '\\n';\n}\ndoc += '\\n---\\n*Generated with Claude AI via One CLI*\\n';\nvar fileName = $.input.brandName.replace(/[^a-zA-Z0-9 ]/g, '') + ' - Logo Brief - ' + date + '.md';\nreturn { document: doc, fileName: fileName, date: date, conceptCount: concepts.length };"
+      }
+    },
+    {
+      "id": "uploadToDrive",
+      "name": "Upload design brief to Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {
+          "name": "$.steps.buildDocument.output.fileName",
+          "parents": [
+            "$.input.driveFolderId"
+          ],
+          "mimeType": "text/markdown",
+          "content": "$.steps.buildDocument.output.document"
+        }
+      }
+    },
+    {
+      "id": "buildEmail",
+      "name": "Build email with design brief summary",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar doc = $.steps.buildDocument.output;\nvar concepts = ai.concepts || [];\nvar html = '<h2>Logo Design Brief: ' + $.input.brandName + '</h2>';\nhtml += '<p><strong>Brand:</strong> ' + $.input.brandDescription + '</p>';\nhtml += '<p><strong>Concepts Generated:</strong> ' + doc.conceptCount + '</p>';\nhtml += '<hr>';\nconcepts.slice(0, 3).forEach(function(c, i) {\n  html += '<h3>Concept ' + (i + 1) + ': ' + (c.name || '') + '</h3>';\n  html += '<p><strong>Style:</strong> ' + (c.style || '') + '</p>';\n  html += '<p>' + (c.description || '').slice(0, 300) + '</p>';\n  if (c.colors) {\n    html += '<p><strong>Colors:</strong> ' + (c.colors.primary || '') + ', ' + (c.colors.secondary || '') + ', ' + (c.colors.accent || '') + '</p>';\n  }\n});\nhtml += '<hr><p><small>Full brief saved to Google Drive: ' + doc.fileName + '</small></p>';\nvar subject = 'Logo Design Brief: ' + $.input.brandName;\nreturn { subject: subject, htmlBody: html.slice(0, 1900) };"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send design brief email via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.designerEmail",
+          "subject": "$.steps.buildEmail.output.subject",
+          "body": "$.steps.buildEmail.output.htmlBody",
+          "isHtml": true
+        }
+      }
+    }
+  ]
+}

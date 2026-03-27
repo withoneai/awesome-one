@@ -1,0 +1,131 @@
+{
+  "key": "n8n-1954-ai-agent-chat",
+  "name": "AI agent chat",
+  "description": "An AI-powered chat agent that can search the web to answer user questions. Takes a question, searches the web via Exa for relevant sources, uses Claude to synthesize a comprehensive answer, and delivers the result to Slack with rich Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1954,
+    "url": "https://n8n.io/workflows/1954",
+    "originalName": "AI agent chat",
+    "totalViews": 1428179,
+    "rank": 1,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting results",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The user's question to research and answer"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    }
+  },
+  "steps": [
+    {
+      "id": "webSearch",
+      "name": "Search the web for relevant sources via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile search results into source text",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.webSearch.response.results || [];\nconst question = $.input.question;\n\nlet sourcesText = '';\nresults.forEach((r, i) => {\n  sourcesText += (i+1) + '. ' + (r.title || 'Untitled') + '\\n';\n  sourcesText += '   URL: ' + r.url + '\\n';\n  if (r.publishedDate) sourcesText += '   Published: ' + r.publishedDate + '\\n';\n  sourcesText += '   ' + (r.text || '').slice(0, 1200) + '\\n\\n';\n});\n\nreturn { sourcesText, sourceCount: results.length, topSources: results.slice(0, 3).map(r => r.title || r.url) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI analysis prompt",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are a knowledgeable AI assistant. Answer the following question using the web search results provided. Be thorough, accurate, and cite your sources by number.\n\nQUESTION: ${$.input.question}\n\nWEB SEARCH RESULTS (${$.steps.compileSources.output.sourceCount} sources found):\n${$.steps.compileSources.output.sourcesText}\n\nINSTRUCTIONS:\n- Synthesize information from multiple sources into a coherent, comprehensive answer\n- Cite sources by their number, e.g. [1], [2]\n- If sources conflict, note the disagreement\n- If the sources don't adequately answer the question, say so\n- Use Slack mrkdwn formatting: *bold*, _italic_, > for quotes, numbered lists\n- Slack mrkdwn rules: use *bold* (NOT **bold**). No markdown tables. No # headings.\n\nReturn ONLY valid JSON with this structure:\n{\n  \"answer\": \"<comprehensive answer using Slack mrkdwn>\",\n  \"confidence\": \"high|medium|low\",\n  \"keyPoints\": [\"<point1>\", \"<point2>\"],\n  \"sourcesUsed\": [<source numbers used>]\n}`;\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1954-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1954-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, confidence: 'medium', keyPoints: [], sourcesUsed: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst question = $.input.question;\nconst sourceCount = $.steps.compileSources.output.sourceCount;\nconst topSources = $.steps.compileSources.output.topSources || [];\n\nconst confidenceEmoji = ai.confidence === 'high' ? ':large_green_circle:' : ai.confidence === 'low' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\n\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'AI Agent Chat Response' } });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No answer generated.').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: answerText } });\nblocks.push({ type: 'divider' });\n\nif (ai.keyPoints && ai.keyPoints.length > 0) {\n  let kpText = '*Key Points:*\\n';\n  ai.keyPoints.forEach((p, i) => { kpText += (i+1) + '. ' + p + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kpText } });\n  blocks.push({ type: 'divider' });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: confidenceEmoji + ' Confidence: *' + (ai.confidence || 'medium') + '* | Sources analyzed: *' + sourceCount + '* | Sources cited: *' + ((ai.sourcesUsed || []).length) + '*' }] });\n\nconst fallback = 'AI Agent answer to: ' + question;\n\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

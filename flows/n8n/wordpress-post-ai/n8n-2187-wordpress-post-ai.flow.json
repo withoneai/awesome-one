@@ -1,0 +1,112 @@
+{
+  "key": "n8n-2187-wordpress-post-ai",
+  "name": "AI WordPress Blog Post Writer",
+  "description": "Takes a set of keywords, Claude AI researches and writes a complete SEO-optimized blog post with title, meta description, structured content, tags, and categories, then publishes directly to WordPress.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2187,
+    "url": "https://n8n.io/workflows/2187",
+    "originalName": "Write a WordPress post with AI (starting from a few keywords)",
+    "totalViews": 85536,
+    "rank": 62,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "wordpressKey": {
+      "type": "string",
+      "required": true,
+      "description": "WordPress connection key for publishing posts",
+      "connection": {
+        "platform": "word-press"
+      }
+    },
+    "wordpressSite": {
+      "type": "string",
+      "required": true,
+      "description": "WordPress site ID or domain (e.g. 'mysite.wordpress.com' or '82974409')"
+    },
+    "keywords": {
+      "type": "string",
+      "required": true,
+      "description": "Comma-separated keywords to write about (e.g. 'AI automation, workflow, productivity')"
+    },
+    "tone": {
+      "type": "string",
+      "required": false,
+      "default": "professional yet conversational",
+      "description": "Writing tone (default: 'professional yet conversational')"
+    },
+    "wordCount": {
+      "type": "number",
+      "required": false,
+      "default": 1500,
+      "description": "Target word count (default: 1500)"
+    },
+    "postStatus": {
+      "type": "string",
+      "required": false,
+      "default": "draft",
+      "description": "Post status: 'draft', 'publish', or 'pending' (default: 'draft')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for blog post writing",
+      "type": "code",
+      "code": {
+        "source": "const keywords = $.input.keywords;\nconst tone = $.input.tone || 'professional yet conversational';\nconst wordCount = $.input.wordCount || 1500;\nconst today = new Date().toISOString().split('T')[0];\n\nlet prompt = 'You are a professional SEO content writer. Write a comprehensive blog post based on the following keywords.\\n\\n';\nprompt += 'KEYWORDS: ' + keywords + '\\n';\nprompt += 'TONE: ' + tone + '\\n';\nprompt += 'TARGET WORD COUNT: ~' + wordCount + ' words\\n';\nprompt += 'DATE: ' + today + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Write an SEO-optimized title with the primary keyword\\n';\nprompt += '- Create a compelling meta description (150-160 chars)\\n';\nprompt += '- Use proper HTML formatting: <h2>, <h3>, <p>, <ul>/<li>, <strong>, <em>\\n';\nprompt += '- Include an engaging introduction with a hook\\n';\nprompt += '- Structure with clear sections and subheadings\\n';\nprompt += '- Add a conclusion with a call-to-action\\n';\nprompt += '- Suggest relevant tags and categories\\n';\nprompt += '- Write a short excerpt\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"SEO-optimized blog title\",\\n';\nprompt += '  \"slug\": \"url-friendly-slug\",\\n';\nprompt += '  \"metaDescription\": \"150-160 char meta description\",\\n';\nprompt += '  \"excerpt\": \"short post excerpt\",\\n';\nprompt += '  \"content\": \"<h2>...</h2><p>...</p> full HTML blog post content\",\\n';\nprompt += '  \"tags\": [\"tag1\", \"tag2\"],\\n';\nprompt += '  \"categories\": [\"category1\"],\\n';\nprompt += '  \"estimatedReadTime\": \"X min read\"\\n';\nprompt += '}';\n\nreturn { prompt, today };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2187-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to write blog post",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2187-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude AI output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'Blog Post', slug: 'blog-post', content: raw, tags: [], categories: [], excerpt: '' }; }"
+      }
+    },
+    {
+      "id": "publishToWordPress",
+      "name": "Publish blog post to WordPress",
+      "type": "action",
+      "action": {
+        "platform": "word-press",
+        "actionId": "conn_mod_def::GJ8WW_SF41c::2UIlchnrQjqCWCK2VaWxwA",
+        "connectionKey": "$.input.wordpressKey",
+        "pathVariables": {
+          "site": "$.input.wordpressSite"
+        },
+        "data": {
+          "title": "$.steps.parseAI.output.title",
+          "content": "$.steps.parseAI.output.content",
+          "excerpt": "$.steps.parseAI.output.excerpt",
+          "slug": "$.steps.parseAI.output.slug",
+          "status": "$.input.postStatus",
+          "tags": "$.steps.parseAI.output.tags",
+          "categories": "$.steps.parseAI.output.categories"
+        }
+      }
+    }
+  ]
+}

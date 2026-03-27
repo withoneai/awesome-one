@@ -1,0 +1,173 @@
+{
+  "key": "n8n-2468-customer-support-resolution",
+  "name": "AI-powered customer support issue resolution with Slack and Notion",
+  "description": "Analyzes customer support issues using AI text classification and sentiment analysis, searches a Notion knowledge base for solutions, categorizes issues by priority, and posts resolution reports and escalation alerts to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2468,
+    "url": "https://n8n.io/workflows/2468",
+    "originalName": "Automate customer support issue resolution using AI text classifier",
+    "totalViews": 28266,
+    "rank": 222,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications and escalation",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "notionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Notion connection key for knowledge base lookup",
+      "connection": {
+        "platform": "notion"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for support issue reports"
+    },
+    "escalationChannel": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Slack channel for escalation alerts (defaults to main channel if empty)"
+    },
+    "notionParentPageId": {
+      "type": "string",
+      "required": true,
+      "description": "Notion parent page ID for the knowledge base"
+    },
+    "issueTitle": {
+      "type": "string",
+      "required": true,
+      "description": "Customer support issue title"
+    },
+    "issueDescription": {
+      "type": "string",
+      "required": true,
+      "description": "Full description of the customer support issue"
+    },
+    "customerName": {
+      "type": "string",
+      "required": false,
+      "default": "Customer",
+      "description": "Customer name or ID"
+    },
+    "issueHistory": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Previous conversation thread or issue history"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildClassifierPrompt",
+      "name": "Build prompt for issue classification and sentiment analysis",
+      "type": "code",
+      "code": {
+        "source": "const title = $.input.issueTitle || '';\nconst desc = $.input.issueDescription || '';\nconst history = $.input.issueHistory || '';\nconst customer = $.input.customerName || 'Customer';\n\nlet prompt = 'You are a customer support AI specialist. Analyze the following support issue and perform classification, sentiment analysis, and solution lookup.\\n\\n';\nprompt += 'ISSUE TITLE: ' + title + '\\n';\nprompt += 'DESCRIPTION: ' + desc + '\\n';\nif (history) prompt += 'CONVERSATION HISTORY:\\n' + history + '\\n';\nprompt += 'CUSTOMER: ' + customer + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '1. Classify the issue into a category (billing, technical, account, feature_request, bug, general)\\n';\nprompt += '2. Analyze customer sentiment (positive, neutral, frustrated, angry)\\n';\nprompt += '3. Assess priority (critical, high, medium, low)\\n';\nprompt += '4. Check if the issue is likely resolved or needs follow-up\\n';\nprompt += '5. Suggest a solution based on common support knowledge\\n';\nprompt += '6. Draft a professional reply to the customer\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"category\": \"billing|technical|account|feature_request|bug|general\",\\n';\nprompt += '  \"sentiment\": \"positive|neutral|frustrated|angry\",\\n';\nprompt += '  \"priority\": \"critical|high|medium|low\",\\n';\nprompt += '  \"isResolved\": false,\\n';\nprompt += '  \"suggestedSolution\": \"detailed solution\",\\n';\nprompt += '  \"draftReply\": \"professional reply to customer\",\\n';\nprompt += '  \"escalationNeeded\": false,\\n';\nprompt += '  \"escalationReason\": \"\",\\n';\nprompt += '  \"similarIssueKeywords\": [\"keyword1\", \"keyword2\"],\\n';\nprompt += '  \"summary\": \"1-2 sentence issue summary\"\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2468-prompt.txt",
+        "content": "$.steps.buildClassifierPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiClassification",
+      "name": "Run Claude AI issue classification",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2468-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude classification output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiClassification.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { category: 'general', sentiment: 'neutral', priority: 'medium', isResolved: false, suggestedSolution: raw.slice(0, 500), draftReply: '', escalationNeeded: false, escalationReason: '', similarIssueKeywords: [], summary: raw.slice(0, 200) }; }"
+      }
+    },
+    {
+      "id": "logToNotion",
+      "name": "Log issue analysis to Notion",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5EnlW1AEk::mEAQjNttT1GjVqNeMTvDiw",
+        "connectionKey": "$.input.notionKey",
+        "data": {
+          "parent": {
+            "page_id": "$.input.notionParentPageId"
+          },
+          "properties": {
+            "title": {
+              "title": [
+                {
+                  "text": {
+                    "content": "$.input.issueTitle"
+                  }
+                }
+              ]
+            }
+          },
+          "children": [
+            {
+              "object": "block",
+              "type": "paragraph",
+              "paragraph": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "$.steps.parseAI.output.summary"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildSlackReport",
+      "name": "Build Slack Block Kit issue report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\n\nlet priorityEmoji = '';\nif (ai.priority === 'critical') priorityEmoji = ':red_circle:';\nelse if (ai.priority === 'high') priorityEmoji = ':large_orange_circle:';\nelse if (ai.priority === 'medium') priorityEmoji = ':large_yellow_circle:';\nelse priorityEmoji = ':white_circle:';\n\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Support Issue Analysis', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + ($.input.issueTitle || 'Issue') + '*\\n' + (ai.summary || '').slice(0, 500) } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Category:*\\n' + (ai.category || 'N/A') },\n  { type: 'mrkdwn', text: '*Priority:* ' + priorityEmoji + '\\n' + (ai.priority || 'N/A') }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Sentiment:*\\n' + (ai.sentiment || 'N/A') },\n  { type: 'mrkdwn', text: '*Customer:*\\n' + ($.input.customerName || 'Unknown') }\n] });\nblocks.push({ type: 'divider' });\n\nif (ai.suggestedSolution) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Suggested Solution:*\\n' + ai.suggestedSolution.slice(0, 1500) } });\n}\nif (ai.draftReply) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Draft Reply:*\\n' + ai.draftReply.slice(0, 1500) } });\n}\n\nif (ai.escalationNeeded) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':warning: *Escalation Needed:* ' + (ai.escalationReason || 'See details above') } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Logged to Notion | Powered by Claude AI' }] });\nconst fallbackText = 'Support Issue [' + (ai.priority || '?').toUpperCase() + ']: ' + ($.input.issueTitle || 'Issue') + ' - ' + (ai.category || '');\nreturn { blocks, fallbackText, escalationNeeded: ai.escalationNeeded };"
+      }
+    },
+    {
+      "id": "postReport",
+      "name": "Post issue report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackReport.output.fallbackText",
+          "blocks": "$.steps.buildSlackReport.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,202 @@
+{
+  "key": "n8n-1847-company-enrichment",
+  "name": "Company enrichment from website content",
+  "description": "Scrapes a company website with Firecrawl, uses Claude AI to extract structured data (market, industry, target audience, value proposition), and saves the enrichment results to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1862,
+    "url": "https://n8n.io/workflows/1862",
+    "originalName": "OpenAI GPT-3: Company enrichment from website content",
+    "totalViews": 90395,
+    "rank": 59,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for web scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "googleSheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving data",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for status notification",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for enrichment status updates"
+    },
+    "companyUrl": {
+      "type": "string",
+      "required": true,
+      "description": "Company website URL to scrape and enrich (e.g. 'https://example.com')"
+    },
+    "companyName": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Company name (if known, otherwise extracted from website)"
+    },
+    "spreadsheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Company Enrichment Data",
+      "description": "Name for the Google Sheets spreadsheet"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeWebsite",
+      "name": "Scrape company website with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.companyUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "extractContent",
+      "name": "Extract scraped content",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.scrapeWebsite.response || {};\nconst data = response.data || response;\nconst markdown = (data.markdown || data.content || data.text || '').slice(0, 8000);\nconst title = data.title || data.metadata?.title || '';\nconst url = $.input.companyUrl;\nconst name = $.input.companyName || title || url;\n\nreturn { markdown, title, url, companyName: name, contentLength: markdown.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude enrichment prompt",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.extractContent.output;\n\nlet prompt = 'You are a business analyst specializing in company research and enrichment. Analyze the following website content and extract structured company data.\\n\\n';\nprompt += 'COMPANY: ' + data.companyName + '\\n';\nprompt += 'WEBSITE: ' + data.url + '\\n\\n';\nprompt += 'WEBSITE CONTENT:\\n' + data.markdown + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += 'Extract the following fields from the website content. If information is not available, use \"Not found\" as the value.\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"companyName\": \"official company name\",\\n';\nprompt += '  \"market\": \"B2B or B2C or Both\",\\n';\nprompt += '  \"industry\": \"primary industry\",\\n';\nprompt += '  \"subIndustry\": \"specific niche\",\\n';\nprompt += '  \"targetAudience\": \"who they serve\",\\n';\nprompt += '  \"valueProposition\": \"main value prop in 1-2 sentences\",\\n';\nprompt += '  \"products\": [\"product1\", \"product2\"],\\n';\nprompt += '  \"companySize\": \"startup|small|medium|enterprise\",\\n';\nprompt += '  \"techStack\": [\"tech1\", \"tech2\"],\\n';\nprompt += '  \"keywords\": [\"keyword1\", \"keyword2\", \"keyword3\"],\\n';\nprompt += '  \"summary\": \"3-4 sentence company description\",\\n';\nprompt += '  \"founded\": \"year or Not found\",\\n';\nprompt += '  \"headquarters\": \"location or Not found\"\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1847-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI company enrichment",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1847-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { companyName: $.input.companyName || 'Unknown', market: 'Not found', industry: 'Not found', subIndustry: 'Not found', targetAudience: 'Not found', valueProposition: raw.slice(0, 200), products: [], companySize: 'Not found', techStack: [], keywords: [], summary: raw.slice(0, 300), founded: 'Not found', headquarters: 'Not found' }; }"
+      }
+    },
+    {
+      "id": "createSpreadsheet",
+      "name": "Create Google Sheets spreadsheet for enrichment data",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.googleSheetsKey",
+        "data": {
+          "title": "$.input.spreadsheetName",
+          "sheets": [
+            {
+              "title": "Enrichment",
+              "headers": [
+                "Company",
+                "URL",
+                "Market",
+                "Industry",
+                "Sub-Industry",
+                "Target Audience",
+                "Value Proposition",
+                "Products",
+                "Company Size",
+                "Tech Stack",
+                "Keywords",
+                "Summary",
+                "Founded",
+                "HQ"
+              ],
+              "rows": [
+                [
+                  "$.steps.parseAI.output.companyName",
+                  "$.input.companyUrl",
+                  "$.steps.parseAI.output.market",
+                  "$.steps.parseAI.output.industry",
+                  "$.steps.parseAI.output.subIndustry",
+                  "$.steps.parseAI.output.targetAudience",
+                  "$.steps.parseAI.output.valueProposition",
+                  "$.steps.parseAI.output.products",
+                  "$.steps.parseAI.output.companySize",
+                  "$.steps.parseAI.output.techStack",
+                  "$.steps.parseAI.output.keywords",
+                  "$.steps.parseAI.output.summary",
+                  "$.steps.parseAI.output.founded",
+                  "$.steps.parseAI.output.headquarters"
+                ]
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit enrichment summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst url = $.input.companyUrl;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Company Enrichment Complete', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + (ai.companyName || 'Unknown') + '* - <' + url + '|Website>' } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Market:*\\n' + (ai.market || 'N/A') },\n  { type: 'mrkdwn', text: '*Industry:*\\n' + (ai.industry || 'N/A') }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Target Audience:*\\n' + (ai.targetAudience || 'N/A') },\n  { type: 'mrkdwn', text: '*Company Size:*\\n' + (ai.companySize || 'N/A') }\n] });\nblocks.push({ type: 'divider' });\n\nconst vp = (ai.valueProposition || 'N/A').slice(0, 500);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Value Proposition:*\\n' + vp } });\n\nif (ai.products && ai.products.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Products:* ' + ai.products.slice(0, 6).join(', ') } });\n}\n\nif (ai.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:*\\n' + ai.summary.slice(0, 1000) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Data saved to Google Sheets | Powered by Firecrawl + Claude AI' }] });\n\nconst fallbackText = 'Company Enrichment: ' + (ai.companyName || url) + ' - ' + (ai.industry || 'Unknown industry') + ' (' + (ai.market || 'N/A') + ')';\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post enrichment summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

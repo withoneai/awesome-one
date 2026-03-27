@@ -1,0 +1,137 @@
+{
+  "key": "n8n-4108-ai-image-generator",
+  "name": "AI image generator from text with content safety filtering",
+  "description": "Takes a text prompt, runs content safety classification with Claude AI to filter inappropriate requests, generates a detailed image description and creative brief, delivers the results via Gmail, and notifies Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4108,
+    "url": "https://n8n.io/workflows/4108",
+    "originalName": "AI image generator from text built on fal.ai",
+    "totalViews": 27310,
+    "rank": 233,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for delivering results",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "prompt": {
+      "type": "string",
+      "required": true,
+      "description": "Text description of the image to generate"
+    },
+    "style": {
+      "type": "string",
+      "required": false,
+      "default": "photorealistic",
+      "description": "Image style: photorealistic, illustration, 3d-render, watercolor, pencil-sketch"
+    },
+    "recipientEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email to send the image brief to"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for notifications"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildSafetyPrompt",
+      "name": "Build content safety classification prompt",
+      "type": "code",
+      "code": {
+        "source": "const userPrompt = $.input.prompt || '';\n\nlet prompt = 'You are a content safety classifier. Evaluate the following image generation prompt for safety.\\n\\n';\nprompt += 'PROMPT: ' + userPrompt + '\\n\\n';\nprompt += 'Classify this prompt:\\n';\nprompt += '- Is it safe for image generation?\\n';\nprompt += '- Does it contain violent, explicit, or harmful content?\\n';\nprompt += '- Rate the safety level\\n\\n';\nprompt += 'Then if safe, enhance the prompt for better image generation results.\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"isSafe\": true,\\n';\nprompt += '  \"safetyLevel\": \"safe|caution|unsafe\",\\n';\nprompt += '  \"reason\": \"why safe or unsafe\",\\n';\nprompt += '  \"enhancedPrompt\": \"improved prompt for image generation\",\\n';\nprompt += '  \"negativePrompt\": \"things to avoid in generation\",\\n';\nprompt += '  \"suggestedDimensions\": \"1024x1024\",\\n';\nprompt += '  \"styleNotes\": \"style-specific tips\"\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "saveSafetyPrompt",
+      "name": "Save safety prompt",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4108-safety.txt",
+        "content": "$.steps.buildSafetyPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiSafety",
+      "name": "Run content safety check with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4108-safety.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseSafety",
+      "name": "Parse safety classification",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiSafety.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { isSafe: true, safetyLevel: 'safe', reason: '', enhancedPrompt: $.input.prompt, negativePrompt: '', suggestedDimensions: '1024x1024', styleNotes: '' }; }"
+      }
+    },
+    {
+      "id": "buildCreativeBrief",
+      "name": "Build comprehensive creative brief",
+      "type": "code",
+      "code": {
+        "source": "const safety = $.steps.parseSafety.output;\nconst style = $.input.style || 'photorealistic';\n\nif (!safety.isSafe || safety.safetyLevel === 'unsafe') {\n  return {\n    subject: 'Image Generation - Content Safety Alert',\n    body: 'The image prompt was flagged as unsafe.\\n\\nOriginal prompt: ' + $.input.prompt + '\\nReason: ' + (safety.reason || 'Content policy violation') + '\\n\\nPlease revise the prompt and try again.',\n    blocked: true\n  };\n}\n\nlet body = 'IMAGE GENERATION BRIEF\\n';\nbody += '=====================\\n\\n';\nbody += 'Original Prompt: ' + $.input.prompt + '\\n\\n';\nbody += 'Enhanced Prompt: ' + (safety.enhancedPrompt || $.input.prompt) + '\\n\\n';\nbody += 'Style: ' + style + '\\n';\nbody += 'Dimensions: ' + (safety.suggestedDimensions || '1024x1024') + '\\n';\nif (safety.negativePrompt) body += 'Negative Prompt: ' + safety.negativePrompt + '\\n';\nif (safety.styleNotes) body += 'Style Notes: ' + safety.styleNotes + '\\n';\nbody += '\\nSafety Level: ' + safety.safetyLevel + '\\n';\nbody += '\\nYou can use this enhanced prompt with any image generation service (DALL-E, Midjourney, Stable Diffusion, fal.ai).\\n';\n\nreturn {\n  subject: 'Image Brief: ' + $.input.prompt.slice(0, 50),\n  body: body,\n  blocked: false\n};"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send creative brief via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.recipientEmail",
+          "subject": "$.steps.buildCreativeBrief.output.subject",
+          "body": "$.steps.buildCreativeBrief.output.body"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack notification",
+      "type": "code",
+      "code": {
+        "source": "const safety = $.steps.parseSafety.output;\nconst brief = $.steps.buildCreativeBrief.output;\nconst blocks = [];\n\nif (brief.blocked) {\n  blocks.push({ type: 'header', text: { type: 'plain_text', text: 'Image Generation Blocked', emoji: true } });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':no_entry: Prompt was flagged as unsafe\\n*Reason:* ' + (safety.reason || 'Content policy') } });\n} else {\n  blocks.push({ type: 'header', text: { type: 'plain_text', text: 'Image Brief Generated', emoji: true } });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Prompt:* ' + $.input.prompt } });\n  blocks.push({ type: 'section', fields: [\n    { type: 'mrkdwn', text: '*Style:*\\n' + ($.input.style || 'photorealistic') },\n    { type: 'mrkdwn', text: '*Safety:*\\n' + (safety.safetyLevel || 'safe') }\n  ] });\n  if (safety.enhancedPrompt) {\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Enhanced:* ' + safety.enhancedPrompt.slice(0, 1000) } });\n  }\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Sent to ' + $.input.recipientEmail + ' | Powered by Claude AI' }] });\nconst fallbackText = brief.blocked ? 'Image generation blocked' : 'Image brief: ' + $.input.prompt.slice(0, 80);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Post notification to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

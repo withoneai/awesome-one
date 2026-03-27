@@ -1,0 +1,96 @@
+{
+  "key": "n8n-4968-linkedin-content-creation",
+  "name": "Automated LinkedIn content creation with GPT-4 and DALL-E for scheduled posts",
+  "description": "LinkedIn content pipeline: Claude AI generates trending topic ideas, researches angles and hooks, writes an engaging LinkedIn post draft, and publishes it directly to LinkedIn.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4968,
+    "url": "https://n8n.io/workflows/4968",
+    "originalName": "Automated LinkedIn content creation with GPT-4 and DALL-E for scheduled posts",
+    "totalViews": 152334,
+    "rank": 29,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "linkedInKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "linked-in"
+      }
+    },
+    "industry": {
+      "type": "string",
+      "required": true,
+      "description": "Your industry or niche (e.g. 'AI automation', 'SaaS marketing', 'developer tools')"
+    },
+    "authorUrn": {
+      "type": "string",
+      "required": true,
+      "description": "LinkedIn author URN (e.g. 'urn:li:person:YOUR_ID' or 'urn:li:organization:YOUR_ORG_ID')"
+    },
+    "writingStyle": {
+      "type": "string",
+      "required": false,
+      "default": "conversational, insightful, with a personal anecdote or real example",
+      "description": "Desired writing style for the LinkedIn post"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildTopicPrompt",
+      "name": "Build topic generation prompt",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are a LinkedIn Content Strategist specializing in ${$.input.industry}.\n\nGenerate 3 trending, high-engagement LinkedIn post topic ideas for the ${$.input.industry} space.\n\nFor each topic provide:\n- A compelling title/angle\n- Why it's timely and relevant right now\n- A suggested hook (first line of the post that stops the scroll)\n- Target audience\n\nThen pick the BEST topic and write a complete LinkedIn post with:\n- A scroll-stopping first line (hook)\n- 150-300 words of valuable content\n- Writing style: ${$.input.writingStyle || 'conversational, insightful'}\n- A clear call-to-action\n- 3-5 relevant hashtags\n\nReturn ONLY valid JSON:\n{\n  \"topics\": [\n    { \"title\": \"...\", \"rationale\": \"...\", \"hook\": \"...\", \"audience\": \"...\" }\n  ],\n  \"selected_topic\": \"title of chosen topic\",\n  \"post_content\": \"The full LinkedIn post text including hashtags\",\n  \"hashtags\": [\"#hashtag1\", \"#hashtag2\"]\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4968-prompt.txt",
+        "content": "$.steps.buildTopicPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to generate content",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4968-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { post_content: raw, topics: [], selected_topic: '', hashtags: [] }; }"
+      }
+    },
+    {
+      "id": "preparePost",
+      "name": "Prepare LinkedIn post payload",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst postText = ai.post_content || 'No content generated.';\nreturn {\n  postBody: {\n    author: $.input.authorUrn,\n    lifecycleState: 'PUBLISHED',\n    specificContent: {\n      'com.linkedin.ugc.ShareContent': {\n        shareCommentary: {\n          attributes: [],\n          text: postText\n        },\n        shareMediaCategory: 'NONE'\n      }\n    },\n    visibility: {\n      'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC'\n    }\n  },\n  postText\n};"
+      }
+    },
+    {
+      "id": "publishToLinkedIn",
+      "name": "Publish post to LinkedIn",
+      "type": "action",
+      "action": {
+        "platform": "linked-in",
+        "actionId": "conn_mod_def::GJ4wWtov09U::eLscHPe5SVePSEGkfJlSIQ",
+        "connectionKey": "$.input.linkedInKey",
+        "data": "$.steps.preparePost.output.postBody"
+      }
+    }
+  ]
+}

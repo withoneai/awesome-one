@@ -1,0 +1,185 @@
+{
+  "key": "n8n-3082-social-content-generator",
+  "name": "AI Social Media Content Generator and Publisher",
+  "description": "Takes a topic and target platforms, researches trending content via Exa, generates platform-optimized posts using Claude AI for multiple social networks, logs all content to Google Sheets, and sends drafts to Slack for review.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3082,
+    "url": "https://n8n.io/workflows/3082",
+    "originalName": "Social media content generator and publisher | X, Linkedin",
+    "totalViews": 22522,
+    "rank": 272,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for content research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for content log",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for content review",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic or subject to generate social media posts about"
+    },
+    "platforms": {
+      "type": "string",
+      "required": false,
+      "default": "Twitter, LinkedIn, Instagram",
+      "description": "Comma-separated list of target platforms"
+    },
+    "tone": {
+      "type": "string",
+      "required": false,
+      "default": "professional yet engaging",
+      "description": "Content tone (professional, casual, witty, educational)"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for content log"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Social Posts",
+      "description": "Sheet tab name"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for content review"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildExaQuery",
+      "name": "Build Exa query for trending content research",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic || '';\nconst query = 'trending social media posts ' + topic + ' viral engagement';\nreturn { query };"
+      }
+    },
+    {
+      "id": "researchTrends",
+      "name": "Research trending content via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildExaQuery.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 300
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for multi-platform content generation",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic;\nconst platforms = $.input.platforms || 'Twitter, LinkedIn, Instagram';\nconst tone = $.input.tone || 'professional yet engaging';\nconst results = $.steps.researchTrends.response.results || [];\nlet trends = '';\nresults.forEach((r, i) => { trends += (i + 1) + '. ' + (r.title || r.url) + ': ' + (r.text || '').slice(0, 150) + '\\n'; });\n\nconst prompt = 'You are an expert social media content strategist. Generate optimized posts for multiple platforms.\\n\\nTOPIC: ' + topic + '\\nPLATFORMS: ' + platforms + '\\nTONE: ' + tone + '\\n\\nTRENDING INSIGHTS:\\n' + trends + '\\n\\nReturn ONLY valid JSON:\\n{\\n  \"posts\": [\\n    {\\n      \"platform\": \"Twitter\",\\n      \"content\": \"post text optimized for this platform\",\\n      \"hashtags\": [\"#tag1\"],\\n      \"characterCount\": 0,\\n      \"bestTimeToPost\": \"suggested posting time\",\\n      \"imagePrompt\": \"AI image generation prompt for visual\",\\n      \"engagementTip\": \"tip to boost engagement\"\\n    }\\n  ],\\n  \"contentPillar\": \"overarching content theme\",\\n  \"crossPlatformStrategy\": \"how posts work together across platforms\"\\n}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3082-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Generate social media content with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3082-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { posts: [], contentPillar: raw.slice(0, 200) }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build rows for content log in Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst posts = ai.posts || [];\nconst date = new Date().toISOString().split('T')[0];\nconst rows = posts.map(p => [\n  date,\n  p.platform || '',\n  $.input.topic,\n  p.content || '',\n  (p.hashtags || []).join(' '),\n  p.bestTimeToPost || '',\n  'Draft'\n]);\nreturn { rows, postCount: posts.length };"
+      }
+    },
+    {
+      "id": "writeToSheets",
+      "name": "Log content to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": "$.steps.buildSheetRows.output.rows"
+        }
+      }
+    },
+    {
+      "id": "buildSlackReview",
+      "name": "Build Slack review message with all posts",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst posts = ai.posts || [];\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Social Media Content for Review', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Topic:* ' + $.input.topic + '\\n*Theme:* ' + (ai.contentPillar || 'N/A') } });\nblocks.push({ type: 'divider' });\n\nposts.forEach(p => {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + p.platform + ':*\\n' + (p.content || '').slice(0, 1500) + '\\n' + (p.hashtags || []).join(' ') } });\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Best time: ' + (p.bestTimeToPost || 'N/A') + ' | ' + (p.engagementTip || '') }] });\n});\n\nif (ai.crossPlatformStrategy) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Strategy:* ' + ai.crossPlatformStrategy } });\n}\n\nconst fallback = 'Social content ready: ' + posts.length + ' posts for ' + $.input.topic;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Send content to Slack for review",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackReview.output.fallback",
+          "blocks": "$.steps.buildSlackReview.output.blocks"
+        }
+      }
+    }
+  ]
+}

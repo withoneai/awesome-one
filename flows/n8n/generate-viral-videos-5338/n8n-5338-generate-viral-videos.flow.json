@@ -1,0 +1,142 @@
+{
+  "key": "n8n-5338-generate-viral-videos",
+  "name": "AI Viral Video Script Generator",
+  "description": "Takes a video concept, uses Claude AI to generate creative viral video scripts with scene-by-scene descriptions, hooks, and platform-specific variations for TikTok/YouTube Shorts/Reels. Saves the full production plan to Google Sheets and notifies Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5338,
+    "url": "https://n8n.io/workflows/5338",
+    "originalName": "Generate AI viral videos with Seedance and upload to TikTok, YouTube & Instagram",
+    "totalViews": 309824,
+    "rank": 9,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "videoConcept": {
+      "type": "string",
+      "required": true,
+      "description": "Video concept or topic (e.g. 'satisfying ASMR cooking video with sizzling sounds')"
+    },
+    "targetPlatforms": {
+      "type": "string",
+      "required": false,
+      "default": "TikTok, YouTube Shorts, Instagram Reels",
+      "description": "Comma-separated target platforms"
+    },
+    "videoCount": {
+      "type": "string",
+      "required": false,
+      "default": "3",
+      "description": "Number of video variations to generate (1-5)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post notification"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for viral video script generation",
+      "type": "code",
+      "code": {
+        "source": "const concept = $.input.videoConcept;\nconst platforms = $.input.targetPlatforms || 'TikTok, YouTube Shorts, Instagram Reels';\nconst count = parseInt($.input.videoCount || '3', 10);\nconst date = new Date().toISOString().split('T')[0];\n\nlet prompt = 'You are a viral short-form video strategist and scriptwriter with expertise in TikTok, YouTube Shorts, and Instagram Reels. You understand hooks, retention patterns, trending formats, and what makes content go viral.\\n\\n';\nprompt += 'VIDEO CONCEPT: ' + concept + '\\n';\nprompt += 'TARGET PLATFORMS: ' + platforms + '\\n';\nprompt += 'NUMBER OF VARIATIONS: ' + count + '\\n\\n';\nprompt += 'For each video variation, create a complete production plan. Return ONLY valid JSON, no markdown or code fences.\\n\\n';\nprompt += 'Return a JSON object with this exact structure:\\n';\nprompt += '{\\n';\nprompt += '  \"concept\": \"the refined concept\",\\n';\nprompt += '  \"targetAudience\": \"who this content is for\",\\n';\nprompt += '  \"viralPotentialScore\": 1-10,\\n';\nprompt += '  \"videos\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"title\": \"catchy video title\",\\n';\nprompt += '      \"hook\": \"first 3 seconds hook text\",\\n';\nprompt += '      \"duration\": \"recommended duration in seconds\",\\n';\nprompt += '      \"format\": \"trend format name (e.g. POV, Get Ready With Me, Day in Life)\",\\n';\nprompt += '      \"script\": \"full script with timing cues\",\\n';\nprompt += '      \"scenes\": [\\n';\nprompt += '        { \"timestamp\": \"0:00-0:03\", \"visual\": \"what the viewer sees\", \"audio\": \"voiceover or sound\", \"text_overlay\": \"on-screen text\" }\\n';\nprompt += '      ],\\n';\nprompt += '      \"music\": \"recommended music/sound style\",\\n';\nprompt += '      \"hashtags\": [\"relevant\", \"hashtags\"],\\n';\nprompt += '      \"caption\": \"post caption\",\\n';\nprompt += '      \"platformNotes\": { \"tiktok\": \"platform-specific tips\", \"youtube\": \"tips\", \"instagram\": \"tips\" },\\n';\nprompt += '      \"cta\": \"call to action\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"productionTips\": [\"tip1\", \"tip2\"],\\n';\nprompt += '  \"trendingElements\": [\"trending sounds or formats to leverage\"],\\n';\nprompt += '  \"postingStrategy\": { \"bestTimes\": \"recommended posting times\", \"frequency\": \"posting cadence\", \"crossPostOrder\": \"which platform first\" }\\n';\nprompt += '}\\n';\n\nreturn { prompt, date, concept };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5338-viral-video-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI to generate viral video scripts",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5338-viral-video-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Strip code fences and parse Claude JSON output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { concept: $.input.videoConcept, videos: [], text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetData",
+      "name": "Build Google Sheets data from video scripts",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst date = $.steps.buildPrompt.output.date;\nconst videos = ai.videos || [];\n\nconst sheetData = videos.map((v, i) => ({\n  '#': i + 1,\n  'Title': v.title || '',\n  'Hook': v.hook || '',\n  'Format': v.format || '',\n  'Duration': v.duration || '',\n  'Music/Sound': v.music || '',\n  'Hashtags': (v.hashtags || []).join(', '),\n  'Caption': v.caption || '',\n  'CTA': v.cta || '',\n  'Scene Count': (v.scenes || []).length,\n  'Script Preview': (v.script || '').slice(0, 300),\n  'Status': 'Draft',\n  'Date Generated': date\n}));\n\nreturn { sheetData, videoCount: videos.length, concept: ai.concept || $.input.videoConcept };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save production plan to Google Sheets",
+      "type": "action",
+      "onError": {
+        "strategy": "continue"
+      },
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "connectionKey": "$.input.sheetsKey",
+          "title": "Viral Video Plan - {{$.steps.buildSheetData.output.concept}}",
+          "sheetTitle": "Video Scripts",
+          "data": "$.steps.buildSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit notification",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst videos = ai.videos || [];\nconst concept = ai.concept || $.input.videoConcept;\nconst score = ai.viralPotentialScore || 'N/A';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Viral Video Scripts Ready', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Concept:* ' + concept + '\\n*Viral Potential:* ' + score + '/10\\n*Videos Generated:* ' + videos.length } });\nblocks.push({ type: 'divider' });\n\nvideos.forEach((v, i) => {\n  let text = '*' + (i + 1) + '. ' + (v.title || 'Untitled') + '*\\n';\n  text += ':hook: *Hook:* ' + (v.hook || '') + '\\n';\n  text += ':movie_camera: *Format:* ' + (v.format || '') + ' | *Duration:* ' + (v.duration || '') + '\\n';\n  text += ':musical_note: *Music:* ' + (v.music || '') + '\\n';\n  if (v.hashtags && v.hashtags.length) text += ':hash: ' + v.hashtags.slice(0, 5).join(' ') + '\\n';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text } });\n  if (i < videos.length - 1) blocks.push({ type: 'divider' });\n});\n\nif (ai.postingStrategy) {\n  blocks.push({ type: 'divider' });\n  let stratText = '*Posting Strategy*\\n';\n  if (ai.postingStrategy.bestTimes) stratText += ':clock3: ' + ai.postingStrategy.bestTimes + '\\n';\n  if (ai.postingStrategy.frequency) stratText += ':calendar: ' + ai.postingStrategy.frequency + '\\n';\n  if (ai.postingStrategy.crossPostOrder) stratText += ':arrows_counterclockwise: ' + ai.postingStrategy.crossPostOrder;\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: stratText } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Production plan saved to Google Sheets | Generated by Claude AI' }] });\n\nconst fallback = 'Viral Video Scripts: ' + videos.length + ' variations for \"' + concept + '\" \u2014 viral score ' + score + '/10';\n\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Post video scripts summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

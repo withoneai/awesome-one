@@ -1,0 +1,179 @@
+{
+  "key": "n8n-3791-lead-enrichment-email",
+  "name": "Lead enrichment pipeline with Exa research and email outreach",
+  "description": "Takes lead names or companies from Google Sheets, uses Exa to research each lead online, enriches with Claude AI analysis, saves enriched data back to Sheets, and sends personalized outreach emails via Gmail.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3791,
+    "url": "https://n8n.io/workflows/3791",
+    "originalName": "Generate & enrich LinkedIn leads with Apollo.io, LinkedIn API, Mail.so & GPT-3.5",
+    "totalViews": 24528,
+    "rank": 259,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for researching leads online",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for reading and updating lead data",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending outreach emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "leadName": {
+      "type": "string",
+      "required": true,
+      "description": "Lead name or company to research (e.g. 'Jane Smith at Acme Corp')"
+    },
+    "leadEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Lead email address for outreach"
+    },
+    "companyName": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Company name for research context"
+    },
+    "outreachPurpose": {
+      "type": "string",
+      "required": true,
+      "description": "Purpose of outreach (e.g. 'Schedule a demo of our project management tool')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build Exa research query for the lead",
+      "type": "code",
+      "code": {
+        "source": "var query = $.input.leadName;\nif ($.input.companyName) query += ' ' + $.input.companyName;\nquery += ' professional background';\nreturn { query: query };"
+      }
+    },
+    {
+      "id": "researchLead",
+      "name": "Research the lead with Exa web search",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "useAutoprompt": true,
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile research findings",
+      "type": "code",
+      "code": {
+        "source": "var results = $.steps.researchLead.response.results || [];\nvar researchText = '';\nresults.forEach(function(r, i) {\n  researchText += 'SOURCE ' + (i + 1) + ': ' + (r.title || '') + '\\n';\n  researchText += 'URL: ' + (r.url || '') + '\\n';\n  researchText += (r.text || '').slice(0, 1500) + '\\n\\n';\n});\nreturn { researchText: researchText, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for lead enrichment and email generation",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileResearch.output;\nvar prompt = 'You are a sales intelligence analyst and email copywriter. Analyze the following research about a lead and generate enriched data plus a personalized outreach email.\\n\\n';\nprompt += 'LEAD: ' + $.input.leadName + '\\n';\nprompt += 'EMAIL: ' + $.input.leadEmail + '\\n';\nif ($.input.companyName) prompt += 'COMPANY: ' + $.input.companyName + '\\n';\nprompt += 'OUTREACH PURPOSE: ' + $.input.outreachPurpose + '\\n\\n';\nprompt += 'RESEARCH DATA (' + data.sourceCount + ' sources):\\n' + data.researchText + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract: title/role, company, industry, interests, recent activity\\n';\nprompt += '- Score lead quality 1-100\\n';\nprompt += '- Write a personalized, non-spammy outreach email\\n';\nprompt += '- Reference specific details from research to show authenticity\\n';\nprompt += '- Keep email under 150 words\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"enrichedProfile\": {\\n';\nprompt += '    \"name\": \"...\",\\n';\nprompt += '    \"title\": \"...\",\\n';\nprompt += '    \"company\": \"...\",\\n';\nprompt += '    \"industry\": \"...\",\\n';\nprompt += '    \"interests\": [\"...\"],\\n';\nprompt += '    \"recentActivity\": \"...\",\\n';\nprompt += '    \"leadScore\": 75\\n';\nprompt += '  },\\n';\nprompt += '  \"outreachEmail\": {\\n';\nprompt += '    \"subject\": \"Email subject line\",\\n';\nprompt += '    \"body\": \"HTML email body\"\\n';\nprompt += '  }\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3791-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiEnrich",
+      "name": "Run Claude AI for lead enrichment",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3791-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiEnrich.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { enrichedProfile: { name: $.input.leadName, title: '', company: $.input.companyName || '', industry: '', interests: [], recentActivity: '', leadScore: 0 }, outreachEmail: { subject: 'Quick question', body: '<p>' + raw.slice(0, 500) + '</p>' } }; }"
+      }
+    },
+    {
+      "id": "formatSheetData",
+      "name": "Format enriched lead data for Sheets",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar profile = ai.enrichedProfile || {};\nvar date = new Date().toISOString().split('T')[0];\nvar sheetData = [{\n  'Name': profile.name || $.input.leadName,\n  'Email': $.input.leadEmail,\n  'Title': profile.title || '',\n  'Company': profile.company || $.input.companyName || '',\n  'Industry': profile.industry || '',\n  'Interests': (profile.interests || []).join(', '),\n  'Recent Activity': (profile.recentActivity || '').slice(0, 200),\n  'Lead Score': profile.leadScore || '',\n  'Outreach Status': 'Email Sent',\n  'Date Enriched': date\n}];\nreturn { sheetData: sheetData, date: date };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save enriched lead data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "title": "Lead Enrichment Pipeline",
+          "sheetTitle": "Enriched Leads",
+          "data": "$.steps.formatSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "prepareEmail",
+      "name": "Prepare outreach email content",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar email = ai.outreachEmail || {};\nvar body = email.body || '';\nif (body.length < 20) {\n  body = '<p>Hi ' + $.input.leadName.split(' ')[0] + ',</p><p>' + $.input.outreachPurpose + '</p>';\n}\nreturn { subject: email.subject || 'Quick question', body: body.slice(0, 1900) };"
+      }
+    },
+    {
+      "id": "sendOutreachEmail",
+      "name": "Send personalized outreach email via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.leadEmail",
+          "subject": "$.steps.prepareEmail.output.subject",
+          "body": "$.steps.prepareEmail.output.body",
+          "isHtml": true
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+{
+  "key": "n8n-2483-backup-workflows-github",
+  "name": "Backup workflows to GitHub (adapted: flow list summary to Slack)",
+  "description": "Fetches the current One CLI flow list, uses Claude AI to analyze and summarize the flow inventory, and posts a structured backup report to Slack using Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1534,
+    "url": "https://n8n.io/workflows/1534",
+    "originalName": "Back up your n8n workflows to Github",
+    "totalViews": 100616,
+    "rank": 51,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the backup summary"
+    },
+    "flowDirectory": {
+      "type": "string",
+      "required": false,
+      "default": "~/.one/flows",
+      "description": "Path to the One CLI flows directory"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchFlowList",
+      "name": "Fetch One CLI flow list",
+      "type": "bash",
+      "bash": {
+        "command": "one --agent flow list 2>/dev/null || echo '{\"flows\":[]}'",
+        "timeout": 30000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseFlowList",
+      "name": "Parse flow list output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.fetchFlowList.output || '';\nlet flows = [];\ntry {\n  const parsed = JSON.parse(raw);\n  flows = parsed.flows || parsed.data || [];\n} catch(e) {\n  const lines = raw.split('\\n').filter(l => l.trim().length > 0);\n  flows = lines.map(l => ({ name: l.trim() }));\n}\nconst totalFlows = flows.length;\nconst flowNames = flows.map(f => f.name || f.key || 'unnamed').slice(0, 50);\nconst flowSummary = flows.slice(0, 30).map((f, i) => (i + 1) + '. ' + (f.name || f.key || 'unnamed')).join('\\n');\nreturn { totalFlows, flowNames, flowSummary, rawFlowData: JSON.stringify(flows).slice(0, 6000) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude analysis prompt",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.parseFlowList.output;\nlet prompt = 'You are an automation workflow analyst. You have been given a list of One CLI automation flows (similar to n8n workflows). Analyze this inventory and provide a structured backup report.\\n\\n';\nprompt += 'TOTAL FLOWS: ' + data.totalFlows + '\\n\\n';\nprompt += 'FLOW LIST:\\n' + data.flowSummary + '\\n\\n';\nprompt += 'RAW DATA:\\n' + data.rawFlowData + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Categorize flows by type (AI, data processing, integrations, etc.)\\n';\nprompt += '- Identify the most common platforms and patterns\\n';\nprompt += '- Note any potential issues (duplicates, naming inconsistencies)\\n';\nprompt += '- Provide a health score (1-10) for the overall flow collection\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"summary\": \"2-3 sentence overview of the flow collection\",\\n';\nprompt += '  \"totalFlows\": 0,\\n';\nprompt += '  \"categories\": [{ \"name\": \"category\", \"count\": 0, \"examples\": [\"flow1\"] }],\\n';\nprompt += '  \"topPlatforms\": [\"platform1\", \"platform2\"],\\n';\nprompt += '  \"healthScore\": 8,\\n';\nprompt += '  \"recommendations\": [\"recommendation1\"]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2483-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis on flow inventory",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2483-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, totalFlows: 0, categories: [], topPlatforms: [], healthScore: 0, recommendations: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit backup report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst data = $.steps.parseFlowList.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Flow Backup Report', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Total Flows:*\\n' + data.totalFlows },\n  { type: 'mrkdwn', text: '*Health Score:*\\n' + (ai.healthScore || 'N/A') + '/10' }\n] });\nblocks.push({ type: 'divider' });\n\nconst summaryText = (ai.summary || 'No summary generated.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:*\\n' + summaryText } });\n\nif (ai.categories && ai.categories.length > 0) {\n  blocks.push({ type: 'divider' });\n  let catText = '*Flow Categories:*\\n';\n  ai.categories.slice(0, 8).forEach(c => {\n    catText += '- *' + c.name + '* (' + c.count + ')';\n    if (c.examples && c.examples.length > 0) catText += ': ' + c.examples.slice(0, 2).join(', ');\n    catText += '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: catText.slice(0, 1800) } });\n}\n\nif (ai.topPlatforms && ai.topPlatforms.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Top Platforms:* ' + ai.topPlatforms.slice(0, 6).join(', ') } });\n}\n\nif (ai.recommendations && ai.recommendations.length > 0) {\n  blocks.push({ type: 'divider' });\n  let recText = '*Recommendations:*\\n';\n  ai.recommendations.slice(0, 5).forEach((r, i) => { recText += (i + 1) + '. ' + r + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: recText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Backup report generated by One CLI + Claude AI' }] });\n\nconst fallbackText = 'Flow Backup Report: ' + data.totalFlows + ' flows analyzed - ' + (ai.summary || '').slice(0, 100);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post backup report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

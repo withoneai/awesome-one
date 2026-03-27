@@ -1,0 +1,173 @@
+{
+  "key": "n8n-5711-ai-stock-analysis-sheets",
+  "name": "AI stock market analyzer with Exa research and Sheets tracking",
+  "description": "Searches for latest stock market news and analysis using Exa, uses Claude AI to analyze market trends and generate trading insights, and saves the analysis to Google Sheets for tracking.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5711,
+    "url": "https://n8n.io/workflows/5711",
+    "originalName": "Automated stock trading with AI: integrating Alpaca and Google Sheets",
+    "totalViews": 26351,
+    "rank": 242,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for searching financial news",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving analysis",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting market alerts",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for market analysis alerts"
+    },
+    "stockSymbols": {
+      "type": "string",
+      "required": true,
+      "description": "Comma-separated stock symbols to analyze (e.g. 'AAPL, MSFT, GOOGL, TSLA')"
+    },
+    "investmentStyle": {
+      "type": "string",
+      "required": false,
+      "default": "moderate growth",
+      "description": "Investment style preference (e.g. 'conservative', 'moderate growth', 'aggressive')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build Exa query for stock market research",
+      "type": "code",
+      "code": {
+        "source": "var symbols = ($.input.stockSymbols || '').split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });\nvar query = 'stock market analysis ' + symbols.join(' ') + ' latest news forecast';\nreturn { query: query, symbols: symbols };"
+      }
+    },
+    {
+      "id": "searchMarketNews",
+      "name": "Search for market news with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery.output.query",
+          "numResults": 8,
+          "type": "auto",
+          "useAutoprompt": true,
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "compileNews",
+      "name": "Compile market news from search results",
+      "type": "code",
+      "code": {
+        "source": "var results = $.steps.searchMarketNews.response.results || [];\nvar newsText = '';\nresults.forEach(function(r, i) {\n  newsText += 'SOURCE ' + (i + 1) + ': ' + (r.title || '') + '\\n';\n  newsText += 'URL: ' + (r.url || '') + '\\n';\n  newsText += 'Date: ' + (r.publishedDate || '') + '\\n';\n  newsText += (r.text || '').slice(0, 1500) + '\\n\\n';\n});\nreturn { newsText: newsText, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for stock analysis",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileNews.output;\nvar symbols = $.steps.buildQuery.output.symbols;\nvar prompt = 'You are a professional financial analyst. Analyze the following market news and provide investment insights.\\n\\n';\nprompt += 'STOCKS TO ANALYZE: ' + symbols.join(', ') + '\\n';\nprompt += 'INVESTMENT STYLE: ' + ($.input.investmentStyle || 'moderate growth') + '\\n\\n';\nprompt += 'MARKET NEWS (' + data.sourceCount + ' sources):\\n' + data.newsText + '\\n';\nprompt += 'DISCLAIMER: This is for educational purposes only, not financial advice.\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Analyze market sentiment for each stock\\n';\nprompt += '- Identify key trends, risks, and catalysts\\n';\nprompt += '- Provide a sentiment score (-100 to +100) for each\\n';\nprompt += '- Generate actionable insights aligned with the investment style\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"marketOverview\": \"Brief overall market assessment\",\\n';\nprompt += '  \"stocks\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"symbol\": \"AAPL\",\\n';\nprompt += '      \"sentiment\": 65,\\n';\nprompt += '      \"signal\": \"Buy|Hold|Sell|Watch\",\\n';\nprompt += '      \"analysis\": \"Key analysis for this stock\",\\n';\nprompt += '      \"catalysts\": [\"catalyst1\"],\\n';\nprompt += '      \"risks\": [\"risk1\"],\\n';\nprompt += '      \"priceTarget\": \"estimated direction\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"topPick\": \"SYMBOL\",\\n';\nprompt += '  \"sectorTrends\": [\"trend1\"],\\n';\nprompt += '  \"disclaimer\": \"Not financial advice\"\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5711-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalyze",
+      "name": "Run Claude AI for stock analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5711-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalyze.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { marketOverview: raw, stocks: [], topPick: '', sectorTrends: [], disclaimer: 'Not financial advice' }; }"
+      }
+    },
+    {
+      "id": "formatSheetData",
+      "name": "Format analysis for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar stocks = ai.stocks || [];\nvar date = new Date().toISOString().split('T')[0];\nvar sheetData = stocks.map(function(s) {\n  return {\n    'Date': date,\n    'Symbol': s.symbol || '',\n    'Sentiment': s.sentiment || '',\n    'Signal': s.signal || '',\n    'Analysis': (s.analysis || '').slice(0, 300),\n    'Catalysts': (s.catalysts || []).join('; '),\n    'Risks': (s.risks || []).join('; '),\n    'Price Target': s.priceTarget || '',\n    'Style': $.input.investmentStyle || 'moderate growth'\n  };\n});\nreturn { sheetData: sheetData, stockCount: stocks.length, date: date };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save stock analysis to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "title": "Stock Analysis - {{$.steps.formatSheetData.output.date}}",
+          "sheetTitle": "Analysis",
+          "data": "$.steps.formatSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit market alert",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar stocks = ai.stocks || [];\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Market Analysis Report', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Overview:* ' + (ai.marketOverview || '').slice(0, 500) } });\nif (ai.topPick) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Top Pick:* ' + ai.topPick } });\n}\nblocks.push({ type: 'divider' });\nstocks.forEach(function(s) {\n  var emoji = ':white_check_mark:';\n  if (s.signal === 'Sell') emoji = ':x:';\n  if (s.signal === 'Hold') emoji = ':pause_button:';\n  if (s.signal === 'Watch') emoji = ':eyes:';\n  var text = emoji + ' *' + s.symbol + '* | Signal: ' + (s.signal || '') + ' | Sentiment: ' + (s.sentiment || '') + '/100';\n  text += '\\n' + (s.analysis || '').slice(0, 300);\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text } });\n});\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':warning: ' + (ai.disclaimer || 'Not financial advice') + ' | Analyzed with Claude AI via One CLI' }] });\nvar fallback = 'Market Analysis: ' + stocks.length + ' stocks analyzed - Top pick: ' + (ai.topPick || 'N/A');\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post market analysis to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

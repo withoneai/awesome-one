@@ -1,0 +1,134 @@
+{
+  "key": "n8n-2473-seo-seed-keywords-ai",
+  "name": "SEO seed keyword generator with AI and Google Sheets",
+  "description": "Uses Claude AI to generate SEO seed keywords based on an ideal customer profile and business niche, validates them against Exa web search, and saves the ranked keyword list to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2473,
+    "url": "https://n8n.io/workflows/2473",
+    "originalName": "Generate SEO seed keywords using AI",
+    "totalViews": 24810,
+    "rank": 255,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for validating keyword search volume",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving keyword list",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "businessNiche": {
+      "type": "string",
+      "required": true,
+      "description": "Your business niche or industry (e.g. 'B2B SaaS project management')"
+    },
+    "idealCustomer": {
+      "type": "string",
+      "required": true,
+      "description": "Ideal customer profile (e.g. 'CTOs at mid-size tech companies looking for team productivity tools')"
+    },
+    "competitors": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Comma-separated competitor names or URLs (optional)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for seed keyword generation",
+      "type": "code",
+      "code": {
+        "source": "var prompt = 'You are an expert SEO strategist. Generate a comprehensive list of SEO seed keywords based on the following business profile.\\n\\n';\nprompt += 'BUSINESS NICHE: ' + $.input.businessNiche + '\\n';\nprompt += 'IDEAL CUSTOMER PROFILE: ' + $.input.idealCustomer + '\\n';\nif ($.input.competitors) {\n  prompt += 'COMPETITORS: ' + $.input.competitors + '\\n';\n}\nprompt += '\\nINSTRUCTIONS:\\n';\nprompt += '- Generate 20-30 seed keywords across different intent categories\\n';\nprompt += '- Include informational, navigational, commercial, and transactional keywords\\n';\nprompt += '- Group by search intent\\n';\nprompt += '- Estimate difficulty and potential traffic for each\\n';\nprompt += '- Suggest long-tail variations for each seed keyword\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"keywords\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"keyword\": \"...\",\\n';\nprompt += '      \"intent\": \"Informational|Navigational|Commercial|Transactional\",\\n';\nprompt += '      \"difficulty\": \"Low|Medium|High\",\\n';\nprompt += '      \"trafficPotential\": \"Low|Medium|High\",\\n';\nprompt += '      \"priority\": 1,\\n';\nprompt += '      \"longTailVariations\": [\"variation1\", \"variation2\"],\\n';\nprompt += '      \"contentIdea\": \"Blog post or page idea for this keyword\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"strategy\": \"Overall keyword strategy recommendation\",\\n';\nprompt += '  \"quickWins\": [\"keyword1\", \"keyword2\"]\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2473-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to generate seed keywords",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2473-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { keywords: [], strategy: raw, quickWins: [] }; }"
+      }
+    },
+    {
+      "id": "buildValidationQuery",
+      "name": "Build Exa query to validate top keywords",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar keywords = ai.keywords || [];\nvar topKeywords = keywords.slice(0, 5).map(function(k) { return k.keyword; });\nvar query = topKeywords.join(' OR ') + ' ' + $.input.businessNiche;\nreturn { query: query, topKeywords: topKeywords };"
+      }
+    },
+    {
+      "id": "validateWithExa",
+      "name": "Validate keywords against Exa web search",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildValidationQuery.output.query",
+          "numResults": 10,
+          "type": "auto",
+          "useAutoprompt": true,
+          "text": false
+        }
+      }
+    },
+    {
+      "id": "enrichKeywords",
+      "name": "Enrich keywords with validation data",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar keywords = ai.keywords || [];\nvar exaResults = $.steps.validateWithExa.response.results || [];\nvar competitorUrls = exaResults.map(function(r) { return r.url || ''; });\nvar date = new Date().toISOString().split('T')[0];\nvar sheetData = keywords.map(function(k, i) {\n  return {\n    'Priority': k.priority || (i + 1),\n    'Keyword': k.keyword || '',\n    'Intent': k.intent || '',\n    'Difficulty': k.difficulty || '',\n    'Traffic Potential': k.trafficPotential || '',\n    'Long-Tail Variations': (k.longTailVariations || []).join('; '),\n    'Content Idea': (k.contentIdea || '').slice(0, 200),\n    'Business Niche': $.input.businessNiche,\n    'Date Generated': date\n  };\n});\nreturn { sheetData: sheetData, keywordCount: keywords.length, strategy: ai.strategy || '', quickWins: ai.quickWins || [], topCompetitorUrls: competitorUrls.slice(0, 5), date: date };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save keyword list to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "title": "SEO Keywords - {{$.input.businessNiche}} - {{$.steps.enrichKeywords.output.date}}",
+          "sheetTitle": "Seed Keywords",
+          "data": "$.steps.enrichKeywords.output.sheetData"
+        }
+      }
+    }
+  ]
+}

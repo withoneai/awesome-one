@@ -1,0 +1,100 @@
+{
+  "key": "n8n-2436-voice-command-processor",
+  "name": "Voice Command Processor",
+  "description": "Process natural language voice commands into structured action plans using Claude AI and post the results to Slack. Adapted from the Siri AI Agent template for text-based command processing.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2436,
+    "url": "https://n8n.io/workflows/2436",
+    "originalName": "Siri AI agent: Apple Shortcuts powered voice template",
+    "totalViews": 33638,
+    "rank": 180,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the action plan"
+    },
+    "command": {
+      "type": "string",
+      "required": true,
+      "description": "Natural language command to process (e.g. 'Schedule a team lunch for Friday and send invites to the marketing team')"
+    },
+    "userContext": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Additional context about the user or environment (e.g. timezone, role, preferences)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build command processing prompt",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar command = fb($.input.command, '');\nvar userContext = fb($.input.userContext, '');\nvar now = new Date();\nvar dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });\nvar timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });\n\nvar prompt = 'You are a voice command processor and personal AI assistant. Parse the following natural language command and generate a structured action plan.\\n\\n';\nprompt += 'CURRENT CONTEXT:\\n';\nprompt += '- Date: ' + dateStr + '\\n';\nprompt += '- Time: ' + timeStr + '\\n';\nif (userContext) prompt += '- User context: ' + userContext + '\\n';\nprompt += '\\n';\nprompt += 'VOICE COMMAND: \"' + command + '\"\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Break the command into discrete actionable steps\\n';\nprompt += '- Identify which apps/services would be needed\\n';\nprompt += '- Estimate time and complexity for each step\\n';\nprompt += '- Flag any ambiguities that need clarification\\n';\nprompt += '- Provide a quick verbal response summary\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"interpretation\": \"what the user is asking for in one sentence\",\\n';\nprompt += '  \"verbalResponse\": \"short spoken response (as if Siri were responding)\",\\n';\nprompt += '  \"actionPlan\": [\\n';\nprompt += '    { \"step\": 1, \"action\": \"what to do\", \"service\": \"app or service needed\", \"details\": \"specific details\", \"estimatedTime\": \"time estimate\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"servicesNeeded\": [\"Calendar\", \"Email\"],\\n';\nprompt += '  \"clarificationsNeeded\": [\"any unclear parts\"],\\n';\nprompt += '  \"priority\": \"high/medium/low\",\\n';\nprompt += '  \"canAutomate\": true\\n';\nprompt += '}';\n\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/voice-command-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiProcess",
+      "name": "Process command with Claude",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/voice-command-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse Claude response",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiProcess.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { interpretation: raw, verbalResponse: 'I processed your request.', actionPlan: [], servicesNeeded: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseResponse.output;\nvar command = $.input.command;\n\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':speaking_head_in_silhouette: Voice Command Processed', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Command:* \"' + command + '\"' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':speech_balloon: _' + (fb(fb(ai.verbalResponse, ai.interpretation), '')) + '_' } });\nblocks.push({ type: 'divider' });\n\nvar plan = fb(ai.actionPlan, []);\nif (plan.length > 0) {\n  var planText = '*:clipboard: Action Plan*\\n';\n  plan.forEach(function(step) {\n    planText += '*Step ' + step.step + ':* ' + step.action + '\\n';\n    planText += '  _Service:_ ' + (fb(step.service, 'N/A')) + '  |  _Time:_ ' + (fb(step.estimatedTime, 'N/A')) + '\\n';\n    if (step.details) planText += '  _Details:_ ' + step.details + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: planText } });\n}\n\nvar autoLabel = 'No'; if (ai.canAutomate) { autoLabel = 'Yes'; }\nvar services = fb(ai.servicesNeeded, []);\nif (services.length > 0) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':gear: *Services:* ' + services.join(', ') + '  |  *Priority:* ' + (fb(ai.priority, 'medium')) + '  |  *Automatable:* ' + autoLabel }] });\n}\n\nvar clarifications = fb(ai.clarificationsNeeded, []);\nif (clarifications.length > 0) {\n  var clarText = ':question: *Needs Clarification:*\\n';\n  clarifications.forEach(function(c) { clarText += '  - ' + c + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: clarText } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI + One CLI' }] });\n\nvar fallback = 'Voice Command: ' + command;\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post action plan to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

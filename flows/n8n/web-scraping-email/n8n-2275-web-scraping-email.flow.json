@@ -1,0 +1,147 @@
+{
+  "key": "n8n-2275-web-scraping-email",
+  "name": "Automated web scraping: email a CSV, save to Google Sheets & Microsoft Excel",
+  "description": "Scrapes a target URL with Firecrawl, uses Claude AI to extract structured data (e.g. product listings, business info), emails the results via Gmail, and saves them to a new Google Sheets spreadsheet.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2275,
+    "url": "https://n8n.io/workflows/2275",
+    "originalName": "Automated web scraping: email a CSV, save to Google Sheets & Microsoft Excel",
+    "totalViews": 126130,
+    "rank": 38,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "URL to scrape (e.g. https://books.toscrape.com)"
+    },
+    "recipientEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to receive the scraped data"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeUrl",
+      "name": "Scrape the target URL with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.url",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for data extraction",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.scrapeUrl.response || {};\nconst data = resp.data || {};\nconst md = data.markdown || '';\nconst url = $.input.url;\n\nlet prompt = 'You are a web scraping data extraction specialist. Analyze the following scraped webpage content and extract ALL structured data items you find (products, listings, entries, rows, records, etc).\\n\\n';\nprompt += 'SOURCE URL: ' + url + '\\n\\n';\nprompt += 'SCRAPED CONTENT:\\n' + md.slice(0, 8000) + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Identify the repeating data pattern on the page (e.g. product listings, directory entries, table rows)\\n';\nprompt += '- Extract every item with all available fields (title, price, description, rating, link, etc.)\\n';\nprompt += '- Normalize prices to numbers where possible\\n';\nprompt += '- Sort items by the most relevant numeric field (price, rating, etc.) descending\\n\\n';\nprompt += 'Return ONLY valid JSON in this format:\\n';\nprompt += '{\\n';\nprompt += '  \"pageTitle\": \"title of the page\",\\n';\nprompt += '  \"itemType\": \"what kind of items were found\",\\n';\nprompt += '  \"totalItems\": 0,\\n';\nprompt += '  \"headers\": [\"column1\", \"column2\", \"column3\"],\\n';\nprompt += '  \"items\": [\\n';\nprompt += '    { \"column1\": \"value\", \"column2\": \"value\", \"column3\": \"value\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"summary\": \"brief one-line summary of what was extracted\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2275-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI to extract structured data",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2275-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { items: [], headers: [], summary: raw, pageTitle: 'Scraped Data', totalItems: 0 }; }"
+      }
+    },
+    {
+      "id": "buildSheetData",
+      "name": "Format extracted data for Google Sheets and email",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst items = ai.items || [];\nconst headers = ai.headers || (items.length > 0 ? Object.keys(items[0]) : ['Data']);\nconst date = new Date().toISOString().split('T')[0];\n\nconst sheetData = items.map((item, i) => {\n  const row = { '#': i + 1 };\n  headers.forEach(h => { row[h] = item[h] !== undefined ? String(item[h]) : ''; });\n  return row;\n});\n\nlet csvLines = ['#,' + headers.join(',')];\nitems.forEach((item, i) => {\n  const vals = headers.map(h => {\n    const v = item[h] !== undefined ? String(item[h]) : '';\n    return '\"' + v.replace(/\"/g, '\"\"') + '\"';\n  });\n  csvLines.push((i + 1) + ',' + vals.join(','));\n});\nconst csvBody = csvLines.join('\\n');\n\nlet emailBody = '<h2>Scraped Data Report</h2>';\nemailBody += '<p><strong>Source:</strong> ' + $.input.url + '</p>';\nemailBody += '<p><strong>Date:</strong> ' + date + '</p>';\nemailBody += '<p><strong>Items found:</strong> ' + items.length + '</p>';\nemailBody += '<p>' + (ai.summary || '') + '</p>';\nemailBody += '<table border=\"1\" cellpadding=\"4\" cellspacing=\"0\"><tr>';\nheaders.forEach(h => { emailBody += '<th>' + h + '</th>'; });\nemailBody += '</tr>';\nitems.slice(0, 50).forEach(item => {\n  emailBody += '<tr>';\n  headers.forEach(h => { emailBody += '<td>' + (item[h] !== undefined ? item[h] : '') + '</td>'; });\n  emailBody += '</tr>';\n});\nemailBody += '</table>';\nif (items.length > 50) emailBody += '<p><em>Showing first 50 of ' + items.length + ' items. Full data in Google Sheets.</em></p>';\n\nreturn { sheetData, csvBody, emailBody, pageTitle: ai.pageTitle || 'Scraped Data', itemCount: items.length, date };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save extracted data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "connectionKey": "$.input.sheetsKey",
+          "title": "Scraped Data - {{$.steps.buildSheetData.output.pageTitle}} - {{$.steps.buildSheetData.output.date}}",
+          "sheetTitle": "Data",
+          "data": "$.steps.buildSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Email the scraped data results",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.recipientEmail",
+          "subject": "Scraped Data: {{$.steps.buildSheetData.output.pageTitle}} ({{$.steps.buildSheetData.output.itemCount}} items)",
+          "body": "$.steps.buildSheetData.output.emailBody",
+          "isHtml": true
+        }
+      }
+    }
+  ]
+}

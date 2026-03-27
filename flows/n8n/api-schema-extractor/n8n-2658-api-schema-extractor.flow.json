@@ -1,0 +1,173 @@
+{
+  "key": "n8n-2658-api-schema-extractor",
+  "name": "API schema extractor and classifier",
+  "description": "Takes an API documentation URL, scrapes it with Firecrawl, uses Claude AI to extract and classify API endpoints into structured schemas, and saves the results to Google Sheets. Adapted from n8n's API schema extractor workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2658,
+    "url": "https://n8n.io/workflows/2658",
+    "originalName": "Api schema extractor",
+    "totalViews": 29404,
+    "rank": 208,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping API docs",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving schema",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notification",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for extraction results"
+    },
+    "apiDocsUrl": {
+      "type": "string",
+      "required": true,
+      "description": "URL of the API documentation to extract (e.g. 'https://api.example.com/docs')"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for the schema output"
+    },
+    "apiName": {
+      "type": "string",
+      "required": false,
+      "default": "API",
+      "description": "Name of the API for labeling"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeDocs",
+      "name": "Scrape API documentation with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.apiDocsUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "extractContent",
+      "name": "Extract scraped documentation content",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.scrapeDocs.response || {};\nconst data = response.data || response;\nconst markdown = (data.markdown || data.content || data.text || '').slice(0, 20000);\nreturn { markdown, url: $.input.apiDocsUrl, contentLength: markdown.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for schema extraction",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.extractContent.output;\nconst apiName = $.input.apiName;\nlet prompt = 'You are an API documentation expert. Extract all API endpoints from the following documentation and classify them.\\n\\n';\nprompt += 'API: ' + apiName + '\\n';\nprompt += 'DOCS URL: ' + d.url + '\\n\\n';\nprompt += 'DOCUMENTATION CONTENT:\\n' + d.markdown + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract every API endpoint found\\n';\nprompt += '- Classify each: CRUD type (create/read/update/delete), resource type\\n';\nprompt += '- Include method, path, parameters, request/response bodies\\n';\nprompt += '- Group by resource/entity\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"apiName\": \"' + apiName + '\",\\n';\nprompt += '  \"baseUrl\": \"detected base URL\",\\n';\nprompt += '  \"endpoints\": [{\\n';\nprompt += '    \"method\": \"GET|POST|PUT|DELETE|PATCH\",\\n';\nprompt += '    \"path\": \"/endpoint/path\",\\n';\nprompt += '    \"description\": \"what it does\",\\n';\nprompt += '    \"category\": \"CRUD type\",\\n';\nprompt += '    \"resource\": \"resource name\",\\n';\nprompt += '    \"parameters\": [\"param1\", \"param2\"],\\n';\nprompt += '    \"auth\": \"required|optional|none\"\\n';\nprompt += '  }],\\n';\nprompt += '  \"resources\": [\"resource1\", \"resource2\"],\\n';\nprompt += '  \"totalEndpoints\": 0,\\n';\nprompt += '  \"summary\": \"brief API summary\"\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2658-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExtract",
+      "name": "Run Claude AI schema extraction",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2658-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExtract.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { apiName: $.input.apiName, baseUrl: '', endpoints: [], resources: [], totalEndpoints: 0, summary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Google Sheets rows from extracted schema",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst endpoints = ai.endpoints || [];\nconst header = ['Method', 'Path', 'Description', 'Category', 'Resource', 'Parameters', 'Auth'];\nconst rows = endpoints.map(e => [\n  e.method || 'GET',\n  e.path || '',\n  e.description || '',\n  e.category || '',\n  e.resource || '',\n  (e.parameters || []).join(', '),\n  e.auth || 'required'\n]);\nreturn { values: [header].concat(rows), endpointCount: endpoints.length };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save schema to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "Schema",
+          "values": "$.steps.buildSheetRows.output.values",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit schema report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst endpoints = ai.endpoints || [];\nconst resources = ai.resources || [];\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'API Schema Extracted', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + (ai.apiName || 'API') + '* \u2014 ' + endpoints.length + ' endpoints found' } });\n\nif (ai.baseUrl) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Base URL:* `' + ai.baseUrl + '`' } });\n}\n\nif (resources.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Resources:* ' + resources.join(', ') } });\n}\n\nendpoints.slice(0, 5).forEach(e => {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '`' + (e.method || 'GET') + ' ' + (e.path || '') + '` \u2014 ' + (e.description || '').slice(0, 80) } });\n});\n\nif (ai.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.summary.slice(0, 500) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Saved to Google Sheets | Powered by Firecrawl + Claude AI' }] });\n\nconst fallback = 'API Schema: ' + endpoints.length + ' endpoints extracted from ' + (ai.apiName || 'API');\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post schema report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

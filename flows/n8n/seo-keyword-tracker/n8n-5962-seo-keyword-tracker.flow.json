@@ -1,0 +1,156 @@
+{
+  "key": "n8n-5962-seo-keyword-tracker",
+  "name": "SEO Keyword Tracker \u2014 Exa Research + AI Analysis to Sheets",
+  "description": "Searches for ranking content around target keywords via Exa, uses Claude AI to analyze keyword positions and competitive landscape, and saves the structured analysis to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5962,
+    "url": "https://n8n.io/workflows/5962",
+    "originalName": "Track SEO keyword rankings with Bright Data MCP and GPT-5.2 AI analysis",
+    "totalViews": 44227,
+    "rank": 143,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "keywords": {
+      "type": "string",
+      "required": true,
+      "description": "Comma-separated keywords to track (e.g. 'ai agents, workflow automation, no-code tools')"
+    },
+    "domain": {
+      "type": "string",
+      "required": true,
+      "description": "Your domain to track rankings for (e.g. 'example.com')"
+    }
+  },
+  "steps": [
+    {
+      "id": "parseKeywords",
+      "name": "Parse keywords list",
+      "type": "code",
+      "code": {
+        "source": "var keywords = $.input.keywords.split(',').map(function(k) { return k.trim(); }).filter(Boolean);\nreturn { keywords: keywords, count: keywords.length };"
+      }
+    },
+    {
+      "id": "searchLoop",
+      "name": "Search Exa for each keyword",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.parseKeywords.output.keywords",
+        "as": "keyword",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "searchKeyword",
+            "name": "Search for keyword rankings",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "exa",
+              "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+              "connectionKey": "$.input.exaKey",
+              "data": {
+                "query": "$.loop.keyword",
+                "numResults": 15,
+                "type": "auto",
+                "contents": {
+                  "text": {
+                    "maxCharacters": 200
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileRankingData",
+      "name": "Compile ranking data from all keyword searches",
+      "type": "code",
+      "code": {
+        "source": "var iterations = $.steps.searchLoop.response.iterations || [];\nvar keywords = $.steps.parseKeywords.output.keywords;\nvar domain = $.input.domain.toLowerCase().replace(/^https?:\\/\\//, '').replace(/^www\\./, '').replace(/\\/$/, '');\nvar rankingData = [];\niterations.forEach(function(iter, ki) {\n  var kw = keywords[ki] || 'unknown';\n  var results = (iter.searchKeyword && iter.searchKeyword.response && iter.searchKeyword.response.results) ? iter.searchKeyword.response.results : [];\n  var position = -1;\n  var competitors = [];\n  results.forEach(function(r, idx) {\n    var url = (r.url || '').toLowerCase();\n    if (url.indexOf(domain) !== -1 && position === -1) {\n      position = idx + 1;\n    }\n    competitors.push({ rank: idx + 1, title: (r.title || '').slice(0, 80), url: r.url, snippet: (r.text || '').slice(0, 100) });\n  });\n  rankingData.push({ keyword: kw, position: position === -1 ? 'Not found' : position, totalResults: results.length, topCompetitors: competitors.slice(0, 5) });\n});\nvar summary = rankingData.map(function(r) { return r.keyword + ': Position ' + r.position; }).join('\\n');\nreturn { rankingData: rankingData, summary: summary, domain: domain };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for SEO analysis",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileRankingData.output;\nvar rankDetails = '';\ndata.rankingData.forEach(function(r) {\n  rankDetails += 'KEYWORD: ' + r.keyword + '\\nPOSITION: ' + r.position + '\\nTOP COMPETITORS:\\n';\n  r.topCompetitors.forEach(function(c) {\n    rankDetails += '  ' + c.rank + '. ' + c.title + ' (' + c.url + ')\\n';\n  });\n  rankDetails += '\\n';\n});\nvar prompt = 'You are an SEO analyst. Analyze the following keyword ranking data for the domain \"' + data.domain + '\".\\n\\nRANKING DATA:\\n' + rankDetails + '\\nProvide:\\n1. Assessment of current positions\\n2. Keywords where the domain ranks well vs poorly\\n3. Top competitors appearing frequently\\n4. Actionable recommendations to improve rankings\\n5. Content gaps to target\\n\\nReturn ONLY valid JSON:\\n{\\n  \"overallScore\": 0,\\n  \"analysis\": [{\"keyword\": \"...\", \"position\": \"...\", \"assessment\": \"...\", \"recommendation\": \"...\"}],\\n  \"topCompetitors\": [\"domain1.com\", \"domain2.com\"],\\n  \"contentGaps\": [\"gap1\", \"gap2\"],\\n  \"priorityActions\": [\"action1\", \"action2\"]\\n}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/one-seo-keyword-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalyze",
+      "name": "Run Claude AI for SEO analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/one-seo-keyword-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse AI response and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalyze.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetsData",
+      "name": "Build data rows for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar rankings = $.steps.compileRankingData.output.rankingData;\nvar now = new Date().toISOString().split('T')[0];\nvar sheetData = rankings.map(function(r) {\n  var aiEntry = (ai.analysis || []).find(function(a) { return a.keyword === r.keyword; });\n  return {\n    date: now,\n    keyword: r.keyword,\n    position: String(r.position),\n    assessment: aiEntry ? aiEntry.assessment : '',\n    recommendation: aiEntry ? aiEntry.recommendation : '',\n    topCompetitor: r.topCompetitors.length > 0 ? r.topCompetitors[0].url : ''\n  };\n});\nreturn { sheetData: sheetData };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save ranking data to Google Sheets",
+      "type": "action",
+      "onError": {
+        "strategy": "continue"
+      },
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "connectionKey": "$.input.sheetsKey",
+          "title": "SEO Keyword Tracker - {{$.input.domain}}",
+          "sheetTitle": "Rankings",
+          "data": "$.steps.buildSheetsData.output.sheetData"
+        }
+      }
+    }
+  ]
+}

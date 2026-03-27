@@ -1,0 +1,157 @@
+{
+  "key": "n8n-4365-conversational-qa-agent",
+  "name": "Conversational Q&A Agent with Web Research",
+  "description": "Takes a user question with optional image context, researches the topic via Exa web search, uses Claude AI to generate a comprehensive conversational answer, and posts the response to Slack with source citations. Adapted from n8n's Conversational AI Chatbot with Google Gemini for text and image.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4365,
+    "url": "https://n8n.io/workflows/4365",
+    "originalName": "Conversational AI Chatbot with Google Gemini for Text & Image | Telegram",
+    "totalViews": 20680,
+    "rank": 290,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the answer",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The user's question to research and answer"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    },
+    "conversationContext": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Previous conversation context or follow-up information"
+    },
+    "responseStyle": {
+      "type": "string",
+      "required": false,
+      "default": "conversational",
+      "description": "Response style: conversational, technical, brief, detailed"
+    },
+    "language": {
+      "type": "string",
+      "required": false,
+      "default": "English",
+      "description": "Response language"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build Exa search query from question",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst context = $.input.conversationContext || '';\nlet query = question;\nif (context) query = question + ' context: ' + context.slice(0, 200);\nreturn { query };"
+      }
+    },
+    {
+      "id": "webResearch",
+      "name": "Research the question via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery.output.query",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile research sources",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.webResearch.response.results || [];\nlet sources = '';\nresults.forEach((r, i) => {\n  sources += '[' + (i + 1) + '] ' + (r.title || 'Untitled') + '\\n';\n  sources += '    URL: ' + (r.url || '') + '\\n';\n  sources += '    ' + (r.text || '').slice(0, 1200) + '\\n\\n';\n});\nreturn { sources, sourceCount: results.length, sourceList: results.map((r, i) => ({ num: i + 1, title: r.title || '', url: r.url || '' })) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for conversational answer",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileSources.output;\nconst question = $.input.question;\nconst context = $.input.conversationContext || '';\nconst style = $.input.responseStyle || 'conversational';\nconst language = $.input.language || 'English';\n\nlet prompt = 'You are a knowledgeable conversational AI assistant. Answer the user\\'s question using the research sources provided.\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n';\nif (context) prompt += 'CONVERSATION CONTEXT: ' + context + '\\n';\nprompt += 'RESPONSE STYLE: ' + style + '\\n';\nprompt += 'LANGUAGE: ' + language + '\\n\\n';\nprompt += 'RESEARCH SOURCES (' + d.sourceCount + '):\\n';\nprompt += d.sources + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Answer in a ' + style + ' tone\\n';\nprompt += '- Cite sources using [N] notation\\n';\nprompt += '- If the question is ambiguous, address the most likely interpretation\\n';\nprompt += '- Include relevant examples or analogies\\n';\nprompt += '- Suggest follow-up questions the user might want to ask\\n';\nprompt += '- Use Slack mrkdwn: *bold* (NOT **bold**), _italic_, numbered lists\\n';\nprompt += '- Respond in ' + language + '\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"the complete answer in Slack mrkdwn with [N] citations\",\\n';\nprompt += '  \"confidence\": \"high|medium|low\",\\n';\nprompt += '  \"topic\": \"inferred topic category\",\\n';\nprompt += '  \"keyPoints\": [\"main takeaway 1\", \"main takeaway 2\"],\\n';\nprompt += '  \"followUpQuestions\": [\"suggested follow-up 1\", \"suggested follow-up 2\"],\\n';\nprompt += '  \"sourcesUsed\": [1, 3, 5]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4365-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnswer",
+      "name": "Run Claude AI conversational answer",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4365-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnswer.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, confidence: 'medium', topic: '', keyPoints: [], followUpQuestions: [], sourcesUsed: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit conversational response",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst sources = $.steps.compileSources.output.sourceList || [];\nconst confidenceEmoji = ai.confidence === 'high' ? ':large_green_circle:' : ai.confidence === 'low' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Q:* ' + $.input.question } });\nblocks.push({ type: 'divider' });\n\nconst answer = (ai.answer || 'No answer generated.').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: answer } });\nblocks.push({ type: 'divider' });\n\nif (ai.keyPoints && ai.keyPoints.length > 0) {\n  let kpText = '*Key Points:*\\n';\n  ai.keyPoints.forEach((p, i) => { kpText += (i + 1) + '. ' + p + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kpText.slice(0, 1800) } });\n}\n\nconst usedSources = (ai.sourcesUsed || []).map(n => sources.find(s => s.num === n)).filter(Boolean);\nif (usedSources.length > 0) {\n  let srcText = '*Sources:*\\n';\n  usedSources.forEach(s => { srcText += '[' + s.num + '] <' + s.url + '|' + s.title + '>\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText.slice(0, 1800) } });\n}\n\nif (ai.followUpQuestions && ai.followUpQuestions.length > 0) {\n  let fqText = '*You might also ask:*\\n';\n  ai.followUpQuestions.forEach((q, i) => { fqText += '  ' + (i + 1) + '. ' + q + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: fqText.slice(0, 800) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: confidenceEmoji + ' ' + (ai.topic || '') + ' | Powered by Exa + Claude AI' }] });\nconst fallback = 'Answer: ' + (ai.answer || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post conversational answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,167 @@
+{
+  "key": "n8n-191-stock-fundamental-analysis",
+  "name": "AI stock fundamental analysis",
+  "description": "Researches stock financials using Exa web search, Claude AI analyzes fundamentals including revenue, earnings, margins, and valuation metrics, then saves a structured analysis report to Google Drive. Adapted from n8n's AI crew fundamental stock analysis workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 191,
+    "url": "https://n8n.io/workflows/191",
+    "originalName": "AI crew to automate fundamental stock analysis - Q&A workflow",
+    "totalViews": 31861,
+    "rank": 191,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for financial research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key for saving the analysis report",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "ticker": {
+      "type": "string",
+      "required": true,
+      "description": "Stock ticker symbol to analyze (e.g., AAPL, MSFT, TSLA)"
+    },
+    "companyName": {
+      "type": "string",
+      "required": true,
+      "description": "Full company name for the stock (e.g., Apple Inc.)"
+    },
+    "driveFolderId": {
+      "type": "string",
+      "required": false,
+      "default": "root",
+      "description": "Google Drive folder ID for saving the report"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery_searchFinancials",
+      "name": "Build search query for searchFinancials",
+      "type": "code",
+      "code": {
+        "source": "const parts = [$.input.ticker, $.input.companyName];\nconst staticTerms = \"fundamental analysis revenue earnings financial statements 2024 2025\";\nreturn { query: parts.filter(Boolean).join(\" \") + \" \" + staticTerms };"
+      }
+    },
+    {
+      "id": "searchFinancials",
+      "name": "Search Exa for financial data and reports",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_searchFinancials.output.query",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 2000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "buildQuery_searchValuation",
+      "name": "Build search query",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic || $.input.companyName || $.input.marketFocus || \"market analysis\";\nreturn { query: topic + \" stock market analysis trends\" };"
+      }
+    },
+    {
+      "id": "searchValuation",
+      "name": "Search Exa for valuation and analyst ratings",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_searchValuation.output.query",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile all financial research data",
+      "type": "code",
+      "code": {
+        "source": "const financials = $.steps.searchFinancials.response.results || [];\nconst valuation = $.steps.searchValuation.response.results || [];\n\nlet sourcesText = 'FINANCIAL DATA SOURCES:\\n';\nfinancials.forEach((r, i) => {\n  sourcesText += (i + 1) + '. ' + (r.title || 'Untitled') + '\\n';\n  sourcesText += '   URL: ' + r.url + '\\n';\n  sourcesText += '   ' + (r.text || '').slice(0, 1800) + '\\n\\n';\n});\n\nsourcesText += '\\nVALUATION DATA SOURCES:\\n';\nvaluation.forEach((r, i) => {\n  sourcesText += (financials.length + i + 1) + '. ' + (r.title || 'Untitled') + '\\n';\n  sourcesText += '   URL: ' + r.url + '\\n';\n  sourcesText += '   ' + (r.text || '').slice(0, 1500) + '\\n\\n';\n});\n\nreturn { sourcesText, totalSources: financials.length + valuation.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for fundamental analysis",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileSources.output;\nconst ticker = $.input.ticker;\nconst company = $.input.companyName;\n\nlet prompt = 'You are a senior equity research analyst. Perform a comprehensive fundamental analysis of ' + company + ' (' + ticker + ').\\n\\n';\nprompt += 'RESEARCH DATA (' + d.totalSources + ' sources):\\n';\nprompt += d.sourcesText + '\\n';\nprompt += 'ANALYSIS REQUIREMENTS:\\n';\nprompt += '- Revenue trends and growth rates\\n';\nprompt += '- Earnings per share (EPS) and growth\\n';\nprompt += '- Profit margins (gross, operating, net)\\n';\nprompt += '- Valuation metrics (P/E, P/S, EV/EBITDA)\\n';\nprompt += '- Balance sheet health (debt/equity, current ratio)\\n';\nprompt += '- Competitive advantages and moat\\n';\nprompt += '- Key risks and headwinds\\n';\nprompt += '- Overall investment thesis\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"ticker\": \"' + ticker + '\",\\n';\nprompt += '  \"company\": \"' + company + '\",\\n';\nprompt += '  \"analysisDate\": \"YYYY-MM-DD\",\\n';\nprompt += '  \"financials\": {\\n';\nprompt += '    \"revenue\": \"latest revenue figure\",\\n';\nprompt += '    \"revenueGrowth\": \"YoY growth %\",\\n';\nprompt += '    \"eps\": \"latest EPS\",\\n';\nprompt += '    \"grossMargin\": \"gross margin %\",\\n';\nprompt += '    \"operatingMargin\": \"operating margin %\",\\n';\nprompt += '    \"netMargin\": \"net margin %\"\\n';\nprompt += '  },\\n';\nprompt += '  \"valuation\": {\\n';\nprompt += '    \"peRatio\": \"P/E ratio\",\\n';\nprompt += '    \"psRatio\": \"P/S ratio\",\\n';\nprompt += '    \"evEbitda\": \"EV/EBITDA\"\\n';\nprompt += '  },\\n';\nprompt += '  \"rating\": \"strong-buy|buy|hold|sell|strong-sell\",\\n';\nprompt += '  \"strengths\": [\"strength 1\", \"strength 2\"],\\n';\nprompt += '  \"risks\": [\"risk 1\", \"risk 2\"],\\n';\nprompt += '  \"investmentThesis\": \"comprehensive thesis paragraph\",\\n';\nprompt += '  \"analystSummary\": \"brief executive summary\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-191-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI fundamental analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-191-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { ticker: $.input.ticker, company: $.input.companyName, rating: 'hold', investmentThesis: raw, analystSummary: raw.slice(0, 500) }; }"
+      }
+    },
+    {
+      "id": "buildDriveReport",
+      "name": "Build Google Drive analysis report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = ai.analysisDate || new Date().toISOString().slice(0, 10);\n\nlet report = 'FUNDAMENTAL STOCK ANALYSIS REPORT\\n';\nreport += '='.repeat(50) + '\\n';\nreport += ai.company + ' (' + ai.ticker + ')\\n';\nreport += 'Date: ' + today + '\\n';\nreport += 'Rating: ' + (ai.rating || 'N/A').toUpperCase() + '\\n\\n';\nreport += 'EXECUTIVE SUMMARY\\n';\nreport += '-'.repeat(30) + '\\n';\nreport += (ai.analystSummary || 'N/A') + '\\n\\n';\nreport += 'FINANCIAL METRICS\\n';\nreport += '-'.repeat(30) + '\\n';\nconst fin = ai.financials || {};\nreport += '  Revenue: ' + (fin.revenue || 'N/A') + '\\n';\nreport += '  Revenue Growth: ' + (fin.revenueGrowth || 'N/A') + '\\n';\nreport += '  EPS: ' + (fin.eps || 'N/A') + '\\n';\nreport += '  Gross Margin: ' + (fin.grossMargin || 'N/A') + '\\n';\nreport += '  Operating Margin: ' + (fin.operatingMargin || 'N/A') + '\\n';\nreport += '  Net Margin: ' + (fin.netMargin || 'N/A') + '\\n\\n';\nreport += 'VALUATION\\n';\nreport += '-'.repeat(30) + '\\n';\nconst val = ai.valuation || {};\nreport += '  P/E Ratio: ' + (val.peRatio || 'N/A') + '\\n';\nreport += '  P/S Ratio: ' + (val.psRatio || 'N/A') + '\\n';\nreport += '  EV/EBITDA: ' + (val.evEbitda || 'N/A') + '\\n\\n';\nreport += 'STRENGTHS\\n';\nreport += '-'.repeat(30) + '\\n';\n(ai.strengths || []).forEach((s, i) => { report += '  ' + (i + 1) + '. ' + s + '\\n'; });\nreport += '\\nRISKS\\n';\nreport += '-'.repeat(30) + '\\n';\n(ai.risks || []).forEach((r, i) => { report += '  ' + (i + 1) + '. ' + r + '\\n'; });\nreport += '\\nINVESTMENT THESIS\\n';\nreport += '-'.repeat(30) + '\\n';\nreport += (ai.investmentThesis || 'N/A') + '\\n';\nreport += '\\n---\\nGenerated by One CLI | Exa + Claude AI\\n';\n\nconst fileName = 'stock-analysis-' + ai.ticker + '-' + today + '.txt';\nreturn { report, fileName };"
+      }
+    },
+    {
+      "id": "saveReport",
+      "name": "Save report to temp file for upload",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-191-report.txt",
+        "content": "$.steps.buildDriveReport.output.report"
+      }
+    }
+  ]
+}

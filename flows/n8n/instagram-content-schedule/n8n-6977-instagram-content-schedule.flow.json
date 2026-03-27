@@ -1,0 +1,194 @@
+{
+  "key": "n8n-6977-instagram-content-schedule",
+  "name": "Instagram Content Schedule Generator",
+  "description": "Reads content strategy inputs and blog post data from Google Sheets, researches trending topics via Exa, uses Claude AI to generate a complete Instagram content schedule with captions and hashtags, and saves the schedule back to Sheets with a summary to Slack. Adapted from n8n's Instagram content schedule with GPT-4 and Apify.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 6977,
+    "url": "https://n8n.io/workflows/6977",
+    "originalName": "Auto-generate Instagram content schedule with GPT-4, Apify, and Google Sheets",
+    "totalViews": 20388,
+    "rank": 297,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for trend research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID (used for reading inputs and saving schedule)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for summary"
+    },
+    "brandName": {
+      "type": "string",
+      "required": true,
+      "description": "Brand or business name for personalized content"
+    },
+    "contentPillars": {
+      "type": "string",
+      "required": false,
+      "default": "educational, behind-the-scenes, promotional, community, entertaining",
+      "description": "Comma-separated content pillars for the brand"
+    },
+    "postsPerWeek": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Number of Instagram posts to schedule per week"
+    },
+    "targetAudience": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Target audience description"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build Exa query for Instagram trend research",
+      "type": "code",
+      "code": {
+        "source": "const brand = $.input.brandName;\nconst pillars = $.input.contentPillars || 'educational, behind-the-scenes, promotional';\nconst query = 'Instagram content strategy trends and best performing post types for ' + brand + ' ' + pillars;\nreturn { query };"
+      }
+    },
+    {
+      "id": "searchTrends",
+      "name": "Research Instagram trends via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery.output.query",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1200
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile trend research",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchTrends.response.results || [];\nlet research = '';\nresults.forEach((r, i) => {\n  research += (i + 1) + '. ' + (r.title || '') + '\\n   ' + (r.text || '').slice(0, 800) + '\\n\\n';\n});\nreturn { research, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for Instagram content schedule",
+      "type": "code",
+      "code": {
+        "source": "const research = $.steps.compileResearch.output;\nconst brand = $.input.brandName;\nconst pillars = $.input.contentPillars || 'educational, behind-the-scenes, promotional, community, entertaining';\nconst postsPerWeek = $.input.postsPerWeek || 5;\nconst audience = $.input.targetAudience || 'general audience';\n\nlet prompt = 'You are an Instagram content strategist for the brand \"' + brand + '\". Create a comprehensive content schedule for the next 2 weeks.\\n\\n';\nprompt += 'BRAND: ' + brand + '\\n';\nprompt += 'TARGET AUDIENCE: ' + audience + '\\n';\nprompt += 'CONTENT PILLARS: ' + pillars + '\\n';\nprompt += 'POSTS PER WEEK: ' + postsPerWeek + '\\n\\n';\nprompt += 'TREND RESEARCH (' + research.sourceCount + ' sources):\\n';\nprompt += research.research + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Create ' + (postsPerWeek * 2) + ' post ideas for 2 weeks\\n';\nprompt += '- Distribute content across the pillars\\n';\nprompt += '- Include: post type (reel, carousel, single, story), caption, visual direction, hashtags\\n';\nprompt += '- Suggest best posting time for each post\\n';\nprompt += '- Include a CTA in each caption\\n';\nprompt += '- Mix trending topics with evergreen content\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"schedule\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"week\": 1,\\n';\nprompt += '      \"day\": \"Monday\",\\n';\nprompt += '      \"postType\": \"reel|carousel|single|story\",\\n';\nprompt += '      \"pillar\": \"educational\",\\n';\nprompt += '      \"topic\": \"post topic\",\\n';\nprompt += '      \"caption\": \"full caption with CTA\",\\n';\nprompt += '      \"visualDirection\": \"what the image/video should show\",\\n';\nprompt += '      \"hashtags\": [\"tag1\", \"tag2\"],\\n';\nprompt += '      \"postingTime\": \"9:00 AM\",\\n';\nprompt += '      \"engagementTip\": \"how to boost engagement\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"strategyOverview\": \"2-week content strategy summary\",\\n';\nprompt += '  \"hashtagStrategy\": \"branded and niche hashtag recommendations\",\\n';\nprompt += '  \"engagementTips\": [\"general engagement tips\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-6977-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI Instagram schedule generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-6977-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { schedule: [], strategyOverview: raw, hashtagStrategy: '', engagementTips: [] }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Sheets rows from content schedule",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst rows = [];\nrows.push(['Week', 'Day', 'Post Type', 'Pillar', 'Topic', 'Caption', 'Visual Direction', 'Hashtags', 'Posting Time', 'Engagement Tip', 'Status']);\n(ai.schedule || []).forEach(s => {\n  rows.push([String(s.week || ''), s.day || '', s.postType || '', s.pillar || '', s.topic || '', (s.caption || '').slice(0, 1500), s.visualDirection || '', (s.hashtags || []).join(', '), s.postingTime || '', s.engagementTip || '', 'Scheduled']);\n});\nreturn { rows, postCount: rows.length - 1 };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save content schedule to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "IG Schedule",
+          "values": "$.steps.buildSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst posts = $.steps.buildSheetRows.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Instagram Content Schedule Ready', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Brand:* ' + $.input.brandName + ' | *Posts Scheduled:* ' + posts.postCount + ' over 2 weeks' } });\nblocks.push({ type: 'divider' });\n\nif (ai.strategyOverview) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Strategy:* ' + ai.strategyOverview.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\n(ai.schedule || []).slice(0, 5).forEach((s, i) => {\n  let text = '*W' + s.week + ' ' + s.day + '* - _' + s.postType + '_ [' + s.pillar + ']\\n';\n  text += s.topic + '\\n';\n  text += '_' + s.postingTime + '_';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 500) } });\n});\nif ((ai.schedule || []).length > 5) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '_...and ' + ((ai.schedule || []).length - 5) + ' more posts in Google Sheets_' } });\n}\n\nif (ai.hashtagStrategy) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Hashtag Strategy:* ' + ai.hashtagStrategy.slice(0, 500) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Schedule saved to Google Sheets | Powered by Exa + Claude AI' }] });\nconst fallback = 'IG Schedule: ' + posts.postCount + ' posts for ' + $.input.brandName;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post schedule summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

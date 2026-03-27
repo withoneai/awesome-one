@@ -1,0 +1,107 @@
+{
+  "key": "n8n-680-teams-channel-messaging",
+  "name": "Channel Message Composer & Sender",
+  "description": "Composes a professional channel message using Claude AI based on a topic and context, then posts it to Slack with Block Kit formatting. Adapted from n8n's Microsoft Teams channel messaging workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 680,
+    "url": "https://n8n.io/workflows/680",
+    "originalName": "Create, update and send a message to a channel in Microsoft Teams",
+    "totalViews": 21655,
+    "rank": 286,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting messages",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the message"
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic or subject for the channel message"
+    },
+    "context": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Additional context, audience info, or tone instructions for the message"
+    },
+    "messageType": {
+      "type": "string",
+      "required": false,
+      "default": "announcement",
+      "description": "Type of message: announcement, update, reminder, question, or discussion"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for message composition",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic;\nconst context = $.input.context || '';\nconst msgType = $.input.messageType || 'announcement';\n\nlet prompt = 'You are a professional communications assistant. Compose a well-crafted channel message for a team communication platform.\\n\\n';\nprompt += 'MESSAGE TYPE: ' + msgType + '\\n';\nprompt += 'TOPIC: ' + topic + '\\n';\nif (context) prompt += 'ADDITIONAL CONTEXT: ' + context + '\\n';\nprompt += '\\nINSTRUCTIONS:\\n';\nprompt += '- Write a clear, professional message appropriate for the message type\\n';\nprompt += '- For announcements: lead with the key information\\n';\nprompt += '- For updates: summarize what changed and why it matters\\n';\nprompt += '- For reminders: be concise and include any deadlines\\n';\nprompt += '- For questions: frame clearly and provide necessary context\\n';\nprompt += '- For discussions: present the topic and invite input\\n';\nprompt += '- Use Slack mrkdwn: *bold* (NOT **bold**), _italic_, numbered lists\\n';\nprompt += '- Keep it concise but informative (max 300 words)\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"headline\": \"short headline for the message (5-10 words)\",\\n';\nprompt += '  \"body\": \"the full message body in Slack mrkdwn\",\\n';\nprompt += '  \"callToAction\": \"what you want recipients to do (if any)\",\\n';\nprompt += '  \"priority\": \"high|normal|low\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-680-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiCompose",
+      "name": "Run Claude AI to compose message",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-680-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiCompose.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { headline: $.input.topic, body: raw, callToAction: '', priority: 'normal' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst msgType = $.input.messageType || 'announcement';\nconst priorityIcon = ai.priority === 'high' ? ':red_circle:' : ai.priority === 'low' ? ':white_circle:' : ':large_blue_circle:';\n\nconst typeLabel = msgType.charAt(0).toUpperCase() + msgType.slice(1);\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ai.headline || $.input.topic, emoji: true } });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: priorityIcon + ' *' + typeLabel + '* | Priority: ' + (ai.priority || 'normal') }] });\nblocks.push({ type: 'divider' });\n\nconst body = (ai.body || '').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: body } });\n\nif (ai.callToAction) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':point_right: *Action Required:* ' + ai.callToAction } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Composed with Claude AI | One CLI' }] });\n\nconst fallback = typeLabel + ': ' + (ai.headline || $.input.topic);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post composed message to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

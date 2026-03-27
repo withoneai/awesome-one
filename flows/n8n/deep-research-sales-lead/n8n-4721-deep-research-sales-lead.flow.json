@@ -1,0 +1,249 @@
+{
+  "key": "n8n-4721-deep-research-sales-lead",
+  "name": "Deep research sales lead magnet agent",
+  "description": "Takes a company or topic, performs deep web research via Exa, scrapes key sources with Firecrawl, uses Claude AI to synthesize a comprehensive lead-magnet research report, and saves it to Google Docs. Adapted from n8n's Deep Research Sales Lead Magnet Agent workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4721,
+    "url": "https://n8n.io/workflows/4721",
+    "originalName": "Deep Research - Sales Lead Magnet Agent",
+    "totalViews": 29077,
+    "rank": 211,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for deep scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "docsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Docs connection key for saving the report",
+      "connection": {
+        "platform": "google-docs"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for research updates"
+    },
+    "researchTopic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic or company to deeply research (e.g. 'AI in healthcare 2025 trends')"
+    },
+    "targetAudience": {
+      "type": "string",
+      "required": false,
+      "default": "C-level executives and decision makers",
+      "description": "Who the lead magnet report targets"
+    },
+    "reportTitle": {
+      "type": "string",
+      "required": false,
+      "default": "Industry Research Report",
+      "description": "Title for the generated report"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery_primarySearch",
+      "name": "Build primary research search query",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.researchTopic;\nconst staticTerms = 'research report analysis trends 2025';\nreturn { query: topic + ' ' + staticTerms };"
+      }
+    },
+    {
+      "id": "primarySearch",
+      "name": "Search Exa for primary research sources",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_primarySearch.output.query",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 2000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "extractSources",
+      "name": "Extract top research sources",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.primarySearch.response.results || [];\nconst sources = results.map((r, i) => ({\n  index: i + 1,\n  title: r.title || 'Untitled',\n  url: r.url || '',\n  text: (r.text || '').slice(0, 1500)\n})).filter(s => s.url.length > 0).slice(0, 5);\nreturn { sources, count: sources.length };"
+      }
+    },
+    {
+      "id": "deepScrape",
+      "name": "Deep scrape top sources with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractSources.output.sources",
+        "as": "source",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapeOne",
+            "name": "Scrape research source",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.source.url"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile all research data",
+      "type": "code",
+      "code": {
+        "source": "const sources = $.steps.extractSources.output.sources || [];\nconst iterations = $.steps.deepScrape.response.iterations || [];\nlet compiled = '';\nsources.forEach((s, i) => {\n  compiled += '--- SOURCE ' + s.index + ': ' + s.title + ' ---\\n';\n  compiled += 'URL: ' + s.url + '\\n';\n  if (iterations[i] && iterations[i].scrapeOne && iterations[i].scrapeOne.response) {\n    const sc = iterations[i].scrapeOne.response;\n    const content = sc.data ? (sc.data.markdown || sc.data.content || sc.data.text || '') : (typeof sc === 'string' ? sc : JSON.stringify(sc));\n    compiled += content.slice(0, 4000) + '\\n';\n  } else {\n    compiled += s.text + '\\n';\n  }\n  compiled += '\\n';\n});\nreturn { compiled: compiled.slice(0, 30000), sourceCount: sources.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for lead magnet report",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileResearch.output;\nconst topic = $.input.researchTopic;\nconst audience = $.input.targetAudience;\nconst title = $.input.reportTitle;\nlet prompt = 'You are a senior research analyst creating a high-value lead magnet report.\\n\\n';\nprompt += 'TOPIC: ' + topic + '\\n';\nprompt += 'TARGET AUDIENCE: ' + audience + '\\n';\nprompt += 'REPORT TITLE: ' + title + '\\n\\n';\nprompt += 'RESEARCH DATA (' + d.sourceCount + ' sources):\\n';\nprompt += d.compiled + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Create a comprehensive, professionally structured report\\n';\nprompt += '- Include executive summary, key findings, data points, actionable insights\\n';\nprompt += '- Make it valuable enough to serve as a lead magnet\\n';\nprompt += '- Include sources and citations\\n';\nprompt += '- Target length: 1500-2500 words\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"report title\",\\n';\nprompt += '  \"executiveSummary\": \"3-4 sentence executive summary\",\\n';\nprompt += '  \"sections\": [{\\n';\nprompt += '    \"heading\": \"section title\",\\n';\nprompt += '    \"content\": \"section content\"\\n';\nprompt += '  }],\\n';\nprompt += '  \"keyFindings\": [\"finding1\", \"finding2\"],\\n';\nprompt += '  \"actionableInsights\": [\"insight1\", \"insight2\"],\\n';\nprompt += '  \"sources\": [\"source1\", \"source2\"],\\n';\nprompt += '  \"wordCount\": 0\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4721-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI report generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4721-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: $.input.reportTitle, executiveSummary: raw.slice(0, 300), sections: [{ heading: 'Report', content: raw }], keyFindings: [], actionableInsights: [], sources: [], wordCount: 0 }; }"
+      }
+    },
+    {
+      "id": "createDoc",
+      "name": "Create Google Docs document for the report",
+      "type": "action",
+      "action": {
+        "platform": "google-docs",
+        "actionId": "conn_mod_def::GJ3yGgu6ajk::bQz61gRISQCO7mcLiEeMBw",
+        "connectionKey": "$.input.docsKey",
+        "data": {
+          "title": "$.steps.parseAI.output.title"
+        }
+      }
+    },
+    {
+      "id": "buildDocContent",
+      "name": "Build document content for Google Docs update",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst docResp = $.steps.createDoc.response || {};\nconst documentId = docResp.documentId || '';\n\nlet text = '';\ntext += (ai.title || 'Research Report') + '\\n\\n';\ntext += 'EXECUTIVE SUMMARY\\n';\ntext += (ai.executiveSummary || '') + '\\n\\n';\n(ai.sections || []).forEach(s => {\n  text += (s.heading || '').toUpperCase() + '\\n';\n  text += (s.content || '') + '\\n\\n';\n});\nif (ai.keyFindings && ai.keyFindings.length > 0) {\n  text += 'KEY FINDINGS\\n';\n  ai.keyFindings.forEach((f, i) => { text += (i + 1) + '. ' + f + '\\n'; });\n  text += '\\n';\n}\nif (ai.actionableInsights && ai.actionableInsights.length > 0) {\n  text += 'ACTIONABLE INSIGHTS\\n';\n  ai.actionableInsights.forEach((ins, i) => { text += (i + 1) + '. ' + ins + '\\n'; });\n  text += '\\n';\n}\nif (ai.sources && ai.sources.length > 0) {\n  text += 'SOURCES\\n';\n  ai.sources.forEach((s, i) => { text += (i + 1) + '. ' + s + '\\n'; });\n}\n\nreturn { documentId, text: text.slice(0, 45000) };"
+      }
+    },
+    {
+      "id": "updateDoc",
+      "name": "Write report content to Google Docs",
+      "type": "action",
+      "action": {
+        "platform": "google-docs",
+        "actionId": "conn_mod_def::GJ3yGXCDdSY::yKL6cH-yRK-SpbO9grRyhw",
+        "connectionKey": "$.input.docsKey",
+        "data": {
+          "requests": [
+            {
+              "insertText": {
+                "location": {
+                  "index": 1
+                },
+                "text": "$.steps.buildDocContent.output.text"
+              }
+            }
+          ]
+        },
+        "pathVars": {
+          "documentId": "$.steps.buildDocContent.output.documentId"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit report notification",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst docId = $.steps.buildDocContent.output.documentId;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Research Report Ready', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + (ai.title || 'Report') + '*' } });\n\nif (ai.executiveSummary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.executiveSummary.slice(0, 500) } });\n}\n\nif (ai.keyFindings && ai.keyFindings.length > 0) {\n  const findings = ai.keyFindings.slice(0, 3).map((f, i) => (i + 1) + '. ' + f).join('\\n');\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Key Findings:*\\n' + findings } });\n}\n\nif (docId) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '<https://docs.google.com/document/d/' + docId + '/edit|Open in Google Docs>' } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa + Firecrawl + Claude AI + Google Docs' }] });\n\nconst fallback = 'Research Report: ' + (ai.title || 'Report') + ' - ready in Google Docs';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post report notification to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

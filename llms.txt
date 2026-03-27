@@ -1,0 +1,51 @@
+# Awesome One
+
+Open-source tools, templates, and automation flows built on the One platform.
+
+## What is One CLI?
+
+One CLI (`one`) connects 200+ third-party platforms (Gmail, Slack, Shopify, HubSpot, Stripe, GitHub, Notion, Salesforce, etc.) through a single command-line interface. Install with `npm i -g @anthropic/one`.
+
+## Flows
+
+This repository contains 218+ ready-to-run automation flows converted from the most popular n8n workflow templates. Each flow runs with a single command via One CLI.
+
+### How to use a flow
+
+1. Install One CLI: `npm i -g @anthropic/one`
+2. Connect required platforms: `one add <platform>` (e.g., `one add slack`, `one add gmail`)
+3. Run the flow: `one flow execute <flow-key> --input <param>=<value>`
+
+### Example
+
+```bash
+one add exa
+one add slack
+one flow execute n8n-1954-ai-agent-chat --input question="How does RAG work?" --input slackChannel="C01ABC123"
+```
+
+### Flow structure
+
+Each flow lives in `flows/n8n/<slug>/` with:
+- `README.md` — what it does, required platforms, quick start command, inputs
+- `n8n-<id>-<slug>.flow.json` — the executable flow definition
+
+### Browse flows
+
+All flows are listed at: flows/n8n/README.md
+
+### Key commands
+
+- `one list` — see connected platforms
+- `one add <platform>` — connect a new platform
+- `one flow execute <key>` — run a flow
+- `one flow list` — list available flows
+- `one --agent actions search <platform> "<query>"` — find platform actions
+- `one --agent guide` — full documentation
+
+## Other resources
+
+- Link (./link/) — Drop-in connection onboarding page for agencies
+- Website: https://withone.ai
+- Docs: https://withone.ai/docs
+- Dashboard: https://app.withone.ai

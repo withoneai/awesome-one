@@ -1,0 +1,158 @@
+{
+  "key": "n8n-2431-ultimate-scraper",
+  "name": "Ultimate scraper: multi-URL scrape with AI extraction",
+  "description": "Scrapes multiple URLs using Firecrawl, uses Claude AI to extract and structure data from each page, compiles all results, and posts a comprehensive summary to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2431,
+    "url": "https://n8n.io/workflows/2431",
+    "originalName": "Ultimate scraper workflow for n8n",
+    "totalViews": 54598,
+    "rank": 110,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for web scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting results",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for posting scraped data"
+    },
+    "urls": {
+      "type": "string",
+      "required": true,
+      "description": "Comma-separated list of URLs to scrape (e.g. 'https://example.com/page1, https://example.com/page2')"
+    },
+    "extractionGoal": {
+      "type": "string",
+      "required": true,
+      "description": "What data to extract from the pages (e.g. 'product names, prices, and descriptions', 'company info and contact details')"
+    }
+  },
+  "steps": [
+    {
+      "id": "parseUrls",
+      "name": "Parse and validate URLs",
+      "type": "code",
+      "code": {
+        "source": "const urlString = $.input.urls || '';\nconst urls = urlString.split(',').map(u => u.trim()).filter(u => u.startsWith('http'));\nreturn { urls, urlCount: urls.length };"
+      }
+    },
+    {
+      "id": "scrapeAll",
+      "name": "Scrape all URLs with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.parseUrls.output.urls",
+        "as": "url",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapePage",
+            "name": "Scrape individual page",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.url",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileScrapedData",
+      "name": "Compile all scraped page data",
+      "type": "code",
+      "code": {
+        "source": "const urls = $.steps.parseUrls.output.urls;\nconst iterations = $.steps.scrapeAll.response.iterations || [];\n\nlet allData = '';\nlet successCount = 0;\niterations.forEach((iter, i) => {\n  const url = urls[i] || 'Unknown';\n  const resp = (iter.scrapePage && iter.scrapePage.response && iter.scrapePage.response.data) ? iter.scrapePage.response.data : {};\n  const md = resp.markdown || '';\n\n  allData += '=== PAGE ' + (i + 1) + ' ===\\n';\n  allData += 'URL: ' + url + '\\n';\n  allData += 'Title: ' + (resp.metadata && resp.metadata.title ? resp.metadata.title : 'Unknown') + '\\n';\n  allData += 'Content:\\n' + md.slice(0, 3000) + '\\n\\n';\n  if (md.length > 0) successCount++;\n});\n\nreturn { allData, successCount, totalUrls: urls.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for data extraction",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileScrapedData.output;\nconst goal = $.input.extractionGoal;\n\nlet prompt = 'You are a web scraping data extraction specialist. Extract structured data from the scraped webpages below.\\n\\n';\nprompt += 'EXTRACTION GOAL: ' + goal + '\\n';\nprompt += 'PAGES SCRAPED: ' + d.successCount + '/' + d.totalUrls + '\\n\\n';\nprompt += 'SCRAPED CONTENT:\\n' + d.allData + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract the requested data from each page\\n';\nprompt += '- Organize results per-page and as a combined summary\\n';\nprompt += '- Identify any patterns or insights across pages\\n';\nprompt += '- Use Slack mrkdwn formatting in the summary\\n';\nprompt += '- Slack rules: use *bold* (NOT **bold**). No markdown tables. No # headings.\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"pages\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"url\": \"page url\",\\n';\nprompt += '      \"title\": \"page title\",\\n';\nprompt += '      \"extractedData\": { \"field1\": \"value1\" },\\n';\nprompt += '      \"summary\": \"one-line summary\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"combinedInsights\": \"cross-page analysis in Slack mrkdwn\",\\n';\nprompt += '  \"totalItemsExtracted\": 0,\\n';\nprompt += '  \"dataQuality\": \"high|medium|low\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2431-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for data extraction",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2431-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { pages: [], combinedInsights: raw, totalItemsExtracted: 0, dataQuality: 'unknown' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message with scraped data",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst urlCount = $.steps.parseUrls.output.urlCount;\nconst successCount = $.steps.compileScrapedData.output.successCount;\nconst goal = $.input.extractionGoal;\n\nconst qualityEmoji = ai.dataQuality === 'high' ? ':large_green_circle:' : ai.dataQuality === 'low' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Ultimate Scraper Results' } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Extraction Goal:*\\n' + goal },\n  { type: 'mrkdwn', text: '*Pages Scraped:*\\n' + successCount + '/' + urlCount }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Items Extracted:*\\n' + (ai.totalItemsExtracted || 0) },\n  { type: 'mrkdwn', text: '*Data Quality:*\\n' + qualityEmoji + ' ' + (ai.dataQuality || 'unknown') }\n] });\nblocks.push({ type: 'divider' });\n\nconst pages = ai.pages || [];\npages.slice(0, 5).forEach((p, i) => {\n  let pageText = '*Page ' + (i + 1) + ':* <' + (p.url || '#') + '|' + (p.title || 'Untitled').slice(0, 50) + '>\\n';\n  pageText += p.summary || 'No summary';\n  if (p.extractedData) {\n    const keys = Object.keys(p.extractedData).slice(0, 5);\n    keys.forEach(k => {\n      const val = String(p.extractedData[k]).slice(0, 100);\n      pageText += '\\n  *' + k + ':* ' + val;\n    });\n  }\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: pageText.slice(0, 1800) } });\n});\n\nblocks.push({ type: 'divider' });\n\nif (ai.combinedInsights) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Cross-Page Insights:*\\n' + (ai.combinedInsights || '').slice(0, 1800) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Firecrawl + Claude AI' }] });\n\nconst fallback = 'Scraped ' + successCount + ' pages, extracted ' + (ai.totalItemsExtracted || 0) + ' items';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post scraped data to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

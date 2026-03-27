@@ -1,0 +1,203 @@
+{
+  "key": "n8n-2494-seo-keyword-volume",
+  "name": "SEO Keyword Research & Volume Analyzer",
+  "description": "Takes a list of SEO keywords, researches search volume and competition data via Exa, uses Claude AI to analyze keyword difficulty and prioritize opportunities, and saves a comprehensive keyword research report to Google Sheets with a summary to Slack. Adapted from n8n's Google Keyword Planner search volume workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2494,
+    "url": "https://n8n.io/workflows/2494",
+    "originalName": "Generate SEO keyword search volume data using Google API",
+    "totalViews": 20075,
+    "rank": 300,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for keyword research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving the report",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "keywords": {
+      "type": "string",
+      "required": true,
+      "description": "Comma-separated list of SEO keywords to research (e.g. 'ai chatbot, workflow automation, no-code tools')"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for the keyword report"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for the summary"
+    },
+    "targetWebsite": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Target website URL for competition analysis (e.g. 'example.com')"
+    },
+    "market": {
+      "type": "string",
+      "required": false,
+      "default": "US",
+      "description": "Target market/region (e.g. US, UK, Global)"
+    }
+  },
+  "steps": [
+    {
+      "id": "parseKeywords",
+      "name": "Parse keyword list",
+      "type": "code",
+      "code": {
+        "source": "const kwString = $.input.keywords || '';\nconst keywords = kwString.split(',').map(k => k.trim()).filter(k => k.length > 0);\nreturn { keywords, keywordCount: keywords.length };"
+      }
+    },
+    {
+      "id": "searchKeywords",
+      "name": "Research each keyword via Exa",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.parseKeywords.output.keywords",
+        "as": "keyword",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "searchKeyword",
+            "name": "Search keyword competition and content",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "exa",
+              "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+              "connectionKey": "$.input.exaKey",
+              "data": {
+                "query": "$.loop.keyword",
+                "numResults": 5,
+                "type": "auto",
+                "contents": {
+                  "text": {
+                    "maxCharacters": 800
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile keyword research data",
+      "type": "code",
+      "code": {
+        "source": "const keywords = $.steps.parseKeywords.output.keywords;\nconst iterations = $.steps.searchKeywords.response.iterations || [];\nlet compiled = '';\n\nkeywords.forEach((kw, i) => {\n  const iter = iterations[i];\n  const results = (iter && iter.searchKeyword && iter.searchKeyword.response && iter.searchKeyword.response.results) ? iter.searchKeyword.response.results : [];\n  compiled += '=== KEYWORD: \"' + kw + '\" (' + results.length + ' results) ===\\n';\n  results.forEach((r, j) => {\n    compiled += (j + 1) + '. ' + (r.title || '') + '\\n';\n    compiled += '   URL: ' + (r.url || '') + '\\n';\n    compiled += '   ' + (r.text || '').slice(0, 600) + '\\n\\n';\n  });\n  compiled += '\\n';\n});\n\nreturn { compiled: compiled.slice(0, 30000), keywordCount: keywords.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for SEO keyword analysis",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileResearch.output;\nconst keywords = $.steps.parseKeywords.output.keywords;\nconst targetSite = $.input.targetWebsite || '';\nconst market = $.input.market || 'US';\n\nlet prompt = 'You are an expert SEO analyst. Analyze the following keyword research data and provide comprehensive SEO insights for each keyword.\\n\\n';\nprompt += 'KEYWORDS: ' + keywords.join(', ') + '\\n';\nprompt += 'TARGET MARKET: ' + market + '\\n';\nif (targetSite) prompt += 'TARGET WEBSITE: ' + targetSite + '\\n';\nprompt += '\\nSEARCH RESULTS ANALYSIS:\\n';\nprompt += d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Estimate relative search volume for each keyword (high/medium/low) based on content density\\n';\nprompt += '- Assess keyword difficulty based on competitor strength in results\\n';\nprompt += '- Identify search intent: informational, commercial, transactional, navigational\\n';\nprompt += '- Suggest related long-tail keywords\\n';\nprompt += '- Recommend content type that would rank well\\n';\nprompt += '- Prioritize keywords by opportunity score\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"keywords\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"keyword\": \"the keyword\",\\n';\nprompt += '      \"estimatedVolume\": \"high|medium|low\",\\n';\nprompt += '      \"difficulty\": \"easy|medium|hard|very-hard\",\\n';\nprompt += '      \"searchIntent\": \"informational|commercial|transactional|navigational\",\\n';\nprompt += '      \"opportunityScore\": 8,\\n';\nprompt += '      \"topCompetitors\": [\"domain1.com\", \"domain2.com\"],\\n';\nprompt += '      \"relatedLongTail\": [\"long tail keyword 1\", \"long tail keyword 2\"],\\n';\nprompt += '      \"recommendedContentType\": \"blog post|landing page|guide|comparison\",\\n';\nprompt += '      \"notes\": \"strategic notes\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"overallStrategy\": \"SEO strategy recommendation based on the keyword portfolio\",\\n';\nprompt += '  \"quickWins\": [\"easiest keywords to rank for first\"],\\n';\nprompt += '  \"longTermTargets\": [\"high-value keywords that need more effort\"],\\n';\nprompt += '  \"contentPlan\": [{ \"keyword\": \"kw\", \"contentTitle\": \"suggested title\", \"priority\": 1 }]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2494-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI SEO analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2494-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { keywords: [], overallStrategy: raw, quickWins: [], longTermTargets: [], contentPlan: [] }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Sheets rows from keyword analysis",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = new Date().toISOString().slice(0, 10);\nconst rows = [];\nrows.push(['Date', 'Keyword', 'Est. Volume', 'Difficulty', 'Intent', 'Opportunity Score', 'Top Competitors', 'Long-Tail Keywords', 'Recommended Content', 'Notes']);\n(ai.keywords || []).forEach(k => {\n  rows.push([today, k.keyword || '', k.estimatedVolume || '', k.difficulty || '', k.searchIntent || '', String(k.opportunityScore || ''), (k.topCompetitors || []).join(', '), (k.relatedLongTail || []).join(', '), k.recommendedContentType || '', k.notes || '']);\n});\nreturn { rows, keywordCount: rows.length - 1 };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save keyword report to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "Keyword Research",
+          "values": "$.steps.buildSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack keyword research summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst kws = ai.keywords || [];\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'SEO Keyword Research Report', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Keywords Analyzed:* ' + kws.length + ' | *Market:* ' + ($.input.market || 'US') } });\nblocks.push({ type: 'divider' });\n\nif (ai.overallStrategy) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Strategy:* ' + ai.overallStrategy.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\nkws.sort((a, b) => (b.opportunityScore || 0) - (a.opportunityScore || 0));\nkws.slice(0, 8).forEach(k => {\n  const scoreIcon = (k.opportunityScore || 0) >= 8 ? ':star:' : (k.opportunityScore || 0) >= 6 ? ':chart_with_upwards_trend:' : ':seedling:';\n  const diffIcon = k.difficulty === 'easy' ? ':large_green_circle:' : k.difficulty === 'medium' ? ':large_yellow_circle:' : ':red_circle:';\n  let text = scoreIcon + ' *' + k.keyword + '* (Score: ' + (k.opportunityScore || 'N/A') + ')\\n';\n  text += 'Volume: ' + (k.estimatedVolume || '?') + ' | ' + diffIcon + ' Difficulty: ' + (k.difficulty || '?') + ' | Intent: ' + (k.searchIntent || '?') + '\\n';\n  if (k.relatedLongTail && k.relatedLongTail.length > 0) text += '_Related:_ ' + k.relatedLongTail.slice(0, 3).join(', ');\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 1800) } });\n});\n\nif (ai.quickWins && ai.quickWins.length > 0) {\n  blocks.push({ type: 'divider' });\n  let qwText = '*Quick Wins:*\\n';\n  ai.quickWins.forEach((q, i) => { qwText += ':zap: ' + q + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: qwText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Report saved to Google Sheets | Powered by Exa + Claude AI' }] });\nconst fallback = 'SEO Report: ' + kws.length + ' keywords analyzed';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post keyword report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

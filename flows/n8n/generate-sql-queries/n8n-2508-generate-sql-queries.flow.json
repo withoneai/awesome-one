@@ -1,0 +1,112 @@
+{
+  "key": "n8n-2508-generate-sql-queries",
+  "name": "AI SQL query generator from natural language",
+  "description": "Takes a natural language question and a database schema description, uses Claude AI to generate the correct SQL query, explains the query logic, and posts both the SQL and explanation to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2508,
+    "url": "https://n8n.io/workflows/2508",
+    "originalName": "Generate SQL queries from schema only - AI-powered",
+    "totalViews": 54748,
+    "rank": 109,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting generated SQL",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the SQL query result"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Natural language question to convert to SQL (e.g. 'Show me all customers who placed orders in the last 30 days')"
+    },
+    "schemaDescription": {
+      "type": "string",
+      "required": true,
+      "description": "Database schema description (table names, columns, relationships). Can be CREATE TABLE statements or plain text description."
+    },
+    "databaseType": {
+      "type": "string",
+      "required": false,
+      "default": "PostgreSQL",
+      "description": "Database type: PostgreSQL, MySQL, SQLite, SQL Server, Oracle"
+    },
+    "additionalContext": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Additional context about naming conventions, business rules, or data specifics"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for SQL generation",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst schema = $.input.schemaDescription;\nconst dbType = $.input.databaseType || 'PostgreSQL';\nconst context = $.input.additionalContext || '';\n\nlet prompt = 'You are an expert SQL developer. Generate a SQL query from the natural language question using the provided schema.\\n\\n';\nprompt += 'DATABASE TYPE: ' + dbType + '\\n\\n';\nprompt += 'SCHEMA:\\n' + schema + '\\n\\n';\nif (context) prompt += 'ADDITIONAL CONTEXT: ' + context + '\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Generate a correct, optimized SQL query for ' + dbType + '\\n';\nprompt += '- Use proper JOINs, WHERE clauses, GROUP BY as needed\\n';\nprompt += '- Add table aliases for readability\\n';\nprompt += '- Include ORDER BY when it makes sense\\n';\nprompt += '- Explain each part of the query\\n';\nprompt += '- Suggest potential indexes for optimization\\n';\nprompt += '- If the question is ambiguous, state your assumptions\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"sqlQuery\": \"SELECT ... FROM ... WHERE ...\",\\n';\nprompt += '  \"explanation\": \"Step-by-step explanation of the query logic\",\\n';\nprompt += '  \"assumptions\": [\"assumption 1\"],\\n';\nprompt += '  \"suggestedIndexes\": [\"CREATE INDEX idx_name ON table(column)\"],\\n';\nprompt += '  \"complexity\": \"simple|moderate|complex\",\\n';\nprompt += '  \"expectedResultDescription\": \"what the query will return\",\\n';\nprompt += '  \"alternativeApproach\": \"an alternative way to write this query if applicable\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2508-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to generate SQL",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2508-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { sqlQuery: raw, explanation: 'Could not parse structured response', assumptions: [], suggestedIndexes: [], complexity: 'unknown', expectedResultDescription: '', alternativeApproach: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message with SQL and explanation",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst dbType = $.input.databaseType || 'PostgreSQL';\n\nconst complexityEmoji = ai.complexity === 'simple' ? ':large_green_circle:' : ai.complexity === 'complex' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'AI SQL Query Generator' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Database:* ' + dbType + ' | ' + complexityEmoji + ' Complexity: *' + (ai.complexity || 'unknown') + '*' } });\nblocks.push({ type: 'divider' });\n\nconst sqlText = '```' + (ai.sqlQuery || 'No query generated') + '```';\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Generated SQL:*\\n' + sqlText.slice(0, 1800) } });\nblocks.push({ type: 'divider' });\n\nconst explanation = (ai.explanation || '').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Explanation:*\\n' + explanation } });\n\nif (ai.expectedResultDescription) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Expected Result:* ' + ai.expectedResultDescription } });\n}\n\nif (ai.assumptions && ai.assumptions.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Assumptions:*\\n' + ai.assumptions.map((a, i) => (i + 1) + '. ' + a).join('\\n') } });\n}\n\nif (ai.suggestedIndexes && ai.suggestedIndexes.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Suggested Indexes:*\\n```' + ai.suggestedIndexes.join('\\n') + '```' } });\n}\n\nif (ai.alternativeApproach) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Alternative Approach:*\\n' + ai.alternativeApproach.slice(0, 800) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI | ' + dbType }] });\n\nconst fallback = 'SQL query generated for: ' + question;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post SQL query to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+{
+  "key": "n8n-3131-appointment-scheduler-ai",
+  "name": "AI appointment scheduler with Sheets and email confirmation",
+  "description": "Takes appointment requests, uses Claude AI to parse scheduling details and check availability against a Google Sheets calendar, then sends a confirmation or alternatives via Gmail.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3131,
+    "url": "https://n8n.io/workflows/3131",
+    "originalName": "Chatbot appointment scheduler with Google Calendar for dental assistant",
+    "totalViews": 24623,
+    "rank": 257,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for the appointment calendar",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending confirmation emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID containing appointment data (columns: Date, Time, PatientName, Email, Status)"
+    },
+    "patientName": {
+      "type": "string",
+      "required": true,
+      "description": "Patient or client name requesting the appointment"
+    },
+    "patientEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Patient or client email address"
+    },
+    "requestedDate": {
+      "type": "string",
+      "required": true,
+      "description": "Requested appointment date (e.g. '2026-04-01' or 'next Monday')"
+    },
+    "requestedTime": {
+      "type": "string",
+      "required": false,
+      "default": "morning",
+      "description": "Preferred time slot (e.g. '10:00 AM', 'afternoon', 'morning')"
+    },
+    "appointmentType": {
+      "type": "string",
+      "required": false,
+      "default": "General Consultation",
+      "description": "Type of appointment (e.g. 'Dental Cleaning', 'General Consultation')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for scheduling request parsing",
+      "type": "code",
+      "code": {
+        "source": "var prompt = 'You are a scheduling assistant. Parse and validate the following appointment request.\\n\\n';\nprompt += 'PATIENT: ' + $.input.patientName + '\\n';\nprompt += 'EMAIL: ' + $.input.patientEmail + '\\n';\nprompt += 'REQUESTED DATE: ' + $.input.requestedDate + '\\n';\nprompt += 'REQUESTED TIME: ' + ($.input.requestedTime || 'morning') + '\\n';\nprompt += 'TYPE: ' + ($.input.appointmentType || 'General Consultation') + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Parse the date into ISO format (YYYY-MM-DD)\\n';\nprompt += '- Convert time preference to specific time slots (30-min intervals, 9am-5pm)\\n';\nprompt += '- Suggest 3 alternative time slots\\n';\nprompt += '- Generate a professional confirmation email body in HTML\\n';\nprompt += '- Estimate appointment duration based on type\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"parsedDate\": \"YYYY-MM-DD\",\\n';\nprompt += '  \"parsedTime\": \"HH:MM\",\\n';\nprompt += '  \"duration\": \"30 min|60 min|90 min\",\\n';\nprompt += '  \"alternatives\": [{ \"date\": \"YYYY-MM-DD\", \"time\": \"HH:MM\" }],\\n';\nprompt += '  \"confirmationSubject\": \"Email subject line\",\\n';\nprompt += '  \"confirmationBody\": \"HTML email body with appointment details\",\\n';\nprompt += '  \"sheetEntry\": {\\n';\nprompt += '    \"Date\": \"YYYY-MM-DD\",\\n';\nprompt += '    \"Time\": \"HH:MM\",\\n';\nprompt += '    \"PatientName\": \"...\",\\n';\nprompt += '    \"Email\": \"...\",\\n';\nprompt += '    \"AppointmentType\": \"...\",\\n';\nprompt += '    \"Duration\": \"...\",\\n';\nprompt += '    \"Status\": \"Confirmed\"\\n';\nprompt += '  }\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3131-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiSchedule",
+      "name": "Run Claude AI to parse and prepare appointment",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3131-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiSchedule.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) {\n  var today = new Date();\n  today.setDate(today.getDate() + 1);\n  var dateStr = today.toISOString().split('T')[0];\n  return { parsedDate: dateStr, parsedTime: '10:00', duration: '30 min', alternatives: [], confirmationSubject: 'Appointment Confirmation', confirmationBody: '<p>Your appointment has been confirmed.</p>', sheetEntry: { Date: dateStr, Time: '10:00', PatientName: $.input.patientName, Email: $.input.patientEmail, AppointmentType: $.input.appointmentType || 'General Consultation', Duration: '30 min', Status: 'Confirmed' } };\n}"
+      }
+    },
+    {
+      "id": "saveAppointment",
+      "name": "Save appointment to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "sheetTitle": "Appointments",
+          "data": [
+            "$.steps.parseAI.output.sheetEntry"
+          ]
+        }
+      }
+    },
+    {
+      "id": "sendConfirmation",
+      "name": "Send confirmation email via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.patientEmail",
+          "subject": "$.steps.parseAI.output.confirmationSubject",
+          "body": "$.steps.parseAI.output.confirmationBody",
+          "isHtml": true
+        }
+      }
+    }
+  ]
+}

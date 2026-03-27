@@ -1,0 +1,139 @@
+{
+  "key": "n8n-6270-build-first-agent",
+  "name": "Build your first AI agent",
+  "description": "A beginner-friendly AI agent that demonstrates tool use: takes a question, searches the web for real-time information via Exa, uses Claude for reasoning and calculations, and posts a helpful answer to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 6270,
+    "url": "https://n8n.io/workflows/6270",
+    "originalName": "Build your first AI agent",
+    "totalViews": 801912,
+    "rank": 2,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting results",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The user's question \u2014 can involve facts, calculations, or current events"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    }
+  },
+  "steps": [
+    {
+      "id": "classifyQuestion",
+      "name": "Classify the question type and extract search query",
+      "type": "code",
+      "code": {
+        "source": "const q = $.input.question.toLowerCase();\nconst needsSearch = !(/^(what is|calculate|compute|how much is|solve|evaluate)\\s+[\\d+\\-*/().^%\\s]+$/i.test($.input.question));\nconst searchQuery = $.input.question;\nreturn { needsSearch, searchQuery };"
+      }
+    },
+    {
+      "id": "webSearch",
+      "name": "Search the web for relevant information via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.classifyQuestion.output.searchQuery",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1200
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile search results into context",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.webSearch.response.results || [];\n\nlet sourcesText = '';\nresults.forEach((r, i) => {\n  sourcesText += (i+1) + '. ' + (r.title || 'Untitled') + '\\n';\n  sourcesText += '   URL: ' + r.url + '\\n';\n  sourcesText += '   ' + (r.text || '').slice(0, 1000) + '\\n\\n';\n});\n\nreturn { sourcesText, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for reasoning and answering",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are a helpful AI agent that can search the web and perform calculations. Answer the user's question thoughtfully.\n\nUSER QUESTION: ${$.input.question}\n\nWEB SEARCH CONTEXT (${$.steps.compileSources.output.sourceCount} sources):\n${$.steps.compileSources.output.sourcesText}\n\nINSTRUCTIONS:\n- If the question involves math or calculations, show your work step by step\n- If it requires factual information, synthesize from the search results and cite sources [1], [2], etc.\n- If it's a general knowledge question, combine your knowledge with the search results\n- Be conversational, helpful, and clear\n- Use Slack mrkdwn formatting: *bold* (NOT **bold**), _italic_, numbered lists. No markdown tables. No # headings.\n\nReturn ONLY valid JSON:\n{\n  \"answer\": \"<your comprehensive answer using Slack mrkdwn>\",\n  \"reasoning\": \"<brief explanation of how you arrived at the answer>\",\n  \"tools_used\": [\"web_search\", \"calculation\"],\n  \"follow_up_suggestions\": [\"<suggestion 1>\", \"<suggestion 2>\"]\n}`;\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-6270-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for reasoning and answer",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-6270-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, reasoning: '', tools_used: ['web_search'], follow_up_suggestions: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst question = $.input.question;\n\nconst toolIcons = (ai.tools_used || []).map(t => t === 'web_search' ? ':mag:' : t === 'calculation' ? ':abacus:' : ':gear:').join(' ');\n\nconst blocks = [];\n\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'AI Agent Response' } });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No answer generated.').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: answerText } });\n\nif (ai.reasoning) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Reasoning:* ' + ai.reasoning.slice(0, 1000) } });\n}\n\nif (ai.follow_up_suggestions && ai.follow_up_suggestions.length > 0) {\n  blocks.push({ type: 'divider' });\n  let suggestions = '*Try asking next:*\\n';\n  ai.follow_up_suggestions.forEach((s, i) => { suggestions += (i+1) + '. ' + s + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: suggestions } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: toolIcons + ' Tools used: ' + (ai.tools_used || []).join(', ') + ' | Sources: ' + $.steps.compileSources.output.sourceCount }] });\n\nconst fallback = 'AI Agent answer to: ' + question;\n\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

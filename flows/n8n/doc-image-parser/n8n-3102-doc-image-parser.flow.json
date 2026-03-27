@@ -1,0 +1,138 @@
+{
+  "key": "n8n-3102-doc-image-parser",
+  "name": "Doc/Image Parser \u2014 Google Drive to Claude OCR to Slack",
+  "description": "Fetches files from Google Drive, uses Claude AI to extract text and structured data from documents and images (OCR), then posts the extracted results to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3102,
+    "url": "https://n8n.io/workflows/3102",
+    "originalName": "Parse and Extract Data from Documents/Images with Mistral OCR",
+    "totalViews": 42363,
+    "rank": 151,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post extracted data"
+    },
+    "driveQuery": {
+      "type": "string",
+      "required": false,
+      "default": "mimeType contains 'pdf' or mimeType contains 'image'",
+      "description": "Google Drive search query to find files (e.g. name contains 'invoice')"
+    },
+    "maxFiles": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Maximum number of files to process"
+    },
+    "extractionGoal": {
+      "type": "string",
+      "required": false,
+      "default": "Extract all text, tables, key data points, and structured information from the document or image",
+      "description": "What to extract from the documents/images"
+    }
+  },
+  "steps": [
+    {
+      "id": "listDriveFiles",
+      "name": "List files from Google Drive matching query",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {
+          "q": "$.input.driveQuery",
+          "pageSize": "$.input.maxFiles"
+        }
+      }
+    },
+    {
+      "id": "parseFileList",
+      "name": "Parse file list and prepare for processing",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listDriveFiles.response || {};\nconst data = resp.data || resp;\nconst files = data.files || data.items || [];\nconst maxFiles = $.input.maxFiles || 5;\nconst limited = files.slice(0, maxFiles);\nconst fileList = limited.map(f => ({\n  id: f.id || '',\n  name: f.name || f.title || 'unknown',\n  mimeType: f.mimeType || '',\n  webViewLink: f.webViewLink || '',\n  size: f.size || 0\n}));\nreturn { files: fileList, totalFound: files.length, processing: fileList.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude extraction prompt with file metadata",
+      "type": "code",
+      "code": {
+        "source": "const files = $.steps.parseFileList.output.files;\nconst goal = $.input.extractionGoal || 'Extract all text, tables, key data points, and structured information';\n\nlet prompt = 'You are a document and image analysis specialist. You have received metadata about files from Google Drive. For each file, provide a structured extraction analysis based on the file type and name.\\n\\n';\nprompt += 'EXTRACTION GOAL: ' + goal + '\\n';\nprompt += 'FILES TO ANALYZE:\\n';\nfiles.forEach((f, i) => {\n  prompt += (i + 1) + '. Name: ' + f.name + ' | Type: ' + f.mimeType + ' | Link: ' + f.webViewLink + '\\n';\n});\nprompt += '\\nFor each file, analyze the file name and type to infer what data it likely contains, and describe how to extract it. Provide a structured extraction plan.\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"summary\": \"overview of all files analyzed\",\\n';\nprompt += '  \"files\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"fileName\": \"name\",\\n';\nprompt += '      \"fileType\": \"pdf/image/doc\",\\n';\nprompt += '      \"inferredContent\": \"what the file likely contains\",\\n';\nprompt += '      \"extractionPlan\": \"how to extract data from this type\",\\n';\nprompt += '      \"expectedDataPoints\": [\"field1\", \"field2\"],\\n';\nprompt += '      \"confidence\": \"high/medium/low\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"totalFiles\": 0,\\n';\nprompt += '  \"recommendations\": [\"suggestion for better extraction\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3102-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExtract",
+      "name": "Run Claude AI to analyze documents",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3102-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip code fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExtract.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, files: [], totalFiles: 0, recommendations: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message with extraction results",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst stats = $.steps.parseFileList.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Document/Image Extraction Report', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Files Found:*\\n' + stats.totalFound },\n  { type: 'mrkdwn', text: '*Files Processed:*\\n' + stats.processing }\n] });\nblocks.push({ type: 'divider' });\n\nconst summaryText = (ai.summary || 'No summary available.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:*\\n' + summaryText } });\n\nif (ai.files && ai.files.length > 0) {\n  blocks.push({ type: 'divider' });\n  ai.files.slice(0, 8).forEach((f, i) => {\n    let text = '*' + (i + 1) + '. ' + (f.fileName || 'File') + '*';\n    text += '\\n:page_facing_up: Type: ' + (f.fileType || 'unknown');\n    text += '\\n:mag: ' + (f.inferredContent || 'N/A');\n    if (f.expectedDataPoints && f.expectedDataPoints.length > 0) {\n      text += '\\n:pushpin: Fields: ' + f.expectedDataPoints.slice(0, 5).join(', ');\n    }\n    text += '\\n:signal_strength: Confidence: ' + (f.confidence || 'N/A');\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 1800) } });\n  });\n}\n\nif (ai.recommendations && ai.recommendations.length > 0) {\n  blocks.push({ type: 'divider' });\n  let recText = '*Recommendations:*\\n';\n  ai.recommendations.slice(0, 3).forEach((r, i) => { recText += (i + 1) + '. ' + r + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: recText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Google Drive + Claude AI + One CLI' }] });\n\nconst fallback = 'Doc Extraction: ' + stats.processing + ' files analyzed - ' + (ai.summary || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post extraction report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

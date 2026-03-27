@@ -1,0 +1,197 @@
+{
+  "key": "n8n-4678-security-digest-email",
+  "name": "AI Security & Compliance News Digest",
+  "description": "Searches for the latest security, privacy, and compliance news via Exa, uses Claude AI to categorize, summarize, and prioritize the articles, then sends a formatted HTML digest via Gmail and posts a summary to Slack. Adapted from n8n's intelligent AI digest for security feeds.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4678,
+    "url": "https://n8n.io/workflows/4678",
+    "originalName": "Intelligent AI digest for security, privacy, and compliance feeds",
+    "totalViews": 20248,
+    "rank": 299,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for security news search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending the digest",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "emailRecipient": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to send the daily digest"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for the digest summary"
+    },
+    "categories": {
+      "type": "string",
+      "required": false,
+      "default": "cybersecurity, data privacy, compliance, vulnerabilities",
+      "description": "Comma-separated security categories to track"
+    },
+    "focusKeywords": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Specific keywords to prioritize (e.g. 'GDPR, SOC 2, ransomware')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQueries",
+      "name": "Build search queries for each security category",
+      "type": "code",
+      "code": {
+        "source": "const categories = ($.input.categories || 'cybersecurity, data privacy, compliance, vulnerabilities').split(',').map(c => c.trim()).filter(Boolean);\nconst focus = $.input.focusKeywords || '';\nconst queries = categories.map(cat => {\n  let q = 'latest ' + cat + ' news and advisories';\n  if (focus) q += ' ' + focus;\n  return { category: cat, query: q };\n});\nreturn { queries, categoryCount: queries.length };"
+      }
+    },
+    {
+      "id": "searchCategories",
+      "name": "Search security news across all categories",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.buildQueries.output.queries",
+        "as": "queryItem",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "searchCategory",
+            "name": "Search one security category",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "exa",
+              "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+              "connectionKey": "$.input.exaKey",
+              "data": {
+                "query": "$.loop.queryItem.query",
+                "numResults": 5,
+                "type": "auto",
+                "contents": {
+                  "text": {
+                    "maxCharacters": 1200
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileArticles",
+      "name": "Compile all security articles",
+      "type": "code",
+      "code": {
+        "source": "const queries = $.steps.buildQueries.output.queries;\nconst iterations = $.steps.searchCategories.response.iterations || [];\nlet compiled = '';\nlet totalArticles = 0;\n\nqueries.forEach((q, i) => {\n  const iter = iterations[i];\n  const results = (iter && iter.searchCategory && iter.searchCategory.response && iter.searchCategory.response.results) ? iter.searchCategory.response.results : [];\n  compiled += '=== CATEGORY: ' + q.category.toUpperCase() + ' ===\\n';\n  results.forEach((r, j) => {\n    compiled += (j + 1) + '. ' + (r.title || 'Untitled') + '\\n';\n    compiled += '   URL: ' + (r.url || '') + '\\n';\n    compiled += '   ' + (r.text || '').slice(0, 1000) + '\\n\\n';\n    totalArticles++;\n  });\n});\n\nreturn { compiled: compiled.slice(0, 30000), totalArticles };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for security digest",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileArticles.output;\nconst categories = $.input.categories || 'cybersecurity, data privacy, compliance, vulnerabilities';\nconst focus = $.input.focusKeywords || '';\nconst today = new Date().toISOString().slice(0, 10);\n\nlet prompt = 'You are a cybersecurity analyst creating a daily intelligence digest for security, privacy, and compliance professionals.\\n\\n';\nprompt += 'DATE: ' + today + '\\n';\nprompt += 'CATEGORIES: ' + categories + '\\n';\nif (focus) prompt += 'PRIORITY KEYWORDS: ' + focus + '\\n';\nprompt += 'TOTAL ARTICLES: ' + d.totalArticles + '\\n\\n';\nprompt += d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Categorize each article by security domain\\n';\nprompt += '- Rate severity/importance: critical, high, medium, low\\n';\nprompt += '- Summarize each article in 2-3 sentences\\n';\nprompt += '- Identify actionable items that require immediate attention\\n';\nprompt += '- Group related articles and highlight emerging threats\\n';\nprompt += '- Create an executive summary suitable for a CISO briefing\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"executiveSummary\": \"3-4 sentence CISO-level overview\",\\n';\nprompt += '  \"articles\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"title\": \"article title\",\\n';\nprompt += '      \"url\": \"url\",\\n';\nprompt += '      \"category\": \"cybersecurity|privacy|compliance|vulnerability\",\\n';\nprompt += '      \"severity\": \"critical|high|medium|low\",\\n';\nprompt += '      \"summary\": \"2-3 sentence summary\",\\n';\nprompt += '      \"actionRequired\": \"what to do, if anything\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"criticalAlerts\": [\"items requiring immediate attention\"],\\n';\nprompt += '  \"emergingThreats\": [\"newly identified threat patterns\"],\\n';\nprompt += '  \"complianceUpdates\": [\"regulatory or compliance news\"],\\n';\nprompt += '  \"recommendedActions\": [\"top actions for the security team\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4678-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI security analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4678-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { executiveSummary: raw, articles: [], criticalAlerts: [], emergingThreats: [], complianceUpdates: [], recommendedActions: [] }; }"
+      }
+    },
+    {
+      "id": "buildEmailDigest",
+      "name": "Build HTML email digest",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = new Date().toISOString().slice(0, 10);\n\nlet body = 'SECURITY & COMPLIANCE DAILY DIGEST - ' + today + '\\n\\n';\nbody += 'EXECUTIVE SUMMARY\\n';\nbody += (ai.executiveSummary || 'No summary available') + '\\n\\n';\n\nif (ai.criticalAlerts && ai.criticalAlerts.length > 0) {\n  body += 'CRITICAL ALERTS\\n';\n  ai.criticalAlerts.forEach((a, i) => { body += '  [!] ' + a + '\\n'; });\n  body += '\\n';\n}\n\nbody += 'ARTICLES (' + (ai.articles || []).length + ')\\n';\nbody += '-'.repeat(40) + '\\n';\n(ai.articles || []).forEach((a, i) => {\n  const severityTag = a.severity === 'critical' ? '[CRITICAL]' : a.severity === 'high' ? '[HIGH]' : a.severity === 'medium' ? '[MEDIUM]' : '[LOW]';\n  body += (i + 1) + '. ' + severityTag + ' ' + (a.title || '') + '\\n';\n  body += '   Category: ' + (a.category || '') + '\\n';\n  body += '   ' + (a.summary || '') + '\\n';\n  if (a.url) body += '   Link: ' + a.url + '\\n';\n  if (a.actionRequired) body += '   Action: ' + a.actionRequired + '\\n';\n  body += '\\n';\n});\n\nif (ai.emergingThreats && ai.emergingThreats.length > 0) {\n  body += 'EMERGING THREATS\\n';\n  ai.emergingThreats.forEach((t, i) => { body += '  ' + (i + 1) + '. ' + t + '\\n'; });\n  body += '\\n';\n}\n\nif (ai.recommendedActions && ai.recommendedActions.length > 0) {\n  body += 'RECOMMENDED ACTIONS\\n';\n  ai.recommendedActions.forEach((a, i) => { body += '  ' + (i + 1) + '. ' + a + '\\n'; });\n}\n\nbody += '\\n---\\nGenerated by One CLI + Claude AI';\n\nconst criticalCount = (ai.articles || []).filter(a => a.severity === 'critical' || a.severity === 'high').length;\nconst subject = 'Security Digest ' + today + (criticalCount > 0 ? ' [' + criticalCount + ' HIGH/CRITICAL]' : '');\nreturn { body, subject };"
+      }
+    },
+    {
+      "id": "sendDigest",
+      "name": "Send digest via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.emailRecipient",
+          "subject": "$.steps.buildEmailDigest.output.subject",
+          "body": "$.steps.buildEmailDigest.output.body"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack digest summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst articles = ai.articles || [];\nconst critical = articles.filter(a => a.severity === 'critical');\nconst high = articles.filter(a => a.severity === 'high');\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Security & Compliance Digest', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Articles:* ' + articles.length + ' | :red_circle: Critical: ' + critical.length + ' | :large_yellow_circle: High: ' + high.length } });\nblocks.push({ type: 'divider' });\n\nif (ai.executiveSummary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Executive Summary:* ' + ai.executiveSummary.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.criticalAlerts && ai.criticalAlerts.length > 0) {\n  let alertText = ':rotating_light: *Critical Alerts:*\\n';\n  ai.criticalAlerts.forEach((a, i) => { alertText += (i + 1) + '. ' + a + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: alertText.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\ncritical.concat(high).slice(0, 5).forEach(a => {\n  const icon = a.severity === 'critical' ? ':red_circle:' : ':large_yellow_circle:';\n  let text = icon + ' *' + (a.title || 'Untitled') + '* [' + a.category + ']\\n';\n  text += (a.summary || '').slice(0, 300) + '\\n';\n  if (a.url) text += '<' + a.url + '|Read more>';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 1800) } });\n});\n\nif (ai.recommendedActions && ai.recommendedActions.length > 0) {\n  blocks.push({ type: 'divider' });\n  let actText = '*Recommended Actions:*\\n';\n  ai.recommendedActions.slice(0, 5).forEach((a, i) => { actText += (i + 1) + '. ' + a + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: actText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Full digest emailed to ' + $.input.emailRecipient + ' | One CLI' }] });\nconst fallback = 'Security Digest: ' + articles.length + ' articles, ' + critical.length + ' critical';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post digest summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

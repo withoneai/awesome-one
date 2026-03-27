@@ -1,0 +1,233 @@
+{
+  "key": "n8n-3560-trend-social-content",
+  "name": "Trend-Driven Social Content Generator",
+  "description": "Extracts trending topics via Exa search, uses Claude AI to score trends and generate platform-specific social media content, saves the content calendar to Google Sheets, and emails a summary via Gmail. Adapted from n8n's Reddit/Google Trends social content workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3560,
+    "url": "https://n8n.io/workflows/3560",
+    "originalName": "Extract trends, auto-generate social content with AI, Reddit, Google & post",
+    "totalViews": 20504,
+    "rank": 294,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for trend research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving content calendar",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending summary email",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for content calendar"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for summary"
+    },
+    "industry": {
+      "type": "string",
+      "required": true,
+      "description": "Industry or niche for trend research (e.g. 'SaaS marketing', 'health tech')"
+    },
+    "emailRecipient": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to send the content calendar summary"
+    },
+    "platforms": {
+      "type": "string",
+      "required": false,
+      "default": "LinkedIn, Twitter, Instagram",
+      "description": "Comma-separated social media platforms to create content for"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQueries",
+      "name": "Build trend research queries",
+      "type": "code",
+      "code": {
+        "source": "const industry = $.input.industry;\nconst queries = [\n  { source: 'reddit', query: 'site:reddit.com trending discussions about ' + industry },\n  { source: 'news', query: 'latest trending news and developments in ' + industry },\n  { source: 'industry', query: 'viral social media content trends for ' + industry + ' 2024 2025' }\n];\nreturn { queries };"
+      }
+    },
+    {
+      "id": "searchTrends",
+      "name": "Search multiple trend sources via Exa",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.buildQueries.output.queries",
+        "as": "queryItem",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "searchSource",
+            "name": "Search one trend source",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "exa",
+              "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+              "connectionKey": "$.input.exaKey",
+              "data": {
+                "query": "$.loop.queryItem.query",
+                "numResults": 5,
+                "type": "auto",
+                "contents": {
+                  "text": {
+                    "maxCharacters": 1200
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileTrends",
+      "name": "Compile all trend research",
+      "type": "code",
+      "code": {
+        "source": "const queries = $.steps.buildQueries.output.queries;\nconst iterations = $.steps.searchTrends.response.iterations || [];\nlet compiled = '';\nlet totalSources = 0;\n\nqueries.forEach((q, i) => {\n  const iter = iterations[i];\n  const results = (iter && iter.searchSource && iter.searchSource.response && iter.searchSource.response.results) ? iter.searchSource.response.results : [];\n  compiled += '=== SOURCE: ' + q.source.toUpperCase() + ' ===\\n';\n  results.forEach((r, j) => {\n    compiled += (j + 1) + '. ' + (r.title || '') + '\\n   ' + (r.text || '').slice(0, 800) + '\\n\\n';\n    totalSources++;\n  });\n});\n\nreturn { compiled: compiled.slice(0, 25000), totalSources };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for trend scoring and content generation",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileTrends.output;\nconst industry = $.input.industry;\nconst platforms = $.input.platforms || 'LinkedIn, Twitter, Instagram';\n\nlet prompt = 'You are a social media trend analyst and content strategist. Analyze the following trending topics, score them for relevance, and generate platform-specific content for each top trend.\\n\\n';\nprompt += 'INDUSTRY: ' + industry + '\\n';\nprompt += 'TARGET PLATFORMS: ' + platforms + '\\n\\n';\nprompt += 'TREND RESEARCH (' + d.totalSources + ' sources):\\n';\nprompt += d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Identify the top 5 most relevant trends for the industry\\n';\nprompt += '- Score each trend 1-10 on relevance, timeliness, and virality\\n';\nprompt += '- For each top trend, generate content tailored to each target platform\\n';\nprompt += '- LinkedIn: professional, thought-leadership tone (200-300 words)\\n';\nprompt += '- Twitter: concise, punchy, thread-worthy (under 280 chars per tweet)\\n';\nprompt += '- Instagram: visual description + caption (150 words max)\\n';\nprompt += '- Include hashtags appropriate for each platform\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"trends\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"trendName\": \"name\",\\n';\nprompt += '      \"description\": \"brief description\",\\n';\nprompt += '      \"relevanceScore\": 8,\\n';\nprompt += '      \"timelinessScore\": 9,\\n';\nprompt += '      \"viralityScore\": 7,\\n';\nprompt += '      \"overallScore\": 8,\\n';\nprompt += '      \"content\": {\\n';\nprompt += '        \"linkedin\": { \"text\": \"post text\", \"hashtags\": [\"tag\"] },\\n';\nprompt += '        \"twitter\": { \"text\": \"tweet text\", \"hashtags\": [\"tag\"] },\\n';\nprompt += '        \"instagram\": { \"caption\": \"caption\", \"visualIdea\": \"image concept\", \"hashtags\": [\"tag\"] }\\n';\nprompt += '      }\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"weeklyCalendar\": [{ \"day\": \"Monday\", \"platform\": \"LinkedIn\", \"trendIndex\": 0, \"postingTime\": \"9:00 AM\" }],\\n';\nprompt += '  \"strategyNotes\": \"overall content strategy advice\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3560-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI trend analysis and content generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3560-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { trends: [], weeklyCalendar: [], strategyNotes: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build content calendar rows for Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = new Date().toISOString().slice(0, 10);\nconst rows = [];\nrows.push(['Date', 'Trend', 'Score', 'Platform', 'Content', 'Hashtags', 'Status']);\n(ai.trends || []).forEach(t => {\n  const content = t.content || {};\n  if (content.linkedin) {\n    rows.push([today, t.trendName, String(t.overallScore || ''), 'LinkedIn', (content.linkedin.text || '').slice(0, 1500), (content.linkedin.hashtags || []).join(', '), 'Draft']);\n  }\n  if (content.twitter) {\n    rows.push([today, t.trendName, String(t.overallScore || ''), 'Twitter', (content.twitter.text || '').slice(0, 500), (content.twitter.hashtags || []).join(', '), 'Draft']);\n  }\n  if (content.instagram) {\n    rows.push([today, t.trendName, String(t.overallScore || ''), 'Instagram', (content.instagram.caption || '').slice(0, 1000), (content.instagram.hashtags || []).join(', '), 'Draft']);\n  }\n});\nreturn { rows, rowCount: rows.length - 1 };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save content calendar to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "Content Calendar",
+          "values": "$.steps.buildSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildEmailBody",
+      "name": "Build email summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst rows = $.steps.buildSheetRows.output;\nconst industry = $.input.industry;\n\nlet body = 'Social Content Calendar - ' + industry + '\\n\\n';\nbody += 'Trends Analyzed: ' + (ai.trends || []).length + '\\n';\nbody += 'Content Pieces Generated: ' + rows.rowCount + '\\n\\n';\n(ai.trends || []).forEach((t, i) => {\n  body += (i + 1) + '. ' + t.trendName + ' (Score: ' + (t.overallScore || 'N/A') + ')\\n';\n  body += '   ' + (t.description || '') + '\\n\\n';\n});\nif (ai.strategyNotes) body += 'Strategy: ' + ai.strategyNotes + '\\n';\nbody += '\\nFull content calendar saved to Google Sheets.\\n';\nbody += '\\n---\\nGenerated by One CLI + Claude AI';\n\nconst subject = 'Social Content Calendar: ' + industry + ' - ' + new Date().toISOString().slice(0, 10);\nreturn { body, subject };"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send content calendar summary via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.emailRecipient",
+          "subject": "$.steps.buildEmailBody.output.subject",
+          "body": "$.steps.buildEmailBody.output.body"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst rows = $.steps.buildSheetRows.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Social Content Calendar Ready', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Industry:* ' + $.input.industry + ' | *Trends:* ' + (ai.trends || []).length + ' | *Content Pieces:* ' + rows.rowCount } });\nblocks.push({ type: 'divider' });\n\n(ai.trends || []).slice(0, 5).forEach((t, i) => {\n  const scoreEmoji = (t.overallScore || 0) >= 8 ? ':fire:' : (t.overallScore || 0) >= 6 ? ':chart_with_upwards_trend:' : ':seedling:';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: scoreEmoji + ' *' + t.trendName + '* (Score: ' + (t.overallScore || 'N/A') + ')\\n' + (t.description || '').slice(0, 300) } });\n});\n\nif (ai.strategyNotes) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Strategy:* ' + ai.strategyNotes.slice(0, 500) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Saved to Sheets + emailed to ' + $.input.emailRecipient + ' | One CLI' }] });\nconst fallback = 'Social Content: ' + (ai.trends || []).length + ' trends, ' + rows.rowCount + ' pieces for ' + $.input.industry;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

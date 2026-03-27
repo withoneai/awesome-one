@@ -1,0 +1,177 @@
+{
+  "key": "n8n-2110-pre-call-research",
+  "name": "Pre-Call Research Brief Generator",
+  "description": "Fetches today's meetings from Gmail/Calendar, searches Exa for recent company news about meeting attendees, Claude AI creates a comprehensive pre-call research brief, and posts it to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2110,
+    "url": "https://n8n.io/workflows/2110",
+    "originalName": "Scrape recent news about a company before a call",
+    "totalViews": 67135,
+    "rank": 90,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "calendarKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Calendar connection key for fetching meetings",
+      "connection": {
+        "platform": "google-calendar"
+      }
+    },
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for company research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the brief",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the research brief"
+    },
+    "companyOverride": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Optional: specific company to research (overrides calendar extraction)"
+    }
+  },
+  "steps": [
+    {
+      "id": "getDateBounds",
+      "name": "Calculate today's date range",
+      "type": "code",
+      "code": {
+        "source": "const now = new Date();\nconst start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);\nconst end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);\nreturn { timeMin: start.toISOString(), timeMax: end.toISOString(), today: now.toISOString().split('T')[0] };"
+      }
+    },
+    {
+      "id": "listEvents",
+      "name": "Fetch today's calendar events",
+      "type": "action",
+      "action": {
+        "platform": "google-calendar",
+        "actionId": "conn_mod_def::GJ6RlnIYK20::YzuWSmaVQgurletRDNJavA",
+        "connectionKey": "$.input.calendarKey",
+        "pathVars": {
+          "calendarId": "primary"
+        },
+        "queryParams": {
+          "timeMin": "$.steps.getDateBounds.output.timeMin",
+          "timeMax": "$.steps.getDateBounds.output.timeMax",
+          "singleEvents": true,
+          "orderBy": "startTime",
+          "maxResults": 15
+        }
+      }
+    },
+    {
+      "id": "extractCompanies",
+      "name": "Extract companies and attendees from meetings",
+      "type": "code",
+      "code": {
+        "source": "const events = $.steps.listEvents.response.items || $.steps.listEvents.response.data || [];\nconst companyOverride = $.input.companyOverride || '';\nconst domains = new Set();\nconst attendeeList = [];\nconst meetings = [];\n\nif (Array.isArray(events)) {\n  events.forEach(e => {\n    const attendees = (e.attendees || []).map(a => a.email).filter(Boolean);\n    attendees.forEach(email => {\n      const domain = email.split('@')[1];\n      if (domain && domain.indexOf('gmail') < 0 && domain.indexOf('google') < 0 && domain.indexOf('outlook') < 0 && domain.indexOf('hotmail') < 0 && domain.indexOf('yahoo') < 0) {\n        domains.add(domain);\n      }\n      attendeeList.push(email);\n    });\n    meetings.push({\n      summary: e.summary || '(no title)',\n      start: e.start ? (e.start.dateTime || e.start.date) : '',\n      attendeeCount: attendees.length,\n      attendeeEmails: attendees.slice(0, 5),\n      location: e.location || ''\n    });\n  });\n}\n\nlet searchQuery = companyOverride;\nif (!searchQuery) {\n  searchQuery = Array.from(domains).slice(0, 5).map(d => d.split('.')[0]).join(' OR ');\n}\nif (!searchQuery) searchQuery = 'recent business news';\n\nreturn { meetings, domains: Array.from(domains), searchQuery, attendeeList, meetingCount: meetings.length };"
+      }
+    },
+    {
+      "id": "searchCompanyNews",
+      "name": "Search Exa for company news",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.extractCompanies.output.searchQuery",
+          "numResults": 10,
+          "type": "neural",
+          "useAutoprompt": true,
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile meeting and research data",
+      "type": "code",
+      "code": {
+        "source": "const meetings = $.steps.extractCompanies.output.meetings;\nconst domains = $.steps.extractCompanies.output.domains;\nconst results = $.steps.searchCompanyNews.response.results || $.steps.searchCompanyNews.response.data || [];\nconst today = $.steps.getDateBounds.output.today;\n\nlet meetingData = 'TODAY\\'S MEETINGS (' + today + '):\\n\\n';\nmeetings.forEach((m, i) => {\n  const time = m.start ? new Date(m.start).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : 'TBD';\n  meetingData += (i + 1) + '. ' + m.summary + ' at ' + time + '\\n';\n  if (m.location) meetingData += '   Location: ' + m.location + '\\n';\n  meetingData += '   Attendees: ' + m.attendeeCount + (m.attendeeEmails.length > 0 ? ' (' + m.attendeeEmails.join(', ') + ')' : '') + '\\n\\n';\n});\n\nlet newsData = 'COMPANY/INDUSTRY NEWS:\\n\\n';\nresults.slice(0, 8).forEach((r, i) => {\n  newsData += (i + 1) + '. ' + (r.title || 'N/A') + '\\n';\n  newsData += '   URL: ' + (r.url || '') + '\\n';\n  newsData += '   ' + (r.text || '').slice(0, 800) + '\\n\\n';\n});\n\nreturn { meetingData, newsData, today, meetingCount: meetings.length, domains, newsCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for pre-call brief",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileResearch.output;\n\nlet prompt = 'You are an executive assistant preparing pre-call research briefs. Create a comprehensive brief for today\\'s meetings using the calendar data and company news below.\\n\\n';\nprompt += d.meetingData + '\\n';\nprompt += d.newsData + '\\n';\nprompt += 'ATTENDEE DOMAINS: ' + (d.domains || []).join(', ') + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- For each meeting, identify relevant news about the companies/people involved\\n';\nprompt += '- Create talking points informed by recent news\\n';\nprompt += '- Suggest questions to ask based on company developments\\n';\nprompt += '- Note any potential concerns or opportunities from the news\\n';\nprompt += '- Prioritize meetings by importance/preparation needed\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"executiveSummary\": \"2-3 sentence overview of today\",\\n';\nprompt += '  \"meetingBriefs\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"title\": \"meeting title\",\\n';\nprompt += '      \"time\": \"meeting time\",\\n';\nprompt += '      \"priority\": \"high|medium|low\",\\n';\nprompt += '      \"companyContext\": \"what to know about the company\",\\n';\nprompt += '      \"relevantNews\": [\"recent news item relevant to this meeting\"],\\n';\nprompt += '      \"talkingPoints\": [\"suggested talking point 1\", \"point 2\"],\\n';\nprompt += '      \"questionsToAsk\": [\"question based on recent news\"],\\n';\nprompt += '      \"prepActions\": [\"thing to prepare before meeting\"]\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"newsHighlights\": [\"key news item 1\", \"item 2\"],\\n';\nprompt += '  \"generalAdvice\": \"overarching advice for today\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2110-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI pre-call research",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2110-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { executiveSummary: raw, meetingBriefs: [], newsHighlights: [], generalAdvice: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit research brief",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = $.steps.compileResearch.output.today;\nconst meetingCount = $.steps.compileResearch.output.meetingCount;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Pre-Call Research Brief - ' + today, emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: (ai.executiveSummary || meetingCount + ' meeting(s) today.').slice(0, 1800) } });\nblocks.push({ type: 'divider' });\n\nif (ai.meetingBriefs && ai.meetingBriefs.length > 0) {\n  ai.meetingBriefs.forEach((m, i) => {\n    const priorityIcon = m.priority === 'high' ? ':red_circle:' : m.priority === 'medium' ? ':large_yellow_circle:' : ':white_circle:';\n    let meetingText = priorityIcon + ' *' + (i + 1) + '. ' + (m.title || 'Meeting') + '*';\n    if (m.time) meetingText += ' at ' + m.time;\n    meetingText += '\\n';\n\n    if (m.companyContext) meetingText += '_Company:_ ' + m.companyContext + '\\n';\n\n    if (m.relevantNews && m.relevantNews.length > 0) {\n      meetingText += '*Recent News:*\\n';\n      m.relevantNews.slice(0, 3).forEach(n => { meetingText += '  - ' + n + '\\n'; });\n    }\n\n    if (m.talkingPoints && m.talkingPoints.length > 0) {\n      meetingText += '*Talking Points:*\\n';\n      m.talkingPoints.forEach(tp => { meetingText += '  - ' + tp + '\\n'; });\n    }\n\n    if (m.questionsToAsk && m.questionsToAsk.length > 0) {\n      meetingText += '*Questions to Ask:*\\n';\n      m.questionsToAsk.forEach(q => { meetingText += '  - ' + q + '\\n'; });\n    }\n\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: meetingText.slice(0, 1800) } });\n    if (i < ai.meetingBriefs.length - 1) blocks.push({ type: 'divider' });\n  });\n}\n\nif (ai.newsHighlights && ai.newsHighlights.length > 0) {\n  blocks.push({ type: 'divider' });\n  let newsText = '*Key News Highlights:*\\n';\n  ai.newsHighlights.slice(0, 5).forEach((n, i) => { newsText += (i + 1) + '. ' + n + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: newsText.slice(0, 1800) } });\n}\n\nif (ai.generalAdvice) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*General Advice:* ' + ai.generalAdvice } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Google Calendar + Exa + Claude AI | One CLI' }] });\n\nconst fallbackText = 'Pre-Call Brief: ' + meetingCount + ' meetings analyzed with ' + (ai.newsHighlights || []).length + ' news highlights';\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post research brief to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

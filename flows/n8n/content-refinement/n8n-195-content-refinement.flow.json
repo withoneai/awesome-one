@@ -1,0 +1,183 @@
+{
+  "key": "n8n-195-content-refinement",
+  "name": "Iterative content refinement with AI multi-pass",
+  "description": "Takes draft content, uses Claude AI in multiple refinement passes to iteratively improve clarity, engagement, SEO, and tone, then posts the polished final version to Slack with before/after comparison. Adapted from n8n's GPT-4 multi-agent content refinement workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 195,
+    "url": "https://n8n.io/workflows/195",
+    "originalName": "Iterative content refinement with GPT-4 multi-agent feedback system",
+    "totalViews": 31507,
+    "rank": 195,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting refined content",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the refined content"
+    },
+    "draftContent": {
+      "type": "string",
+      "required": true,
+      "description": "The draft content to refine (article, blog post, email, etc.)"
+    },
+    "contentType": {
+      "type": "string",
+      "required": false,
+      "default": "blog post",
+      "description": "Type of content: blog post, article, email, social media, landing page"
+    },
+    "targetAudience": {
+      "type": "string",
+      "required": false,
+      "default": "general professional audience",
+      "description": "Target audience description for tone and style calibration"
+    },
+    "refinementPasses": {
+      "type": "number",
+      "required": false,
+      "default": 3,
+      "description": "Number of refinement passes (default: 3, max: 5)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPass1Prompt",
+      "name": "Build first refinement pass prompt (clarity and structure)",
+      "type": "code",
+      "code": {
+        "source": "const draft = $.input.draftContent;\nconst contentType = $.input.contentType || 'blog post';\nconst audience = $.input.targetAudience || 'general professional audience';\n\nlet prompt = 'You are a professional editor specializing in content clarity and structure. This is PASS 1 of a multi-pass refinement.\\n\\n';\nprompt += 'CONTENT TYPE: ' + contentType + '\\n';\nprompt += 'TARGET AUDIENCE: ' + audience + '\\n\\n';\nprompt += 'ORIGINAL DRAFT:\\n' + draft + '\\n\\n';\nprompt += 'PASS 1 FOCUS: Clarity and Structure\\n';\nprompt += '- Fix grammatical errors and awkward phrasing\\n';\nprompt += '- Improve paragraph structure and flow\\n';\nprompt += '- Ensure logical progression of ideas\\n';\nprompt += '- Strengthen the opening and closing\\n';\nprompt += '- Remove redundancy\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"pass\": 1,\\n';\nprompt += '  \"focus\": \"clarity and structure\",\\n';\nprompt += '  \"refinedContent\": \"the improved content\",\\n';\nprompt += '  \"changesApplied\": [\"change 1\", \"change 2\"],\\n';\nprompt += '  \"qualityScore\": 70\\n';\nprompt += '}';\n\nreturn { prompt, originalWordCount: draft.split(/\\s+/).length };"
+      }
+    },
+    {
+      "id": "savePass1Prompt",
+      "name": "Save pass 1 prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-195-pass1-prompt.txt",
+        "content": "$.steps.buildPass1Prompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiPass1",
+      "name": "Run Claude AI pass 1 (clarity and structure)",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-195-pass1-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parsePass1",
+      "name": "Parse pass 1 output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiPass1.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { pass: 1, focus: 'clarity', refinedContent: raw, changesApplied: [], qualityScore: 50 }; }"
+      }
+    },
+    {
+      "id": "buildPass2Prompt",
+      "name": "Build second refinement pass prompt (engagement and tone)",
+      "type": "code",
+      "code": {
+        "source": "const pass1 = $.steps.parsePass1.output;\nconst contentType = $.input.contentType || 'blog post';\nconst audience = $.input.targetAudience || 'general professional audience';\n\nlet prompt = 'You are a content engagement specialist. This is PASS 2 of a multi-pass refinement.\\n\\n';\nprompt += 'CONTENT TYPE: ' + contentType + '\\n';\nprompt += 'TARGET AUDIENCE: ' + audience + '\\n\\n';\nprompt += 'CONTENT AFTER PASS 1 (Clarity):\\n' + pass1.refinedContent + '\\n\\n';\nprompt += 'PASS 2 FOCUS: Engagement and Tone\\n';\nprompt += '- Make the content more compelling and engaging\\n';\nprompt += '- Adjust tone to match the target audience\\n';\nprompt += '- Add hooks, transitions, and calls to action\\n';\nprompt += '- Improve readability (shorter sentences where needed)\\n';\nprompt += '- Make headings and subheadings more impactful\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"pass\": 2,\\n';\nprompt += '  \"focus\": \"engagement and tone\",\\n';\nprompt += '  \"refinedContent\": \"the improved content\",\\n';\nprompt += '  \"changesApplied\": [\"change 1\", \"change 2\"],\\n';\nprompt += '  \"qualityScore\": 80\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePass2Prompt",
+      "name": "Save pass 2 prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-195-pass2-prompt.txt",
+        "content": "$.steps.buildPass2Prompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiPass2",
+      "name": "Run Claude AI pass 2 (engagement and tone)",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-195-pass2-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parsePass2",
+      "name": "Parse pass 2 output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiPass2.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { pass: 2, focus: 'engagement', refinedContent: raw, changesApplied: [], qualityScore: 60 }; }"
+      }
+    },
+    {
+      "id": "buildPass3Prompt",
+      "name": "Build third refinement pass prompt (SEO and polish)",
+      "type": "code",
+      "code": {
+        "source": "const pass2 = $.steps.parsePass2.output;\nconst contentType = $.input.contentType || 'blog post';\n\nlet prompt = 'You are an SEO and final polish specialist. This is PASS 3 (final) of a multi-pass refinement.\\n\\n';\nprompt += 'CONTENT TYPE: ' + contentType + '\\n\\n';\nprompt += 'CONTENT AFTER PASS 2 (Engagement):\\n' + pass2.refinedContent + '\\n\\n';\nprompt += 'PASS 3 FOCUS: SEO Optimization and Final Polish\\n';\nprompt += '- Optimize for search engines (natural keyword placement)\\n';\nprompt += '- Ensure meta-description-worthy opening paragraph\\n';\nprompt += '- Final grammar and style polish\\n';\nprompt += '- Verify consistent formatting\\n';\nprompt += '- Add a compelling meta description suggestion\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"pass\": 3,\\n';\nprompt += '  \"focus\": \"SEO and final polish\",\\n';\nprompt += '  \"refinedContent\": \"the final polished content\",\\n';\nprompt += '  \"changesApplied\": [\"change 1\", \"change 2\"],\\n';\nprompt += '  \"qualityScore\": 90,\\n';\nprompt += '  \"metaDescription\": \"suggested meta description\",\\n';\nprompt += '  \"suggestedTitle\": \"optimized title\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePass3Prompt",
+      "name": "Save pass 3 prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-195-pass3-prompt.txt",
+        "content": "$.steps.buildPass3Prompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiPass3",
+      "name": "Run Claude AI pass 3 (SEO and polish)",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-195-pass3-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parsePass3",
+      "name": "Parse pass 3 output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiPass3.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { pass: 3, focus: 'SEO and polish', refinedContent: raw, changesApplied: [], qualityScore: 70, metaDescription: '', suggestedTitle: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message with refinement results",
+      "type": "code",
+      "code": {
+        "source": "const pass1 = $.steps.parsePass1.output;\nconst pass2 = $.steps.parsePass2.output;\nconst pass3 = $.steps.parsePass3.output;\nconst originalWC = $.steps.buildPass1Prompt.output.originalWordCount;\nconst finalContent = pass3.refinedContent || pass2.refinedContent || '';\nconst finalWC = finalContent.split(/\\s+/).length;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Content Refinement Complete' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Content type:* ' + ($.input.contentType || 'blog post') + ' | *Passes:* 3 | *Audience:* ' + ($.input.targetAudience || 'general') } });\nblocks.push({ type: 'divider' });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Quality Progression:*\\nPass 1 (Clarity): ' + (pass1.qualityScore || 0) + '/100\\nPass 2 (Engagement): ' + (pass2.qualityScore || 0) + '/100\\nPass 3 (SEO + Polish): ' + (pass3.qualityScore || 0) + '/100' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Word count:* ' + originalWC + ' (original) -> ' + finalWC + ' (final)' } });\nblocks.push({ type: 'divider' });\n\nif (pass3.suggestedTitle) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Suggested Title:* ' + pass3.suggestedTitle } });\n}\nif (pass3.metaDescription) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Meta Description:* ' + pass3.metaDescription } });\n}\nblocks.push({ type: 'divider' });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Final Refined Content:*\\n' + finalContent.slice(0, 2800) } });\n\nlet changesText = '*All Changes Applied:*\\n';\n[pass1, pass2, pass3].forEach((p, i) => {\n  changesText += '_Pass ' + (i + 1) + ':_ ';\n  changesText += (p.changesApplied || []).slice(0, 3).join(', ') + '\\n';\n});\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: changesText.slice(0, 2900) } });\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI (3-pass refinement) | One CLI' }] });\n\nconst fallback = 'Content Refinement: 3 passes, quality ' + (pass3.qualityScore || 0) + '/100';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post refined content to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

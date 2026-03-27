@@ -1,0 +1,201 @@
+{
+  "key": "n8n-194-sales-cold-calling-pipeline",
+  "name": "Sales cold calling pipeline with AI qualification",
+  "description": "Finds prospects via Exa web search, scrapes their websites with Firecrawl for detailed company data, Claude AI qualifies and scores each lead, then saves the qualified pipeline to Google Sheets. Adapted from n8n's Apify GPT-4o cold calling pipeline workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 194,
+    "url": "https://n8n.io/workflows/194",
+    "originalName": "Automate sales cold calling pipeline with Apify, GPT-4o, and WhatsApp",
+    "totalViews": 31655,
+    "rank": 194,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for prospect discovery",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for website scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving the pipeline",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "targetIndustry": {
+      "type": "string",
+      "required": true,
+      "description": "Target industry or vertical for prospect search (e.g., 'SaaS startups', 'e-commerce brands')"
+    },
+    "targetLocation": {
+      "type": "string",
+      "required": false,
+      "default": "United States",
+      "description": "Geographic target for prospects"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for the sales pipeline"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Pipeline",
+      "description": "Sheet tab name for the pipeline data"
+    },
+    "idealCustomerProfile": {
+      "type": "string",
+      "required": true,
+      "description": "Description of ideal customer profile (e.g., 'B2B companies with 50-500 employees, using outdated CRM')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery_findProspects",
+      "name": "Build search query for findProspects",
+      "type": "code",
+      "code": {
+        "source": "const parts = [$.input.targetIndustry, $.input.targetLocation];\nconst staticTerms = \"companies  hiring growing\";\nreturn { query: parts.filter(Boolean).join(\" \") + \" \" + staticTerms };"
+      }
+    },
+    {
+      "id": "findProspects",
+      "name": "Search Exa for potential prospects",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_findProspects.output.query",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1200
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "extractUrls",
+      "name": "Extract prospect URLs for scraping",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.findProspects.response.results || [];\nconst prospects = results.map((r, i) => {\n  return {\n    index: i + 1,\n    title: r.title || 'Unknown Company',\n    url: r.url || '',\n    snippet: (r.text || '').slice(0, 500)\n  };\n}).filter(p => p.url.length > 0);\nreturn { prospects, count: prospects.length };"
+      }
+    },
+    {
+      "id": "scrapeProspects",
+      "name": "Scrape top prospect websites with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractUrls.output.prospects",
+        "as": "prospect",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapeOne",
+            "name": "Scrape individual prospect website",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.prospect.url"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileProspectData",
+      "name": "Compile prospect data for AI qualification",
+      "type": "code",
+      "code": {
+        "source": "const prospects = $.steps.extractUrls.output.prospects || [];\nconst iterations = $.steps.scrapeProspects.response.iterations || [];\n\nlet compiled = '';\nprospects.forEach((p, i) => {\n  compiled += '--- PROSPECT ' + p.index + ' ---\\n';\n  compiled += 'Company: ' + p.title + '\\n';\n  compiled += 'URL: ' + p.url + '\\n';\n  compiled += 'Search Snippet: ' + p.snippet + '\\n';\n  if (iterations[i] && iterations[i].scrapeOne && iterations[i].scrapeOne.response) {\n    const scrapeData = iterations[i].scrapeOne.response;\n    const content = (typeof scrapeData === 'string') ? scrapeData : JSON.stringify(scrapeData);\n    compiled += 'Website Content: ' + content.slice(0, 2000) + '\\n';\n  }\n  compiled += '\\n';\n});\n\nreturn { compiled: compiled.slice(0, 30000), prospectCount: prospects.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for lead qualification",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileProspectData.output;\nconst icp = $.input.idealCustomerProfile;\nconst industry = $.input.targetIndustry;\n\nlet prompt = 'You are a senior sales development representative. Qualify and score these prospects for cold outreach.\\n\\n';\nprompt += 'IDEAL CUSTOMER PROFILE: ' + icp + '\\n';\nprompt += 'TARGET INDUSTRY: ' + industry + '\\n';\nprompt += 'TARGET LOCATION: ' + ($.input.targetLocation || 'United States') + '\\n\\n';\nprompt += 'PROSPECT DATA (' + d.prospectCount + ' prospects):\\n';\nprompt += d.compiled + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Score each prospect 1-100 based on ICP fit\\n';\nprompt += '- Classify: hot (80+), warm (50-79), cold (below 50)\\n';\nprompt += '- Extract: company name, estimated size, key decision maker title, contact approach\\n';\nprompt += '- Generate a personalized opening line for each prospect\\n';\nprompt += '- Identify pain points that match our offering\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"leads\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"company\": \"company name\",\\n';\nprompt += '      \"url\": \"website url\",\\n';\nprompt += '      \"score\": 85,\\n';\nprompt += '      \"classification\": \"hot|warm|cold\",\\n';\nprompt += '      \"estimatedSize\": \"10-50|50-200|200-1000|1000+\",\\n';\nprompt += '      \"decisionMaker\": \"likely title to contact\",\\n';\nprompt += '      \"painPoints\": [\"pain 1\", \"pain 2\"],\\n';\nprompt += '      \"openingLine\": \"personalized cold call opener\",\\n';\nprompt += '      \"approach\": \"recommended outreach strategy\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"totalLeads\": 0,\\n';\nprompt += '  \"hotLeads\": 0,\\n';\nprompt += '  \"warmLeads\": 0,\\n';\nprompt += '  \"coldLeads\": 0,\\n';\nprompt += '  \"pipelineSummary\": \"brief pipeline summary\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-194-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiQualify",
+      "name": "Run Claude AI lead qualification",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-194-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiQualify.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { leads: [], totalLeads: 0, hotLeads: 0, warmLeads: 0, coldLeads: 0, pipelineSummary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Google Sheets rows from qualified leads",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst leads = ai.leads || [];\n\nconst header = ['Company', 'URL', 'Score', 'Classification', 'Est. Size', 'Decision Maker', 'Pain Points', 'Opening Line', 'Approach'];\nconst rows = leads.map(l => [\n  l.company || 'Unknown',\n  l.url || '',\n  String(l.score || 0),\n  l.classification || 'cold',\n  l.estimatedSize || 'Unknown',\n  l.decisionMaker || 'N/A',\n  (l.painPoints || []).join('; '),\n  l.openingLine || '',\n  l.approach || ''\n]);\n\nconst allRows = [header].concat(rows);\nreturn { values: allRows, leadCount: leads.length, hotCount: ai.hotLeads || 0, summary: ai.pipelineSummary || '' };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save qualified pipeline to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": "$.steps.buildSheetRows.output.values",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    }
+  ]
+}

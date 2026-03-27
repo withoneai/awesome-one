@@ -1,0 +1,141 @@
+{
+  "key": "n8n-2648-blog-brand-voice-ai",
+  "name": "Blog creator in brand voice using AI",
+  "description": "Scrapes existing blog posts from a website to learn brand voice, then uses Claude AI to generate a new blog post matching that style, and posts the result to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2648,
+    "url": "https://n8n.io/workflows/2648",
+    "originalName": "Automate blog creation in brand voice with AI",
+    "totalViews": 26335,
+    "rank": 243,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping existing blog posts",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the generated blog",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the generated blog draft"
+    },
+    "blogUrl": {
+      "type": "string",
+      "required": true,
+      "description": "URL of an existing blog post to learn brand voice from (e.g. 'https://company.com/blog/sample-post')"
+    },
+    "blogTopic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic for the new blog post to generate (e.g. 'How AI is transforming customer support')"
+    },
+    "targetAudience": {
+      "type": "string",
+      "required": false,
+      "default": "general business audience",
+      "description": "Target audience for the blog post"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeBlog",
+      "name": "Scrape existing blog post for brand voice",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.blogUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "extractVoice",
+      "name": "Extract brand voice characteristics from scraped content",
+      "type": "code",
+      "code": {
+        "source": "var data = ($.steps.scrapeBlog.response && $.steps.scrapeBlog.response.data) ? $.steps.scrapeBlog.response.data : {};\nvar markdown = (data.markdown || '').slice(0, 5000);\nvar title = data.metadata && data.metadata.title ? data.metadata.title : '';\nreturn { markdown: markdown, title: title, contentLength: markdown.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for brand voice analysis and blog generation",
+      "type": "code",
+      "code": {
+        "source": "var content = $.steps.extractVoice.output;\nvar prompt = 'You are an expert content strategist and blog writer. You will analyze an existing blog post to understand the brand voice, then write a new blog post in that same style.\\n\\n';\nprompt += 'STEP 1 - ANALYZE THIS EXISTING BLOG POST FOR BRAND VOICE:\\n';\nprompt += 'Title: ' + content.title + '\\n';\nprompt += 'Content:\\n' + content.markdown + '\\n\\n';\nprompt += 'STEP 2 - WRITE A NEW BLOG POST:\\n';\nprompt += 'Topic: ' + $.input.blogTopic + '\\n';\nprompt += 'Target Audience: ' + ($.input.targetAudience || 'general business audience') + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- First identify the brand voice characteristics (tone, sentence structure, vocabulary level, use of examples, formatting style)\\n';\nprompt += '- Then write a complete new blog post on the given topic matching that voice exactly\\n';\nprompt += '- Include a compelling title, introduction, 3-5 main sections with subheadings, and a conclusion\\n';\nprompt += '- Match the approximate length and structure of the original\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"voiceAnalysis\": {\\n';\nprompt += '    \"tone\": \"description of tone\",\\n';\nprompt += '    \"style\": \"description of writing style\",\\n';\nprompt += '    \"vocabulary\": \"vocabulary level\",\\n';\nprompt += '    \"keyCharacteristics\": [\"trait1\", \"trait2\"]\\n';\nprompt += '  },\\n';\nprompt += '  \"newPost\": {\\n';\nprompt += '    \"title\": \"Blog post title\",\\n';\nprompt += '    \"content\": \"Full markdown blog post content\",\\n';\nprompt += '    \"metaDescription\": \"SEO meta description under 160 chars\",\\n';\nprompt += '    \"suggestedTags\": [\"tag1\", \"tag2\"]\\n';\nprompt += '  }\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2648-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to analyze voice and generate blog",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2648-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { voiceAnalysis: {}, newPost: { title: 'Generated Post', content: raw, metaDescription: '', suggestedTags: [] } }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message with blog draft",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar voice = ai.voiceAnalysis || {};\nvar post = ai.newPost || {};\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'New Blog Draft Ready', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Title:* ' + (post.title || 'Untitled') } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Topic:* ' + $.input.blogTopic + '\\n*Voice Source:* <' + $.input.blogUrl + '|Original Post>' } });\nblocks.push({ type: 'divider' });\nif (voice.tone) {\n  var voiceText = '*Brand Voice Analysis:*\\n';\n  voiceText += '- Tone: ' + voice.tone + '\\n';\n  voiceText += '- Style: ' + (voice.style || '') + '\\n';\n  voiceText += '- Vocabulary: ' + (voice.vocabulary || '') + '\\n';\n  if (voice.keyCharacteristics && voice.keyCharacteristics.length > 0) {\n    voiceText += '- Key traits: ' + voice.keyCharacteristics.join(', ');\n  }\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: voiceText.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\nvar contentPreview = (post.content || '').slice(0, 2500);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Blog Content:*\\n' + contentPreview } });\nif (post.metaDescription) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Meta Description:* ' + post.metaDescription } });\n}\nif (post.suggestedTags && post.suggestedTags.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Tags:* ' + post.suggestedTags.join(', ') } });\n}\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Generated with Firecrawl + Claude AI via One CLI' }] });\nvar fallback = 'Blog Draft: ' + (post.title || $.input.blogTopic);\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post blog draft to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

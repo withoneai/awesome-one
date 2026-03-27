@@ -1,0 +1,165 @@
+{
+  "key": "n8n-3054-ai-video-script-generator",
+  "name": "AI Video Script and Production Plan Generator",
+  "description": "Takes a text topic, researches trending content via Exa, generates a detailed video script with Claude AI including avatar selection and voice notes, and saves the production plan to Google Drive with a Slack notification.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3054,
+    "url": "https://n8n.io/workflows/3054",
+    "originalName": "Generate AI videos from text with HeyGen and voice cloning.",
+    "totalViews": 22373,
+    "rank": 274,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for content research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Video topic or text to convert into a video script"
+    },
+    "targetDuration": {
+      "type": "string",
+      "required": false,
+      "default": "60",
+      "description": "Target video duration in seconds"
+    },
+    "tone": {
+      "type": "string",
+      "required": false,
+      "default": "professional",
+      "description": "Video tone: professional, casual, educational, entertaining"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for notification"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildExaQuery",
+      "name": "Build Exa query for trending content research",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic || '';\nconst query = 'trending video content ' + topic + ' script examples';\nreturn { query };"
+      }
+    },
+    {
+      "id": "researchTrending",
+      "name": "Research trending content via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildExaQuery.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 400
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for video script generation",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic;\nconst duration = $.input.targetDuration || '60';\nconst tone = $.input.tone || 'professional';\nconst results = $.steps.researchTrending.response.results || [];\nlet research = '';\nresults.forEach((r, i) => { research += (i + 1) + '. ' + (r.title || r.url) + ': ' + (r.text || '').slice(0, 200) + '\\n'; });\n\nconst prompt = 'You are an expert video scriptwriter and AI video producer. Create a comprehensive video production plan.\\n\\nTOPIC: ' + topic + '\\nDURATION: ' + duration + ' seconds\\nTONE: ' + tone + '\\n\\nTRENDING RESEARCH:\\n' + research + '\\n\\nReturn ONLY valid JSON:\\n{\\n  \"title\": \"video title\",\\n  \"hook\": \"attention-grabbing opening line (first 3 seconds)\",\\n  \"script\": [\\n    { \"timestamp\": \"0:00-0:05\", \"narration\": \"spoken text\", \"visualDescription\": \"what appears on screen\", \"emotion\": \"tone of delivery\" }\\n  ],\\n  \"totalDuration\": \"estimated duration\",\\n  \"avatarRecommendation\": { \"type\": \"professional/casual/animated\", \"gender\": \"male/female/neutral\", \"ageRange\": \"young/middle/mature\" },\\n  \"voiceNotes\": { \"pace\": \"slow/medium/fast\", \"style\": \"authoritative/friendly/energetic\", \"emphasis\": [\"key words to emphasize\"] },\\n  \"backgroundMusic\": \"music style suggestion\",\\n  \"callToAction\": \"end CTA text\",\\n  \"tags\": [\"tag1\", \"tag2\"],\\n  \"thumbnailIdea\": \"thumbnail description\"\\n}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3054-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Generate video script with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3054-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'Video Script', script: [{ narration: raw }] }; }"
+      }
+    },
+    {
+      "id": "buildDocument",
+      "name": "Build production plan document",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nlet doc = 'VIDEO PRODUCTION PLAN\\n';\ndoc += '====================\\n\\n';\ndoc += 'Title: ' + (ai.title || 'Untitled') + '\\n';\ndoc += 'Duration: ' + (ai.totalDuration || $.input.targetDuration + 's') + '\\n';\ndoc += 'Tone: ' + $.input.tone + '\\n';\ndoc += 'Date: ' + new Date().toISOString().split('T')[0] + '\\n\\n';\ndoc += 'HOOK: ' + (ai.hook || '') + '\\n\\n';\ndoc += 'SCRIPT\\n------\\n';\nif (ai.script) { ai.script.forEach(s => { doc += '[' + (s.timestamp || '') + '] ' + (s.narration || '') + '\\n  Visual: ' + (s.visualDescription || '') + '\\n  Emotion: ' + (s.emotion || '') + '\\n\\n'; }); }\ndoc += 'AVATAR: ' + JSON.stringify(ai.avatarRecommendation || {}) + '\\n';\ndoc += 'VOICE: ' + JSON.stringify(ai.voiceNotes || {}) + '\\n';\ndoc += 'MUSIC: ' + (ai.backgroundMusic || '') + '\\n';\ndoc += 'CTA: ' + (ai.callToAction || '') + '\\n';\ndoc += 'THUMBNAIL: ' + (ai.thumbnailIdea || '') + '\\n';\nif (ai.tags) { doc += 'TAGS: ' + ai.tags.join(', ') + '\\n'; }\nconst slackText = 'Video script ready: ' + (ai.title || 'Untitled') + ' (' + (ai.totalDuration || '') + ') - ' + (ai.script || []).length + ' scenes';\nreturn { doc, title: (ai.title || 'Video Script') + ' - Production Plan', slackText };"
+      }
+    },
+    {
+      "id": "saveToDrive",
+      "name": "Save production plan to Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {
+          "name": "$.steps.buildDocument.output.title",
+          "content": "$.steps.buildDocument.output.doc",
+          "mimeType": "text/plain"
+        }
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Notify Slack of completion",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildDocument.output.slackText"
+        }
+      }
+    }
+  ]
+}

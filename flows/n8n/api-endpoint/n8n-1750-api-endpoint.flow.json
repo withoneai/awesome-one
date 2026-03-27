@@ -1,0 +1,128 @@
+{
+  "key": "n8n-1750-api-endpoint",
+  "name": "HTTP Data Fetcher with AI Summary",
+  "description": "Fetch data from any URL, have Claude AI summarize and analyze the content, then post a formatted report to Slack using Block Kit.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1750,
+    "url": "https://n8n.io/workflows/1750",
+    "originalName": "Creating an API endpoint",
+    "totalViews": 449487,
+    "rank": 4,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "URL to fetch and analyze (any web page or API endpoint)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the summary"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeUrl",
+      "name": "Fetch content from the provided URL",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.url",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "extractContent",
+      "name": "Extract and prepare fetched content",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.scrapeUrl.response || {};\nconst data = resp.data || resp;\nconst md = data.markdown || data.content || JSON.stringify(data).slice(0, 5000);\nconst url = $.input.url;\nconst wordCount = md.split(/\\s+/).length;\nconst preview = md.slice(0, 4000);\nreturn { content: preview, wordCount, url };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI analysis prompt",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.extractContent.output;\nconst prompt = `You are a content analyst. Analyze and summarize the following web page content.\n\nSOURCE URL: ${data.url}\nWORD COUNT: ${data.wordCount}\n\nCONTENT:\n${data.content}\n\nProvide a comprehensive analysis. Return ONLY valid JSON with these keys:\n{\n  \"title\": \"<page title or topic>\",\n  \"summary\": \"<3-5 sentence summary of the main content>\",\n  \"keyPoints\": [\"<point1>\", \"<point2>\", \"<point3>\"],\n  \"contentType\": \"<article|documentation|product|blog|api|other>\",\n  \"sentiment\": \"<positive|neutral|negative|mixed>\",\n  \"actionableInsights\": [\"<insight1>\", \"<insight2>\"]\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1750-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1750-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'Analysis', summary: raw.slice(0, 1000), keyPoints: [], contentType: 'unknown', sentiment: 'neutral', actionableInsights: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst url = $.input.url;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ai.title || 'URL Analysis Report', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Source:* <' + url + '|' + url + '>\\n*Type:* ' + (ai.contentType || 'unknown') + ' | *Sentiment:* ' + (ai.sentiment || 'neutral') } });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary*\\n' + (ai.summary || 'No summary available.') } });\nblocks.push({ type: 'divider' });\n\nif (ai.keyPoints && ai.keyPoints.length > 0) {\n  let kp = '*Key Points*\\n';\n  ai.keyPoints.forEach((p, i) => { kp += (i + 1) + '. ' + p + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kp } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.actionableInsights && ai.actionableInsights.length > 0) {\n  let ins = '*Actionable Insights*\\n';\n  ai.actionableInsights.forEach((a, i) => { ins += ':point_right: ' + a + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ins } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Fetched and analyzed by One CLI + Claude AI' }] });\n\nconst fallback = 'URL Analysis: ' + (ai.title || url);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post analysis to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

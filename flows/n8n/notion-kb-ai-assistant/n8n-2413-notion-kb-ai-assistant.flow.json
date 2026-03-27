@@ -1,0 +1,168 @@
+{
+  "key": "n8n-2413-notion-kb-ai-assistant",
+  "name": "Notion Knowledge Base AI Assistant",
+  "description": "Searches a Notion knowledge base for relevant pages matching a user question, retrieves their content, uses Claude AI to synthesize an accurate answer grounded in the Notion content, and posts the answer to Slack with Block Kit formatting and source citations.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2413,
+    "url": "https://n8n.io/workflows/2413",
+    "originalName": "Notion knowledge base AI assistant",
+    "totalViews": 50565,
+    "rank": 120,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "notionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Notion connection key for searching and reading pages",
+      "connection": {
+        "platform": "notion"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the answer",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The user's question to answer from the Notion knowledge base"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchNotion",
+      "name": "Search Notion pages matching the question",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5En67fz04::-CJAS419SVWm7L2l6brp6A",
+        "connectionKey": "$.input.notionKey",
+        "data": {
+          "query": "$.input.question",
+          "page_size": 5,
+          "sort": {
+            "direction": "descending",
+            "timestamp": "last_edited_time"
+          }
+        }
+      }
+    },
+    {
+      "id": "extractPageIds",
+      "name": "Extract page IDs and titles from search results",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchNotion.response.results || [];\nconst pages = results.filter(r => r.object === 'page' || r.object === 'database').slice(0, 5).map(r => {\n  let title = '';\n  if (r.properties) {\n    const titleProp = Object.values(r.properties).find(p => p.type === 'title');\n    if (titleProp && titleProp.title && titleProp.title.length > 0) {\n      title = titleProp.title.map(t => t.plain_text || '').join('');\n    }\n  }\n  if (!title && r.properties && r.properties.Name && r.properties.Name.title) {\n    title = r.properties.Name.title.map(t => t.plain_text || '').join('');\n  }\n  return { id: r.id, title: title || 'Untitled', url: r.url || '', lastEdited: r.last_edited_time || '' };\n});\nreturn { pages, pageCount: pages.length };"
+      }
+    },
+    {
+      "id": "fetchPageContents",
+      "name": "Fetch block children for each page",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractPageIds.output.pages",
+        "as": "page",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "getBlocks",
+            "name": "Retrieve page block children",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "notion",
+              "actionId": "conn_mod_def::GJ5Emwl98w0::aNRlxEQlS3yp9jUDqcM4XA",
+              "connectionKey": "$.input.notionKey",
+              "pathVars": {
+                "blockId": "$.loop.page.id"
+              },
+              "queryParams": {
+                "page_size": 100
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileContent",
+      "name": "Compile all Notion page content into text",
+      "type": "code",
+      "code": {
+        "source": "const pages = $.steps.extractPageIds.output.pages;\nconst iterations = $.steps.fetchPageContents.response.iterations || [];\n\nlet compiled = '';\npages.forEach((page, i) => {\n  compiled += '=== PAGE ' + (i + 1) + ': ' + page.title + ' ===\\n';\n  if (page.url) compiled += 'URL: ' + page.url + '\\n';\n  if (page.lastEdited) compiled += 'Last edited: ' + page.lastEdited + '\\n';\n  compiled += '\\n';\n\n  const iter = iterations[i];\n  if (iter && iter.getBlocks && iter.getBlocks.response) {\n    const blocks = iter.getBlocks.response.results || [];\n    blocks.forEach(block => {\n      const type = block.type;\n      if (block[type] && block[type].rich_text) {\n        const text = block[type].rich_text.map(t => t.plain_text || '').join('');\n        if (text) {\n          if (type === 'heading_1') compiled += '# ' + text + '\\n';\n          else if (type === 'heading_2') compiled += '## ' + text + '\\n';\n          else if (type === 'heading_3') compiled += '### ' + text + '\\n';\n          else if (type === 'bulleted_list_item') compiled += '- ' + text + '\\n';\n          else if (type === 'numbered_list_item') compiled += '1. ' + text + '\\n';\n          else if (type === 'to_do') compiled += '[ ] ' + text + '\\n';\n          else compiled += text + '\\n';\n        }\n      }\n    });\n  }\n  compiled += '\\n\\n';\n});\n\nreturn { compiled: compiled.slice(0, 30000), pageCount: pages.length, pageTitles: pages.map(p => p.title) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for knowledge base Q&A",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileContent.output;\nconst question = $.input.question;\n\nlet prompt = 'You are a knowledgeable assistant that answers questions using a Notion knowledge base. Answer the following question accurately using ONLY the information found in the Notion pages below. If the answer is not in the pages, say so.\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n\\n';\nprompt += 'NOTION KNOWLEDGE BASE (' + d.pageCount + ' pages found):\\n';\nprompt += d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Answer based ONLY on the Notion content provided\\n';\nprompt += '- Cite which page(s) the information comes from using [Page N] notation\\n';\nprompt += '- If information is partial or unclear, note that\\n';\nprompt += '- If the answer is not found in any page, clearly state that\\n';\nprompt += '- Use Slack mrkdwn: *bold* (NOT **bold**), _italic_, numbered lists\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"comprehensive answer citing [Page N] sources\",\\n';\nprompt += '  \"confidence\": \"high|medium|low\",\\n';\nprompt += '  \"sourcesUsed\": [{ \"pageNumber\": 1, \"title\": \"page title\", \"relevance\": \"why relevant\" }],\\n';\nprompt += '  \"followUpQuestions\": [\"suggested follow-up 1\", \"suggested follow-up 2\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2413-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI knowledge base Q&A",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2413-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, confidence: 'medium', sourcesUsed: [], followUpQuestions: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit answer",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst pageTitles = $.steps.compileContent.output.pageTitles || [];\n\nconst confidenceEmoji = ai.confidence === 'high' ? ':large_green_circle:' : ai.confidence === 'low' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Notion Knowledge Base Answer', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: confidenceEmoji + ' *Confidence:* ' + (ai.confidence || 'medium') + ' | *Pages searched:* ' + pageTitles.length } });\nblocks.push({ type: 'divider' });\n\nconst answer = (ai.answer || 'No answer generated.').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: answer } });\nblocks.push({ type: 'divider' });\n\nif (ai.sourcesUsed && ai.sourcesUsed.length > 0) {\n  let srcText = '*Sources:*\\n';\n  ai.sourcesUsed.forEach(s => {\n    srcText += '[Page ' + s.pageNumber + '] *' + s.title + '* - ' + s.relevance + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText.slice(0, 2900) } });\n}\n\nif (ai.followUpQuestions && ai.followUpQuestions.length > 0) {\n  let fqText = '*Suggested follow-ups:*\\n';\n  ai.followUpQuestions.forEach((q, i) => { fqText += (i + 1) + '. ' + q + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: fqText } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Notion + Claude AI | One CLI' }] });\n\nconst fallback = 'KB Answer: ' + (ai.answer || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

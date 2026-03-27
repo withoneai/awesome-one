@@ -1,0 +1,166 @@
+{
+  "key": "n8n-3617-financial-report-generator",
+  "name": "Generate Monthly Financial Reports with AI Analysis",
+  "description": "Reads financial data from a Google Sheet, uses Claude AI to generate comprehensive financial analysis with trends and recommendations, creates an HTML report, sends the report via Gmail, and posts a summary to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3617,
+    "url": "https://n8n.io/workflows/3617",
+    "originalName": "Generate monthly financial reports with Gemini AI, SQL, and Outlook",
+    "totalViews": 21745,
+    "rank": 283,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for financial data source",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending reports",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID containing financial data"
+    },
+    "dataRange": {
+      "type": "string",
+      "required": false,
+      "default": "Financial Data!A:F",
+      "description": "Sheet range containing financial data (columns: Date, Category, Description, Amount, Type, Account)"
+    },
+    "reportRecipient": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to send the financial report to"
+    },
+    "companyName": {
+      "type": "string",
+      "required": false,
+      "default": "Company",
+      "description": "Company name for the report header"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for report notification"
+    }
+  },
+  "steps": [
+    {
+      "id": "readFinancialData",
+      "name": "Read financial data from Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.dataRange",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "processFinancialData",
+      "name": "Process and summarize financial data",
+      "type": "code",
+      "code": {
+        "source": "const values = $.steps.readFinancialData.response.values || [];\nlet dataText = '';\nlet totalIncome = 0;\nlet totalExpenses = 0;\nlet categories = {};\n\nvalues.forEach((row, i) => {\n  if (i === 0) return;\n  const date = row[0] || '';\n  const category = row[1] || 'Uncategorized';\n  const desc = row[2] || '';\n  const amount = parseFloat(row[3]) || 0;\n  const type = (row[4] || '').toLowerCase();\n\n  if (type === 'income' || type === 'revenue') { totalIncome += amount; }\n  else { totalExpenses += Math.abs(amount); }\n\n  if (!categories[category]) categories[category] = 0;\n  categories[category] += Math.abs(amount);\n\n  dataText += date + ' | ' + category + ' | ' + desc + ' | ' + amount + ' | ' + type + '\\n';\n});\n\nconst netIncome = totalIncome - totalExpenses;\nlet catSummary = '';\nObject.keys(categories).sort((a, b) => categories[b] - categories[a]).forEach(cat => {\n  catSummary += cat + ': $' + categories[cat].toFixed(2) + '\\n';\n});\n\nreturn {\n  dataText: dataText.slice(0, 5000),\n  totalIncome,\n  totalExpenses,\n  netIncome,\n  catSummary,\n  transactionCount: values.length - 1,\n  categoryCount: Object.keys(categories).length\n};"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for financial analysis",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.processFinancialData.output;\nconst company = $.input.companyName || 'Company';\n\nconst prompt = 'You are a senior financial analyst. Generate a comprehensive monthly financial report.\\n\\nCOMPANY: ' + company + '\\n\\nFINANCIAL SUMMARY:\\n- Total Income: $' + d.totalIncome.toFixed(2) + '\\n- Total Expenses: $' + d.totalExpenses.toFixed(2) + '\\n- Net Income: $' + d.netIncome.toFixed(2) + '\\n- Transactions: ' + d.transactionCount + '\\n\\nBY CATEGORY:\\n' + d.catSummary + '\\n\\nTRANSACTION DATA:\\n' + d.dataText + '\\n\\nReturn ONLY valid JSON:\\n{\\n  \"reportTitle\": \"Monthly Financial Report - ' + company + '\",\\n  \"period\": \"report period description\",\\n  \"executiveSummary\": \"2-3 sentence executive summary\",\\n  \"revenueAnalysis\": { \"total\": 0, \"trend\": \"up/down/stable\", \"insights\": [\"insight1\"] },\\n  \"expenseAnalysis\": { \"total\": 0, \"topCategories\": [{ \"name\": \"cat\", \"amount\": 0, \"percentage\": \"0%\" }], \"insights\": [\"insight1\"] },\\n  \"profitability\": { \"netIncome\": 0, \"margin\": \"0%\", \"assessment\": \"assessment text\" },\\n  \"trends\": [\"trend 1\", \"trend 2\"],\\n  \"recommendations\": [{ \"priority\": \"high/medium/low\", \"action\": \"recommendation\" }],\\n  \"risks\": [\"risk 1\"],\\n  \"outlook\": \"next month outlook\"\\n}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3617-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Generate financial analysis with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3617-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { executiveSummary: raw, recommendations: [] }; }"
+      }
+    },
+    {
+      "id": "buildEmailReport",
+      "name": "Build HTML email report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst d = $.steps.processFinancialData.output;\nconst company = $.input.companyName || 'Company';\n\nlet html = '<h1>' + (ai.reportTitle || 'Monthly Financial Report') + '</h1>';\nhtml += '<p><strong>Period:</strong> ' + (ai.period || new Date().toISOString().split('T')[0]) + '</p>';\nhtml += '<h2>Executive Summary</h2><p>' + (ai.executiveSummary || '') + '</p>';\nhtml += '<h2>Financial Overview</h2>';\nhtml += '<table border=\"1\" cellpadding=\"8\"><tr><th>Metric</th><th>Amount</th></tr>';\nhtml += '<tr><td>Total Revenue</td><td>$' + d.totalIncome.toFixed(2) + '</td></tr>';\nhtml += '<tr><td>Total Expenses</td><td>$' + d.totalExpenses.toFixed(2) + '</td></tr>';\nhtml += '<tr><td><strong>Net Income</strong></td><td><strong>$' + d.netIncome.toFixed(2) + '</strong></td></tr></table>';\n\nif (ai.expenseAnalysis && ai.expenseAnalysis.topCategories) {\n  html += '<h2>Top Expense Categories</h2><ul>';\n  ai.expenseAnalysis.topCategories.forEach(c => { html += '<li>' + c.name + ': $' + c.amount + ' (' + c.percentage + ')</li>'; });\n  html += '</ul>';\n}\n\nif (ai.recommendations && ai.recommendations.length > 0) {\n  html += '<h2>Recommendations</h2><ol>';\n  ai.recommendations.forEach(r => { html += '<li>[' + r.priority + '] ' + r.action + '</li>'; });\n  html += '</ol>';\n}\n\nhtml += '<h2>Outlook</h2><p>' + (ai.outlook || '') + '</p>';\nhtml += '<hr><p><em>Generated on ' + new Date().toISOString().split('T')[0] + '</em></p>';\n\nconst subject = (ai.reportTitle || 'Monthly Financial Report') + ' - ' + new Date().toISOString().split('T')[0];\nconst slackText = 'Financial report sent: ' + company + ' | Revenue: $' + d.totalIncome.toFixed(2) + ' | Expenses: $' + d.totalExpenses.toFixed(2) + ' | Net: $' + d.netIncome.toFixed(2);\nreturn { html, subject, slackText };"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send financial report via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.reportRecipient",
+          "subject": "$.steps.buildEmailReport.output.subject",
+          "body": "$.steps.buildEmailReport.output.html",
+          "isHtml": true
+        }
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Notify Slack of report delivery",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildEmailReport.output.slackText"
+        }
+      }
+    }
+  ]
+}

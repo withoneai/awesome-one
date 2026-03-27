@@ -1,0 +1,136 @@
+{
+  "key": "n8n-7456-cv-screening-ai",
+  "name": "AI-powered CV screening and candidate analysis",
+  "description": "Reads job application data from Google Sheets, uses Claude AI to screen and score each candidate against job requirements, and updates the spreadsheet with AI analysis results including scores, recommendations, and detailed feedback.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 7456,
+    "url": "https://n8n.io/workflows/7456",
+    "originalName": "Automate CV screening with AI candidate analysis",
+    "totalViews": 24235,
+    "rank": 261,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for reading applications and saving results",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting screening summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for screening results"
+    },
+    "jobTitle": {
+      "type": "string",
+      "required": true,
+      "description": "Job title being hired for (e.g. 'Senior Frontend Engineer')"
+    },
+    "jobDescription": {
+      "type": "string",
+      "required": true,
+      "description": "Full job description with requirements, qualifications, and responsibilities"
+    },
+    "candidateData": {
+      "type": "string",
+      "required": true,
+      "description": "Candidate information (name, email, CV summary, skills, experience) as text or JSON"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for CV screening",
+      "type": "code",
+      "code": {
+        "source": "var prompt = 'You are a senior HR recruiter and talent acquisition specialist. Screen the following candidate(s) against the job description.\\n\\n';\nprompt += 'JOB TITLE: ' + $.input.jobTitle + '\\n';\nprompt += 'JOB DESCRIPTION:\\n' + $.input.jobDescription + '\\n\\n';\nprompt += 'CANDIDATE DATA:\\n' + $.input.candidateData + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Score each candidate 1-100 on overall fit\\n';\nprompt += '- Evaluate: technical skills, experience level, education, soft skills\\n';\nprompt += '- Identify red flags and standout qualities\\n';\nprompt += '- Provide specific interview questions tailored to each candidate\\n';\nprompt += '- Give a clear hire/no-hire recommendation with reasoning\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"candidates\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"name\": \"...\",\\n';\nprompt += '      \"overallScore\": 85,\\n';\nprompt += '      \"technicalScore\": 80,\\n';\nprompt += '      \"experienceScore\": 90,\\n';\nprompt += '      \"cultureFitScore\": 85,\\n';\nprompt += '      \"strengths\": [\"strength1\"],\\n';\nprompt += '      \"weaknesses\": [\"weakness1\"],\\n';\nprompt += '      \"redFlags\": [\"flag1\"],\\n';\nprompt += '      \"interviewQuestions\": [\"question1\"],\\n';\nprompt += '      \"recommendation\": \"Strong Hire|Hire|Maybe|No Hire\",\\n';\nprompt += '      \"reasoning\": \"Why this recommendation\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"summary\": \"Overall assessment of candidate pool\",\\n';\nprompt += '  \"topCandidate\": \"Name of strongest candidate\"\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-7456-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiScreen",
+      "name": "Run Claude AI for candidate screening",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-7456-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiScreen.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { candidates: [], summary: raw, topCandidate: '' }; }"
+      }
+    },
+    {
+      "id": "formatSheetData",
+      "name": "Format screening results for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar candidates = ai.candidates || [];\nvar date = new Date().toISOString().split('T')[0];\nvar sheetData = candidates.map(function(c) {\n  return {\n    'Candidate Name': c.name || '',\n    'Overall Score': c.overallScore || '',\n    'Technical Score': c.technicalScore || '',\n    'Experience Score': c.experienceScore || '',\n    'Culture Fit Score': c.cultureFitScore || '',\n    'Recommendation': c.recommendation || '',\n    'Strengths': (c.strengths || []).join('; ').slice(0, 200),\n    'Weaknesses': (c.weaknesses || []).join('; ').slice(0, 200),\n    'Red Flags': (c.redFlags || []).join('; ').slice(0, 200),\n    'Interview Questions': (c.interviewQuestions || []).join('; ').slice(0, 300),\n    'Reasoning': (c.reasoning || '').slice(0, 300),\n    'Job Title': $.input.jobTitle,\n    'Date Screened': date\n  };\n});\nreturn { sheetData: sheetData, candidateCount: candidates.length, date: date };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save screening results to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "title": "CV Screening - {{$.input.jobTitle}} - {{$.steps.formatSheetData.output.date}}",
+          "sheetTitle": "Screening Results",
+          "data": "$.steps.formatSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit screening summary",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar candidates = ai.candidates || [];\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'CV Screening Results: ' + $.input.jobTitle, emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Candidates Screened:*\\n' + candidates.length },\n  { type: 'mrkdwn', text: '*Top Candidate:*\\n' + (ai.topCandidate || 'N/A') }\n] });\nblocks.push({ type: 'divider' });\ncandidates.slice(0, 8).forEach(function(c) {\n  var emoji = ':large_green_circle:';\n  if (c.recommendation === 'No Hire') emoji = ':red_circle:';\n  if (c.recommendation === 'Maybe') emoji = ':large_yellow_circle:';\n  var text = emoji + ' *' + (c.name || 'Unknown') + '* - Score: ' + (c.overallScore || 'N/A') + '/100';\n  text += '\\n' + (c.recommendation || '') + ' | Tech: ' + (c.technicalScore || '') + ' | Exp: ' + (c.experienceScore || '') + ' | Culture: ' + (c.cultureFitScore || '');\n  text += '\\n_' + (c.reasoning || '').slice(0, 200) + '_';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text } });\n});\nblocks.push({ type: 'divider' });\nif (ai.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:* ' + ai.summary.slice(0, 1000) } });\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Screened with Claude AI via One CLI' }] });\nvar fallback = 'CV Screening: ' + candidates.length + ' candidates for ' + $.input.jobTitle;\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post screening summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

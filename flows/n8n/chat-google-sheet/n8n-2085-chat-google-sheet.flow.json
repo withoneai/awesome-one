@@ -1,0 +1,137 @@
+{
+  "key": "n8n-2085-chat-google-sheet",
+  "name": "Chat with Google Sheets data",
+  "description": "Reads data from a Google Sheets spreadsheet, uses Claude to answer natural language questions about the data, and posts the answer to Slack with rich Block Kit formatting including data summaries and insights.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2085,
+    "url": "https://n8n.io/workflows/2085",
+    "originalName": "Chat with a Google Sheet using AI",
+    "totalViews": 61776,
+    "rank": 99,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for reading data",
+      "default": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting answers",
+      "default": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID (from the URL)"
+    },
+    "range": {
+      "type": "string",
+      "required": true,
+      "description": "Sheet range to read (e.g. 'Sheet1!A1:Z1000')"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Natural language question about the spreadsheet data"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    }
+  },
+  "steps": [
+    {
+      "id": "readSheet",
+      "name": "Read data from Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GJ30lYkSqLk::IOnDiKqfQ_2FtFCahohidA",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.range"
+        }
+      }
+    },
+    {
+      "id": "parseSheetData",
+      "name": "Parse and format sheet data for analysis",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.readSheet.response || {};\nconst values = response.values || [];\nif (values.length === 0) return { dataText: 'No data found in the spreadsheet.', rowCount: 0, headers: [], columnCount: 0 };\n\nconst headers = values[0] || [];\nconst rows = values.slice(1);\n\nlet dataText = 'HEADERS: ' + headers.join(' | ') + '\\n\\n';\nrows.forEach((row, i) => {\n  if (i < 100) {\n    dataText += 'Row ' + (i+1) + ': ';\n    headers.forEach((h, hi) => {\n      dataText += h + '=' + (row[hi] || '') + (hi < headers.length - 1 ? ' | ' : '');\n    });\n    dataText += '\\n';\n  }\n});\n\nif (rows.length > 100) {\n  dataText += '\\n... and ' + (rows.length - 100) + ' more rows (showing first 100)\\n';\n}\n\nreturn { dataText: dataText.slice(0, 12000), rowCount: rows.length, headers, columnCount: headers.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for data Q&A",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are a data analyst expert. Answer the following question about spreadsheet data. Be precise and data-driven in your response.\\n\\nSPREADSHEET DATA (${$.steps.parseSheetData.output.rowCount} rows, ${$.steps.parseSheetData.output.columnCount} columns):\\n${$.steps.parseSheetData.output.dataText}\\n\\nQUESTION: ${$.input.question}\\n\\nINSTRUCTIONS:\\n- Answer the question using only the data provided\\n- Include specific numbers, calculations, or data points from the sheet\\n- If the question requires aggregation (sum, average, count, etc.), compute it\\n- If the question cannot be answered from the data, explain why\\n- Use Slack mrkdwn formatting: *bold*, _italic_, numbered lists\\n- Slack rules: use *bold* (NOT **bold**). No markdown tables. No # headings.\\n- For lists of data, use numbered lists not tables\\n\\nReturn ONLY valid JSON:\\n{\\n  \"answer\": \"<detailed answer in Slack mrkdwn>\",\\n  \"dataInsights\": [\"<insight1>\", \"<insight2>\"],\\n  \"calculationsPerformed\": [\"<calc1>\", \"<calc2>\"],\\n  \"confidence\": \"high|medium|low\",\\n  \"rowsAnalyzed\": ${$.steps.parseSheetData.output.rowCount}\\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2085-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for data analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2085-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, dataInsights: [], calculationsPerformed: [], confidence: 'medium', rowsAnalyzed: 0 }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit data answer",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst question = $.input.question;\nconst confidenceEmoji = ai.confidence === 'high' ? ':large_green_circle:' : ai.confidence === 'low' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Spreadsheet Data Answer' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No answer generated.').slice(0, 1900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: answerText } });\nblocks.push({ type: 'divider' });\n\nif (ai.dataInsights && ai.dataInsights.length > 0) {\n  let insightsText = '*Data Insights:*\\n';\n  ai.dataInsights.forEach((ins, i) => { insightsText += (i+1) + '. ' + ins + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: insightsText.slice(0, 1900) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.calculationsPerformed && ai.calculationsPerformed.length > 0) {\n  let calcText = '*Calculations:*\\n';\n  ai.calculationsPerformed.forEach((c, i) => { calcText += (i+1) + '. ' + c + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: calcText.slice(0, 1900) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: confidenceEmoji + ' Confidence: *' + (ai.confidence || 'medium') + '* | Rows analyzed: *' + (ai.rowsAnalyzed || $.steps.parseSheetData.output.rowCount) + '* | Columns: *' + $.steps.parseSheetData.output.columnCount + '*' }] });\n\nconst fallback = 'Data answer for: ' + question;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post data answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

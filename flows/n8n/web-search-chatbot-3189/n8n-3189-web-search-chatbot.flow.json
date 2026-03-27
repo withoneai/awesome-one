@@ -1,0 +1,186 @@
+{
+  "key": "n8n-3189-web-search-chatbot",
+  "name": "Web search chatbot with Exa and Firecrawl deep scraping",
+  "description": "Takes a user question, performs a web search with Exa, deep-scrapes the most relevant results with Firecrawl, uses Claude AI to synthesize a detailed answer with source citations, and posts it to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3189,
+    "url": "https://n8n.io/workflows/3189",
+    "originalName": "Build a web search chatbot with GPT-4o and MCP Brave Search",
+    "totalViews": 24607,
+    "rank": 258,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for deep scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the answer",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for the chatbot response"
+    },
+    "userMessage": {
+      "type": "string",
+      "required": true,
+      "description": "User question or message to answer using web search (e.g. 'What are the best practices for Kubernetes security in 2025?')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build search query from user message",
+      "type": "code",
+      "code": {
+        "source": "var message = $.input.userMessage || '';\nreturn { query: message };"
+      }
+    },
+    {
+      "id": "searchWeb",
+      "name": "Search the web with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "useAutoprompt": true,
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "extractTopResults",
+      "name": "Extract top results and pick best for deep scraping",
+      "type": "code",
+      "code": {
+        "source": "var results = $.steps.searchWeb.response.results || [];\nvar quickSummary = '';\nvar topUrls = [];\nresults.forEach(function(r, i) {\n  quickSummary += 'RESULT ' + (i + 1) + ': ' + (r.title || '') + '\\n';\n  quickSummary += 'URL: ' + (r.url || '') + '\\n';\n  quickSummary += (r.text || '').slice(0, 1500) + '\\n\\n';\n  if (i < 3 && r.url) topUrls.push(r.url);\n});\nreturn { quickSummary: quickSummary, topUrls: topUrls, resultCount: results.length };"
+      }
+    },
+    {
+      "id": "deepScrape",
+      "name": "Deep scrape top 3 results with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractTopResults.output.topUrls",
+        "as": "pageUrl",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapePage",
+            "name": "Scrape page content",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.pageUrl",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileAll",
+      "name": "Compile search results and deep scrape content",
+      "type": "code",
+      "code": {
+        "source": "var quick = $.steps.extractTopResults.output.quickSummary;\nvar urls = $.steps.extractTopResults.output.topUrls;\nvar iterations = $.steps.deepScrape.response.iterations || [];\nvar deepContent = '';\niterations.forEach(function(iter, i) {\n  var resp = (iter.scrapePage && iter.scrapePage.response && iter.scrapePage.response.data) ? iter.scrapePage.response.data : null;\n  if (resp && resp.markdown) {\n    deepContent += '=== DEEP CONTENT ' + (i + 1) + ' ===\\n';\n    deepContent += 'URL: ' + (urls[i] || '') + '\\n';\n    deepContent += resp.markdown.slice(0, 3000) + '\\n\\n';\n  }\n});\nvar allContent = quick + '\\n--- DEEP SCRAPES ---\\n' + deepContent;\nreturn { allContent: allContent.slice(0, 15000) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for comprehensive answer",
+      "type": "code",
+      "code": {
+        "source": "var prompt = 'You are an expert assistant. Answer the user\\'s question using the web search results and deep-scraped content provided. Be thorough, accurate, and cite your sources.\\n\\n';\nprompt += 'USER QUESTION: ' + $.input.userMessage + '\\n\\n';\nprompt += 'WEB SOURCES:\\n' + $.steps.compileAll.output.allContent + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Provide a complete, well-structured answer\\n';\nprompt += '- Use [1], [2], etc. to cite sources\\n';\nprompt += '- Include code examples or step-by-step instructions if relevant\\n';\nprompt += '- Be factual and note any uncertainty\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"Full detailed answer with citations\",\\n';\nprompt += '  \"tldr\": \"1-2 sentence summary\",\\n';\nprompt += '  \"sources\": [{ \"num\": 1, \"title\": \"...\", \"url\": \"...\" }],\\n';\nprompt += '  \"relatedTopics\": [\"topic1\"]\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3189-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnswer",
+      "name": "Run Claude AI to generate answer",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3189-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnswer.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, tldr: '', sources: [], relatedTopics: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit chatbot response",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar blocks = [];\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Q:* ' + $.input.userMessage } });\nblocks.push({ type: 'divider' });\nif (ai.tldr) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*TL;DR:* ' + ai.tldr } });\n  blocks.push({ type: 'divider' });\n}\nvar answerChunks = [];\nvar fullAnswer = ai.answer || '';\nfor (var idx = 0; idx < fullAnswer.length; idx += 2800) {\n  answerChunks.push(fullAnswer.slice(idx, idx + 2800));\n}\nanswerChunks.slice(0, 3).forEach(function(chunk) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: chunk } });\n});\nif (ai.sources && ai.sources.length > 0) {\n  blocks.push({ type: 'divider' });\n  var srcText = '*Sources:*\\n';\n  ai.sources.forEach(function(s) { srcText += '[' + s.num + '] <' + s.url + '|' + s.title + '>\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText.slice(0, 1800) } });\n}\nif (ai.relatedTopics && ai.relatedTopics.length > 0) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: '*Related:* ' + ai.relatedTopics.join(', ') }] });\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa + Firecrawl + Claude AI via One CLI' }] });\nvar fallback = (ai.tldr || (ai.answer || '').slice(0, 200));\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post chatbot answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

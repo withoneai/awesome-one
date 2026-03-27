@@ -1,0 +1,136 @@
+{
+  "key": "n8n-5148-local-chatbot-retrieval",
+  "name": "RAG chatbot with retrieval augmented generation",
+  "description": "Uses Exa search to retrieve relevant knowledge for a user question, then Claude AI synthesizes an answer grounded in the retrieved sources. Posts the result to Slack with Block Kit formatting including source attribution.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5148,
+    "url": "https://n8n.io/workflows/5148",
+    "originalName": "Local chatbot with retrieval augmented generation (RAG)",
+    "totalViews": 112783,
+    "rank": 44,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search retrieval",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "User question to answer using RAG"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the answer"
+    },
+    "searchDomain": {
+      "type": "string",
+      "required": false,
+      "description": "Optional domain to restrict search (e.g. 'docs.mycompany.com')"
+    }
+  },
+  "steps": [
+    {
+      "id": "retrieveKnowledge",
+      "name": "Search for relevant knowledge via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileChunks",
+      "name": "Compile retrieved chunks for context",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.retrieveKnowledge.response.results || [];\nconst question = $.input.question;\n\nlet contextChunks = '';\nconst sources = [];\n\nresults.forEach((r, i) => {\n  const text = (r.text || '').slice(0, 1200);\n  contextChunks += '--- CHUNK ' + (i + 1) + ' ---\\n';\n  contextChunks += 'Title: ' + (r.title || 'Untitled') + '\\n';\n  contextChunks += 'URL: ' + r.url + '\\n';\n  if (r.publishedDate) contextChunks += 'Published: ' + r.publishedDate + '\\n';\n  contextChunks += 'Content:\\n' + text + '\\n\\n';\n\n  sources.push({ index: i + 1, title: r.title || 'Untitled', url: r.url, snippet: text.slice(0, 200) });\n});\n\nreturn { contextChunks, sources, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude RAG prompt",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst context = $.steps.compileChunks.output;\n\nlet prompt = 'You are a knowledgeable AI assistant using Retrieval Augmented Generation. Answer the user question based PRIMARILY on the retrieved knowledge chunks below. Ground your answer in the source material.\\n\\n';\nprompt += 'USER QUESTION: ' + question + '\\n\\n';\nprompt += 'RETRIEVED KNOWLEDGE:\\n' + context.contextChunks + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Synthesize information from multiple sources into a coherent answer\\n';\nprompt += '- Cite source numbers [1], [2], etc. when referencing information\\n';\nprompt += '- If sources conflict, note the discrepancy and present both views\\n';\nprompt += '- If retrieved knowledge is insufficient, say so and provide what you can\\n';\nprompt += '- Be thorough but concise\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"your synthesized answer with [N] source citations\",\\n';\nprompt += '  \"sourcesUsed\": [1, 2, 3],\\n';\nprompt += '  \"confidence\": \"high/medium/low\",\\n';\nprompt += '  \"keyPoints\": [\"main point 1\", \"main point 2\"],\\n';\nprompt += '  \"followUpQuestions\": [\"suggested follow-up question 1\"],\\n';\nprompt += '  \"summary\": \"one-sentence summary\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5148-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI RAG synthesis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5148-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, sourcesUsed: [], confidence: 'low', keyPoints: [], summary: 'See raw answer' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst sources = $.steps.compileChunks.output.sources || [];\nconst sourceCount = $.steps.compileChunks.output.sourceCount;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'RAG Knowledge Assistant', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No answer generated.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: answerText } });\n\nif (ai.keyPoints && ai.keyPoints.length > 0) {\n  blocks.push({ type: 'divider' });\n  let kpText = '*Key Points:*\\n';\n  ai.keyPoints.forEach((kp, i) => { kpText += '  ' + (i + 1) + '. ' + kp + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kpText.slice(0, 1800) } });\n}\n\nconst usedIndices = ai.sourcesUsed || [];\nconst usedSources = usedIndices.map(idx => sources.find(s => s.index === idx)).filter(Boolean);\nif (usedSources.length > 0) {\n  blocks.push({ type: 'divider' });\n  let srcText = '*Sources:*\\n';\n  usedSources.slice(0, 5).forEach(s => {\n    srcText += '[' + s.index + '] <' + s.url + '|' + s.title + '>\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText } });\n}\n\nif (ai.followUpQuestions && ai.followUpQuestions.length > 0) {\n  let fuText = '*Follow-up questions:*\\n';\n  ai.followUpQuestions.slice(0, 3).forEach(q => { fuText += '  - ' + q + '\\n'; });\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: fuText }] });\n}\n\nblocks.push({ type: 'divider' });\nconst confEmoji = ai.confidence === 'high' ? 'large_green_circle' : ai.confidence === 'medium' ? 'large_yellow_circle' : 'red_circle';\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':' + confEmoji + ': Confidence: ' + (ai.confidence || 'unknown') + ' | ' + sourceCount + ' sources retrieved' }] });\n\nconst fallbackText = 'RAG Answer: ' + (ai.summary || question);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post RAG answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

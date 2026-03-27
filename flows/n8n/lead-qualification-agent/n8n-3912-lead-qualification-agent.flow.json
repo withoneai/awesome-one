@@ -1,0 +1,204 @@
+{
+  "key": "n8n-3912-lead-qualification-agent",
+  "name": "AI Lead Qualification Agent with Gmail and Google Sheets",
+  "description": "Reads lead data from a Google Sheet, uses Claude AI to score and qualify each lead based on customizable criteria, sends personalized follow-up emails via Gmail for qualified leads, updates the sheet with scores, and posts a qualification summary to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3912,
+    "url": "https://n8n.io/workflows/3912",
+    "originalName": "Automate lead qualification with RetellAI Phone Agent, OpenAI GPT & Google Sheet",
+    "totalViews": 22198,
+    "rank": 277,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending follow-up emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID with lead data (columns: Name, Email, Company, Role, Source, Notes)"
+    },
+    "dataRange": {
+      "type": "string",
+      "required": false,
+      "default": "Leads!A:F",
+      "description": "Sheet range containing lead data"
+    },
+    "qualificationCriteria": {
+      "type": "string",
+      "required": false,
+      "default": "B2B SaaS companies, decision makers (VP/Director/C-level), company size 50-500 employees",
+      "description": "Ideal customer profile and qualification criteria"
+    },
+    "companyName": {
+      "type": "string",
+      "required": false,
+      "default": "Our Company",
+      "description": "Your company name for follow-up emails"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for qualification summary"
+    }
+  },
+  "steps": [
+    {
+      "id": "readLeads",
+      "name": "Read lead data from Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.dataRange",
+          "operation": "read"
+        }
+      }
+    },
+    {
+      "id": "parseLeads",
+      "name": "Parse lead data for AI processing",
+      "type": "code",
+      "code": {
+        "source": "const values = $.steps.readLeads.response.values || [];\nlet leadsText = '';\nlet leads = [];\n\nvalues.forEach((row, i) => {\n  if (i === 0) return;\n  const lead = { name: row[0] || '', email: row[1] || '', company: row[2] || '', role: row[3] || '', source: row[4] || '', notes: row[5] || '' };\n  leads.push(lead);\n  leadsText += (i) + '. ' + lead.name + ' | ' + lead.email + ' | ' + lead.company + ' | ' + lead.role + ' | Source: ' + lead.source + ' | Notes: ' + lead.notes + '\\n';\n});\n\nreturn { leads, leadsText, leadCount: leads.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for lead qualification",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.parseLeads.output;\nconst criteria = $.input.qualificationCriteria;\nconst company = $.input.companyName || 'Our Company';\n\nconst prompt = 'You are a sales qualification specialist. Score and qualify these leads based on the ideal customer profile.\\n\\nIDEAL CUSTOMER PROFILE:\\n' + criteria + '\\n\\nLEADS TO QUALIFY:\\n' + data.leadsText + '\\n\\nFor each lead, provide a qualification score and personalized follow-up email.\\n\\nReturn ONLY valid JSON:\\n{\\n  \"qualifiedLeads\": [\\n    {\\n      \"leadNumber\": 1,\\n      \"name\": \"lead name\",\\n      \"email\": \"email\",\\n      \"score\": 85,\\n      \"qualification\": \"Hot/Warm/Cold/Disqualified\",\\n      \"reasons\": [\"reason for score\"],\\n      \"followUpEmail\": {\\n        \"subject\": \"personalized email subject\",\\n        \"body\": \"short personalized follow-up email body (2-3 paragraphs)\"\\n      },\\n      \"nextAction\": \"suggested next step\"\\n    }\\n  ],\\n  \"summary\": {\\n    \"totalLeads\": 0,\\n    \"hot\": 0,\\n    \"warm\": 0,\\n    \"cold\": 0,\\n    \"disqualified\": 0,\\n    \"averageScore\": 0\\n  },\\n  \"insights\": [\"pattern or insight about the lead batch\"]\\n}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3912-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiQualify",
+      "name": "Qualify leads with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3912-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiQualify.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { qualifiedLeads: [], summary: { totalLeads: 0 }, insights: [raw.slice(0, 200)] }; }"
+      }
+    },
+    {
+      "id": "filterQualifiedLeads",
+      "name": "Filter to only Hot and Warm leads for follow-up",
+      "type": "code",
+      "code": {
+        "source": "const leads = $.steps.parseAI.output.qualifiedLeads || [];\nconst qualified = leads.filter(l => l.qualification === 'Hot' || l.qualification === 'Warm');\nreturn { qualified };"
+      }
+    },
+    {
+      "id": "sendFollowUps",
+      "name": "Send follow-up emails to qualified leads",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.filterQualifiedLeads.output.qualified",
+        "as": "lead",
+        "maxConcurrency": 2,
+        "steps": [
+          {
+            "id": "sendEmail",
+            "name": "Send follow-up email",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+              "connectionKey": "$.input.gmailKey",
+              "data": {
+                "to": "$.loop.lead.email",
+                "subject": "$.loop.lead.followUpEmail.subject",
+                "body": "$.loop.lead.followUpEmail.body"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "buildScoreRows",
+      "name": "Build score update rows for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst leads = ai.qualifiedLeads || [];\nconst summary = ai.summary || {};\nconst rows = leads.map(l => [\n  l.name || '',\n  l.email || '',\n  l.score || 0,\n  l.qualification || '',\n  (l.reasons || []).join('; '),\n  l.nextAction || '',\n  new Date().toISOString().split('T')[0]\n]);\n\nconst slackText = 'Lead qualification complete: ' + (summary.totalLeads || leads.length) + ' leads scored | Hot: ' + (summary.hot || 0) + ' | Warm: ' + (summary.warm || 0) + ' | Cold: ' + (summary.cold || 0) + ' | Avg Score: ' + (summary.averageScore || 0);\nreturn { rows, slackText };"
+      }
+    },
+    {
+      "id": "updateScores",
+      "name": "Write qualification scores to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "Scores",
+          "values": "$.steps.buildScoreRows.output.rows"
+        }
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Post qualification summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildScoreRows.output.slackText"
+        }
+      }
+    }
+  ]
+}

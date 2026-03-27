@@ -1,0 +1,86 @@
+{
+  "key": "n8n-5170-learn-json-basics",
+  "name": "Data Transformer: Fetch, Transform, and Post JSON to Slack",
+  "description": "Data transformer pipeline: fetches JSON data from a public API, transforms and enriches it with a code step, formats the output nicely, and posts the results to Slack using Block Kit.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5170,
+    "url": "https://n8n.io/workflows/5170",
+    "originalName": "Learn JSON basics with an interactive step-by-step tutorial for beginners",
+    "totalViews": 133878,
+    "rank": 34,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "apiUrl": {
+      "type": "string",
+      "required": false,
+      "default": "https://jsonplaceholder.typicode.com/posts",
+      "description": "Public API URL to fetch JSON from (default: JSONPlaceholder posts)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the transformed data"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchData",
+      "name": "Fetch JSON data from public API",
+      "type": "bash",
+      "bash": {
+        "command": "curl -s '{{$.input.apiUrl}}'",
+        "timeout": 30000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseRawJson",
+      "name": "Parse the raw API response",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.fetchData.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return { data: JSON.parse(raw), parseSuccess: true }; } catch(e) { return { data: [], parseSuccess: false, error: e.message, raw: raw.slice(0, 500) }; }"
+      }
+    },
+    {
+      "id": "transformData",
+      "name": "Transform and enrich the JSON data",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.parseRawJson.output.data;\nif (!Array.isArray(data)) {\n  const keys = Object.keys(data);\n  const summary = { type: 'object', keyCount: keys.length, keys: keys.slice(0, 20), sampleValues: {} };\n  keys.slice(0, 10).forEach(k => {\n    const val = data[k];\n    summary.sampleValues[k] = { type: typeof val, value: JSON.stringify(val).slice(0, 100) };\n  });\n  return { isArray: false, summary, itemCount: 1, transformed: [data] };\n}\nconst items = data.slice(0, 20);\nconst fieldTypes = {};\nif (items.length > 0) {\n  Object.keys(items[0]).forEach(k => {\n    const values = items.map(i => i[k]).filter(v => v != null);\n    const types = [...new Set(values.map(v => typeof v))];\n    fieldTypes[k] = { types: types.join('/'), sampleValues: values.slice(0, 3).map(v => String(v).slice(0, 50)) };\n  });\n}\nconst stats = {};\nObject.keys(items[0] || {}).forEach(k => {\n  const nums = items.map(i => Number(i[k])).filter(n => !isNaN(n));\n  if (nums.length > items.length * 0.5) {\n    stats[k] = { min: Math.min(...nums), max: Math.max(...nums), avg: Math.round(nums.reduce((a, b) => a + b, 0) / nums.length * 100) / 100 };\n  }\n});\nconst enriched = items.map((item, i) => ({ _index: i + 1, _keyCount: Object.keys(item).length, ...item }));\nreturn { isArray: true, itemCount: data.length, shownCount: items.length, fieldTypes, stats, transformed: enriched };"
+      }
+    },
+    {
+      "id": "buildBlocks",
+      "name": "Build Slack Block Kit message with formatted results",
+      "type": "code",
+      "code": {
+        "source": "const t = $.steps.transformData.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Data Transformer Results' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Source:* `' + $.input.apiUrl + '`\\n*Parse success:* ' + ($.steps.parseRawJson.output.parseSuccess ? ':white_check_mark:' : ':x:') } });\nblocks.push({ type: 'divider' });\nif (t.isArray) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Data Overview*\\nTotal items: *' + t.itemCount + '* | Shown: *' + t.shownCount + '*' } });\n  if (t.fieldTypes) {\n    let schemaText = '*Field Schema*\\n';\n    Object.entries(t.fieldTypes).forEach(([k, v]) => {\n      schemaText += '`' + k + '` _(' + v.types + ')_ \u2014 e.g. ' + v.sampleValues.slice(0, 2).join(', ') + '\\n';\n    });\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: schemaText.slice(0, 1900) } });\n  }\n  if (t.stats && Object.keys(t.stats).length > 0) {\n    const fields = Object.entries(t.stats).slice(0, 10).map(([k, v]) => ({\n      type: 'mrkdwn', text: '*' + k + '*\\nMin: ' + v.min + ' | Max: ' + v.max + ' | Avg: ' + v.avg\n    }));\n    for (let i = 0; i < fields.length; i += 2) {\n      blocks.push({ type: 'section', fields: fields.slice(i, i + 2) });\n    }\n  }\n  blocks.push({ type: 'divider' });\n  let sampleText = '*Sample Records*\\n';\n  t.transformed.slice(0, 3).forEach(item => {\n    sampleText += '```' + JSON.stringify(item, null, 2).slice(0, 500) + '```\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: sampleText.slice(0, 1900) } });\n} else {\n  const s = t.summary;\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Data Type:* Object\\n*Keys:* ' + s.keyCount + '\\n*Fields:* ' + s.keys.join(', ') } });\n  if (s.sampleValues) {\n    const fields = Object.entries(s.sampleValues).slice(0, 10).map(([k, v]) => ({\n      type: 'mrkdwn', text: '*' + k + '* _(' + v.type + ')_\\n' + v.value\n    }));\n    for (let i = 0; i < fields.length; i += 2) {\n      blocks.push({ type: 'section', fields: fields.slice(i, i + 2) });\n    }\n  }\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Fetched and transformed by One CLI Data Transformer' }] });\nreturn { blocks, fallback: 'Data Transformer: ' + t.itemCount + ' items from ' + $.input.apiUrl };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post transformed data to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildBlocks.output.fallback",
+          "blocks": "$.steps.buildBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

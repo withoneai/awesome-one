@@ -1,0 +1,168 @@
+{
+  "key": "n8n-3790-stock-analysis-reports",
+  "name": "AI Stock Analysis Report Generator",
+  "description": "Uses Exa to search for recent stock news and technical analysis data, Claude AI generates a comprehensive report with sentiment analysis, technical indicators, bull/bear cases, and trading signals, then posts the report to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3790,
+    "url": "https://n8n.io/workflows/3790",
+    "originalName": "Automated stock analysis reports with technical & news sentiment using GPT-4o",
+    "totalViews": 79141,
+    "rank": 73,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for searching stock news",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the report",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the stock analysis report"
+    },
+    "stockSymbol": {
+      "type": "string",
+      "required": true,
+      "description": "Stock ticker symbol to analyze (e.g. 'AAPL', 'TSLA', 'MSFT')"
+    },
+    "companyName": {
+      "type": "string",
+      "required": false,
+      "description": "Full company name (auto-detected if not provided)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildSearchQueries",
+      "name": "Build Exa search queries for stock research",
+      "type": "code",
+      "code": {
+        "source": "const symbol = $.input.stockSymbol || 'AAPL';\nconst company = $.input.companyName || symbol;\nconst today = new Date().toISOString().split('T')[0];\nconst weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];\n\nreturn {\n  newsQuery: symbol + ' ' + company + ' stock news analysis ' + today,\n  technicalQuery: symbol + ' stock technical analysis price target support resistance',\n  symbol,\n  company,\n  today,\n  weekAgo\n};"
+      }
+    },
+    {
+      "id": "searchNews",
+      "name": "Search Exa for stock news",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildSearchQueries.output.newsQuery",
+          "numResults": 8,
+          "type": "neural",
+          "useAutoprompt": true,
+          "startPublishedDate": "$.steps.buildSearchQueries.output.weekAgo",
+          "contents": {
+            "text": {
+              "maxCharacters": 2000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "searchTechnical",
+      "name": "Search Exa for technical analysis",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildSearchQueries.output.technicalQuery",
+          "numResults": 5,
+          "type": "neural",
+          "useAutoprompt": true,
+          "startPublishedDate": "$.steps.buildSearchQueries.output.weekAgo",
+          "contents": {
+            "text": {
+              "maxCharacters": 2000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile all stock research data",
+      "type": "code",
+      "code": {
+        "source": "const newsResp = $.steps.searchNews.response;\nconst techResp = $.steps.searchTechnical.response;\n\nlet newsContent = '';\nconst newsResults = newsResp.results || newsResp.data || [];\nnewsResults.slice(0, 8).forEach((r, i) => {\n  newsContent += 'NEWS #' + (i + 1) + ':\\n';\n  newsContent += '  Title: ' + (r.title || 'N/A') + '\\n';\n  newsContent += '  URL: ' + (r.url || '') + '\\n';\n  newsContent += '  Content: ' + (r.text || r.content || '').slice(0, 1500) + '\\n\\n';\n});\n\nlet techContent = '';\nconst techResults = techResp.results || techResp.data || [];\ntechResults.slice(0, 5).forEach((r, i) => {\n  techContent += 'TECHNICAL #' + (i + 1) + ':\\n';\n  techContent += '  Title: ' + (r.title || 'N/A') + '\\n';\n  techContent += '  Content: ' + (r.text || r.content || '').slice(0, 1500) + '\\n\\n';\n});\n\nreturn { newsContent, techContent, newsCount: newsResults.length, techCount: techResults.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for stock analysis",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileResearch.output;\nconst q = $.steps.buildSearchQueries.output;\n\nlet prompt = 'You are a senior financial analyst. Create a comprehensive stock analysis report for ' + q.symbol + ' (' + q.company + ') as of ' + q.today + '.\\n\\n';\nprompt += '=== RECENT NEWS (' + d.newsCount + ' articles) ===\\n' + d.newsContent + '\\n\\n';\nprompt += '=== TECHNICAL ANALYSIS SOURCES (' + d.techCount + ' articles) ===\\n' + d.techContent + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Provide a comprehensive analysis covering: price action, technical indicators (RSI, MACD, support/resistance), news sentiment, and fundamental catalysts\\n';\nprompt += '- Include a clear bull case and bear case\\n';\nprompt += '- Provide actionable trading signals (Buy/Hold/Sell) with confidence level\\n';\nprompt += '- Highlight key upcoming events (earnings, product launches, etc.)\\n';\nprompt += '- DISCLAIMER: This is AI-generated analysis, not financial advice\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"symbol\": \"' + q.symbol + '\",\\n';\nprompt += '  \"company\": \"' + q.company + '\",\\n';\nprompt += '  \"date\": \"' + q.today + '\",\\n';\nprompt += '  \"overallSignal\": \"Buy|Hold|Sell\",\\n';\nprompt += '  \"confidence\": \"High|Medium|Low\",\\n';\nprompt += '  \"priceSummary\": \"current price action summary\",\\n';\nprompt += '  \"technicalAnalysis\": { \"rsi\": \"description\", \"macd\": \"description\", \"support\": \"level\", \"resistance\": \"level\", \"trend\": \"Bullish|Bearish|Neutral\" },\\n';\nprompt += '  \"newsSentiment\": { \"overall\": \"Positive|Negative|Neutral\", \"keyHeadlines\": [\"headline 1\", \"headline 2\"], \"catalysts\": [\"catalyst 1\"] },\\n';\nprompt += '  \"bullCase\": \"why it could go up\",\\n';\nprompt += '  \"bearCase\": \"why it could go down\",\\n';\nprompt += '  \"keyEvents\": [\"upcoming event 1\"],\\n';\nprompt += '  \"riskFactors\": [\"risk 1\"],\\n';\nprompt += '  \"summary\": \"2-3 sentence executive summary\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3790-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI stock analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3790-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude AI output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { symbol: '', company: '', overallSignal: 'Hold', confidence: 'Low', priceSummary: raw, technicalAnalysis: {}, newsSentiment: {}, bullCase: '', bearCase: '', keyEvents: [], riskFactors: [], summary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit stock analysis report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst q = $.steps.buildSearchQueries.output;\n\nconst signalEmoji = ai.overallSignal === 'Buy' ? ':chart_with_upwards_trend:' : ai.overallSignal === 'Sell' ? ':chart_with_downwards_trend:' : ':bar_chart:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: q.symbol + ' Stock Analysis Report', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Signal:*\\n' + signalEmoji + ' ' + (ai.overallSignal || 'Hold') },\n  { type: 'mrkdwn', text: '*Confidence:*\\n' + (ai.confidence || 'Medium') },\n  { type: 'mrkdwn', text: '*Date:*\\n' + q.today },\n  { type: 'mrkdwn', text: '*Sentiment:*\\n' + ((ai.newsSentiment && ai.newsSentiment.overall) || 'Neutral') }\n] });\nblocks.push({ type: 'divider' });\n\nconst summary = (ai.summary || ai.priceSummary || 'No analysis available.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Executive Summary:*\\n' + summary } });\n\nif (ai.technicalAnalysis) {\n  blocks.push({ type: 'divider' });\n  const ta = ai.technicalAnalysis;\n  let taText = '*Technical Analysis:*\\n';\n  if (ta.trend) taText += '  Trend: *' + ta.trend + '*\\n';\n  if (ta.support) taText += '  Support: ' + ta.support + '\\n';\n  if (ta.resistance) taText += '  Resistance: ' + ta.resistance + '\\n';\n  if (ta.rsi) taText += '  RSI: ' + ta.rsi + '\\n';\n  if (ta.macd) taText += '  MACD: ' + ta.macd + '\\n';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: taText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'divider' });\nlet caseText = '';\nif (ai.bullCase) caseText += '*Bull Case:*\\n' + ai.bullCase + '\\n\\n';\nif (ai.bearCase) caseText += '*Bear Case:*\\n' + ai.bearCase;\nif (caseText) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: caseText.slice(0, 1800) } });\n\nif (ai.newsSentiment && ai.newsSentiment.keyHeadlines && ai.newsSentiment.keyHeadlines.length > 0) {\n  blocks.push({ type: 'divider' });\n  let hText = '*Key Headlines:*\\n';\n  ai.newsSentiment.keyHeadlines.slice(0, 5).forEach((h, i) => { hText += (i + 1) + '. ' + h + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: hText.slice(0, 1800) } });\n}\n\nif (ai.keyEvents && ai.keyEvents.length > 0) {\n  blocks.push({ type: 'divider' });\n  let evText = '*Upcoming Events:*\\n';\n  ai.keyEvents.forEach((ev, i) => { evText += (i + 1) + '. ' + ev + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: evText.slice(0, 1800) } });\n}\n\nif (ai.riskFactors && ai.riskFactors.length > 0) {\n  let rText = '*Risk Factors:*\\n';\n  ai.riskFactors.slice(0, 5).forEach((r, i) => { rText += (i + 1) + '. ' + r + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: rText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':warning: AI-generated analysis. Not financial advice. | Powered by Exa + Claude AI | One CLI' }] });\n\nconst fallbackText = q.symbol + ' Analysis: ' + (ai.overallSignal || 'Hold') + ' (' + (ai.confidence || 'Medium') + ') - ' + (ai.summary || '').slice(0, 100);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post stock analysis to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

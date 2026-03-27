@@ -1,0 +1,208 @@
+{
+  "key": "n8n-2288-linkedin-outreach-notion",
+  "name": "LinkedIn Outreach Content Generator with Notion",
+  "description": "Reads content snippets from a Notion database, researches relevant context via Exa, uses Claude AI to enhance and polish each snippet into engaging LinkedIn posts, and saves the finalized posts back to Google Sheets with a summary to Slack. Adapted from n8n's LinkedIn outreach with Notion and OpenAI workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2288,
+    "url": "https://n8n.io/workflows/2288",
+    "originalName": "Automate LinkedIn Outreach with Notion and OpenAI",
+    "totalViews": 20548,
+    "rank": 293,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "notionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Notion connection key for reading content snippets",
+      "connection": {
+        "platform": "notion"
+      }
+    },
+    "notionDatabaseId": {
+      "type": "string",
+      "required": true,
+      "description": "Notion database ID containing content snippets for LinkedIn posts"
+    },
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for contextual research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving finalized posts",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for the post schedule"
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for the summary"
+    }
+  },
+  "steps": [
+    {
+      "id": "queryNotion",
+      "name": "Query Notion database for content snippets",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5EnlW1AEk::mEAQjNttT1GjVqNeMTvDiw",
+        "connectionKey": "$.input.notionKey",
+        "pathVars": {
+          "blockId": "$.input.notionDatabaseId"
+        },
+        "queryParams": {
+          "page_size": 100
+        }
+      }
+    },
+    {
+      "id": "extractSnippets",
+      "name": "Extract content snippets from Notion blocks",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.queryNotion.response.results || [];\nconst snippets = [];\nresults.forEach((block, i) => {\n  const type = block.type || '';\n  let text = '';\n  if (block[type] && block[type].rich_text) {\n    text = block[type].rich_text.map(t => t.plain_text || '').join('');\n  }\n  if (text.trim().length > 10) {\n    snippets.push({ index: i + 1, text: text.trim().slice(0, 500), type: type });\n  }\n});\n\nlet snippetSummary = '';\nsnippets.forEach(s => {\n  snippetSummary += s.index + '. [' + s.type + '] ' + s.text.slice(0, 200) + '\\n';\n});\n\nreturn { snippets, snippetCount: snippets.length, snippetSummary };"
+      }
+    },
+    {
+      "id": "buildExaQuery",
+      "name": "Build Exa query from snippet themes",
+      "type": "code",
+      "code": {
+        "source": "const snippets = $.steps.extractSnippets.output.snippets;\nconst themes = snippets.slice(0, 5).map(s => s.text.slice(0, 80)).join('; ');\nconst query = 'LinkedIn thought leadership best practices and trends about: ' + themes;\nreturn { query };"
+      }
+    },
+    {
+      "id": "researchContext",
+      "name": "Research context via Exa for post enhancement",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildExaQuery.output.query",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1200
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile research for post enhancement",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.researchContext.response.results || [];\nlet research = '';\nresults.forEach((r, i) => {\n  research += (i + 1) + '. ' + (r.title || '') + '\\n   ' + (r.text || '').slice(0, 800) + '\\n\\n';\n});\nreturn { research, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for LinkedIn post generation",
+      "type": "code",
+      "code": {
+        "source": "const snippets = $.steps.extractSnippets.output;\nconst research = $.steps.compileResearch.output;\n\nlet prompt = 'You are a LinkedIn content strategist. Transform the following content snippets into polished, engaging LinkedIn posts. Use the research context to add relevant data points, trends, and depth.\\n\\n';\nprompt += 'CONTENT SNIPPETS (' + snippets.snippetCount + '):\\n';\nprompt += snippets.snippetSummary + '\\n\\n';\nprompt += 'RESEARCH CONTEXT (' + research.sourceCount + ' sources):\\n';\nprompt += research.research + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Transform each snippet into a compelling LinkedIn post\\n';\nprompt += '- Add a strong hook in the first line (pattern interrupt)\\n';\nprompt += '- Include relevant stats or data from research when possible\\n';\nprompt += '- Use line breaks for readability\\n';\nprompt += '- End with a question or CTA to drive engagement\\n';\nprompt += '- Include 3-5 relevant hashtags per post\\n';\nprompt += '- Keep each post between 150-300 words\\n';\nprompt += '- Vary post formats: listicle, story, hot take, how-to\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"posts\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"snippetIndex\": 1,\\n';\nprompt += '      \"postContent\": \"the full LinkedIn post text\",\\n';\nprompt += '      \"format\": \"listicle|story|hot-take|how-to|question\",\\n';\nprompt += '      \"hashtags\": [\"tag1\", \"tag2\"],\\n';\nprompt += '      \"estimatedEngagement\": \"high|medium|low\",\\n';\nprompt += '      \"bestPostingTime\": \"e.g. Tuesday 9am\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"overallStrategy\": \"posting strategy recommendation\",\\n';\nprompt += '  \"weeklySchedule\": \"suggested posting cadence\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2288-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI LinkedIn post generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2288-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { posts: [], overallStrategy: raw, weeklySchedule: '' }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Sheets rows from posts",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = new Date().toISOString().slice(0, 10);\nconst rows = [];\nrows.push(['Date', 'Post Content', 'Format', 'Hashtags', 'Est. Engagement', 'Best Time']);\n(ai.posts || []).forEach(p => {\n  rows.push([today, (p.postContent || '').slice(0, 1500), p.format || '', (p.hashtags || []).join(', '), p.estimatedEngagement || '', p.bestPostingTime || '']);\n});\nreturn { rows };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save LinkedIn posts to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "LinkedIn Posts",
+          "values": "$.steps.buildSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst posts = ai.posts || [];\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'LinkedIn Content Ready', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Posts Generated:* ' + posts.length + ' | *Source:* Notion snippets + Exa research' } });\nif (ai.overallStrategy) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Strategy:* ' + ai.overallStrategy.slice(0, 500) } });\n}\nblocks.push({ type: 'divider' });\n\nposts.slice(0, 5).forEach((p, i) => {\n  const engIcon = p.estimatedEngagement === 'high' ? ':fire:' : p.estimatedEngagement === 'medium' ? ':chart_with_upwards_trend:' : ':seedling:';\n  let text = engIcon + ' *Post ' + (i + 1) + '* [' + (p.format || '') + '] - ' + (p.bestPostingTime || '') + '\\n';\n  text += (p.postContent || '').slice(0, 200) + '...\\n';\n  if (p.hashtags && p.hashtags.length > 0) text += p.hashtags.map(h => '#' + h).join(' ');\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 1800) } });\n});\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Posts saved to Google Sheets | Powered by Notion + Exa + Claude AI' }] });\nconst fallback = 'LinkedIn Content: ' + posts.length + ' posts ready';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

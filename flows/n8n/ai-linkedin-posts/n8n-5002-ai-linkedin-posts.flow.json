@@ -1,0 +1,173 @@
+{
+  "key": "n8n-5002-ai-linkedin-posts",
+  "name": "Generate AI-powered LinkedIn posts with content strategy and research",
+  "description": "Takes a topic, researches it with Exa web search, generates a LinkedIn-optimized post with Claude AI including hashtags and hook, and delivers the ready-to-publish content via Gmail and Slack notification.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5002,
+    "url": "https://n8n.io/workflows/5002",
+    "originalName": "Generate AI-Powered LinkedIn Posts with Google Gemini and Gen-Imager",
+    "totalViews": 28009,
+    "rank": 225,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for topic research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for delivering the post",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic for the LinkedIn post (e.g. 'AI in enterprise sales')"
+    },
+    "tone": {
+      "type": "string",
+      "required": false,
+      "default": "professional yet conversational",
+      "description": "Desired tone (e.g. 'thought leadership', 'casual', 'data-driven')"
+    },
+    "recipientEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email to send the finished post for review"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for post notifications"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildExaQuery",
+      "name": "Build Exa research query for LinkedIn topic",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic || '';\nconst query = 'Recent trends, data, and expert insights about ' + topic + ' for professional audience';\nreturn { query, topic };"
+      }
+    },
+    {
+      "id": "exaSearch",
+      "name": "Research topic with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildExaQuery.output.query",
+          "type": "auto",
+          "numResults": 3,
+          "contents": {
+            "text": {
+              "maxCharacters": 2000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile research for post generation",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.exaSearch.response || {};\nconst results = response.data?.results || response.results || [];\nlet research = '';\nresults.forEach(function(r, i) {\n  research += 'Source ' + (i + 1) + ': ' + (r.title || '') + '\\n';\n  research += (r.text || '').slice(0, 1500) + '\\n\\n';\n});\nreturn { research: research, topic: $.input.topic, tone: $.input.tone || 'professional yet conversational' };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for LinkedIn post generation",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.compileResearch.output;\n\nlet prompt = 'You are a LinkedIn content strategist. Create a high-engagement LinkedIn post based on the research below.\\n\\n';\nprompt += 'TOPIC: ' + data.topic + '\\n';\nprompt += 'TONE: ' + data.tone + '\\n\\n';\nprompt += 'RESEARCH:\\n' + data.research + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Start with a strong hook (first line matters most on LinkedIn)\\n';\nprompt += '- Use short paragraphs and line breaks for readability\\n';\nprompt += '- Include 1-2 data points or statistics from research\\n';\nprompt += '- End with a question or call-to-action to drive engagement\\n';\nprompt += '- Keep under 1300 characters for optimal reach\\n';\nprompt += '- Include relevant hashtags (3-5)\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"hook\": \"the opening line\",\\n';\nprompt += '  \"post\": \"full LinkedIn post text including hook\",\\n';\nprompt += '  \"hashtags\": [\"#hashtag1\", \"#hashtag2\"],\\n';\nprompt += '  \"suggestedImagePrompt\": \"description for an accompanying image\",\\n';\nprompt += '  \"bestPostingTime\": \"suggested day and time\",\\n';\nprompt += '  \"engagementTips\": [\"tip1\", \"tip2\"]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5002-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Generate LinkedIn post with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5002-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { hook: '', post: raw, hashtags: [], suggestedImagePrompt: '', bestPostingTime: '', engagementTips: [] }; }"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send LinkedIn post draft via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.recipientEmail",
+          "subject": "$.steps.parseAI.output.hook",
+          "body": "$.steps.parseAI.output.post"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack notification for LinkedIn post",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'LinkedIn Post Ready', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Topic:* ' + $.input.topic } });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: (ai.post || '').slice(0, 1800) } });\nblocks.push({ type: 'divider' });\nif (ai.hashtags && ai.hashtags.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Hashtags:* ' + ai.hashtags.join(' ') } });\n}\nif (ai.bestPostingTime) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Best Posting Time:* ' + ai.bestPostingTime } });\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Sent to ' + $.input.recipientEmail + ' | Powered by Exa + Claude AI' }] });\nconst fallbackText = 'LinkedIn Post Ready: ' + $.input.topic;\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Post LinkedIn content notification to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+{
+  "key": "n8n-4557-email-organizer",
+  "name": "Email Organizer \u2014 Gmail Fetch + AI Categorization to Slack",
+  "description": "Fetches recent emails from Gmail inbox, uses Claude AI to categorize each with smart labels (urgent, follow-up, FYI, etc.), and posts an organized digest to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4557,
+    "url": "https://n8n.io/workflows/4557",
+    "originalName": "Intelligent email organization with AI-powered content classification for Gmail",
+    "totalViews": 43462,
+    "rank": 146,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailListKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the email digest"
+    },
+    "maxEmails": {
+      "type": "string",
+      "required": false,
+      "default": "10",
+      "description": "Maximum number of emails to fetch and categorize"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchEmails",
+      "name": "Fetch recent emails from Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailListKey",
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "maxResults": "$.input.maxEmails",
+          "q": "is:inbox newer_than:1d"
+        }
+      }
+    },
+    {
+      "id": "extractEmails",
+      "name": "Extract email details from response",
+      "type": "code",
+      "code": {
+        "source": "var resp = $.steps.fetchEmails.response || {};\nvar messages = resp.messages || [];\nvar emailList = messages.slice(0, 15).map(function(m, i) {\n  var id = m.id || '';\n  var threadId = m.threadId || '';\n  var snippet = m.snippet || '';\n  var subject = '';\n  var from = '';\n  var date = '';\n  if (m.payload && m.payload.headers) {\n    m.payload.headers.forEach(function(h) {\n      if (h.name === 'Subject') subject = h.value || '';\n      if (h.name === 'From') from = h.value || '';\n      if (h.name === 'Date') date = h.value || '';\n    });\n  }\n  return { index: i + 1, id: id, subject: subject || snippet.slice(0, 60), from: from, date: date, snippet: snippet.slice(0, 200) };\n});\nvar emailSummary = emailList.map(function(e) {\n  return e.index + '. Subject: ' + e.subject + '\\n   From: ' + e.from + '\\n   Date: ' + e.date + '\\n   Preview: ' + e.snippet;\n}).join('\\n\\n');\nreturn { emailList: emailList, emailSummary: emailSummary, count: emailList.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for email categorization",
+      "type": "code",
+      "code": {
+        "source": "var ctx = $.steps.extractEmails.output;\nvar prompt = 'You are an intelligent email organizer. Categorize the following emails into smart labels and provide a prioritized digest.\\n\\nEMAILS (' + ctx.count + ' total):\\n' + ctx.emailSummary + '\\n\\nCategorize each email with one of these labels:\\n- URGENT: Requires immediate attention\\n- ACTION_REQUIRED: Needs a response or action within 24h\\n- FOLLOW_UP: Something to follow up on later\\n- FYI: Informational, no action needed\\n- NEWSLETTER: Marketing or subscription content\\n- SPAM_SUSPECT: Likely spam or unwanted\\n\\nReturn ONLY valid JSON:\\n{\\n  \"digest\": \"Brief overall summary of inbox state\",\\n  \"urgentCount\": 0,\\n  \"actionCount\": 0,\\n  \"emails\": [\\n    { \"index\": 1, \"subject\": \"...\", \"from\": \"...\", \"label\": \"URGENT\", \"reason\": \"...\", \"suggestedAction\": \"...\" }\\n  ]\\n}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/one-email-organizer-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiCategorize",
+      "name": "Run Claude AI to categorize emails",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/one-email-organizer-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse AI response and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiCategorize.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit email digest",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':email: Email Digest - ' + new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }), emoji: true } });\nif (ai.digest) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.digest } });\n}\nvar urgentCount = ai.urgentCount || 0;\nvar actionCount = ai.actionCount || 0;\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':rotating_light: *Urgent:* ' + urgentCount + '  |  :point_right: *Action Required:* ' + actionCount + '  |  :incoming_envelope: *Total:* ' + $.steps.extractEmails.output.count } });\nblocks.push({ type: 'divider' });\nvar labelEmojis = { URGENT: ':rotating_light:', ACTION_REQUIRED: ':point_right:', FOLLOW_UP: ':clock3:', FYI: ':information_source:', NEWSLETTER: ':newspaper:', SPAM_SUSPECT: ':wastebasket:' };\nvar emails = ai.emails || [];\nvar grouped = {};\nemails.forEach(function(e) {\n  var label = e.label || 'FYI';\n  if (!grouped[label]) grouped[label] = [];\n  grouped[label].push(e);\n});\nvar labelOrder = ['URGENT', 'ACTION_REQUIRED', 'FOLLOW_UP', 'FYI', 'NEWSLETTER', 'SPAM_SUSPECT'];\nlabelOrder.forEach(function(label) {\n  var items = grouped[label];\n  if (!items) return;\n  var emoji = labelEmojis[label] || ':email:';\n  var sectionText = emoji + ' *' + label.replace(/_/g, ' ') + '* (' + items.length + ')\\n';\n  items.forEach(function(e) {\n    sectionText += '  - *' + (e.subject || 'No subject') + '* from ' + (e.from || 'Unknown') + '\\n';\n    if (e.suggestedAction) sectionText += '    _Action: ' + e.suggestedAction + '_\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: sectionText } });\n});\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':robot_face: Organized by Claude AI via One CLI' }] });\nvar fallback = 'Email Digest: ' + urgentCount + ' urgent, ' + actionCount + ' action required, ' + emails.length + ' total';\nif (ai.text) fallback = ai.text.slice(0, 500);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post email digest to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

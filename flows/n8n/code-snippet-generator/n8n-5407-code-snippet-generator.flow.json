@@ -1,0 +1,107 @@
+{
+  "key": "n8n-5407-code-snippet-generator",
+  "name": "AI Code Snippet Generator",
+  "description": "Takes a coding topic or problem description, uses Claude AI to generate well-documented code examples with explanations in the requested programming language, and posts the result to Slack with Block Kit formatting. Adapted from n8n's interactive JavaScript tutorial workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5407,
+    "url": "https://n8n.io/workflows/5407",
+    "originalName": "Learn Code Node (JavaScript) with an Interactive Hands-On Tutorial",
+    "totalViews": 48243,
+    "rank": 126,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting code snippets",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the code examples"
+    },
+    "codingTask": {
+      "type": "string",
+      "required": true,
+      "description": "Description of the coding task or concept (e.g. 'Binary search implementation', 'React useEffect patterns')"
+    },
+    "language": {
+      "type": "string",
+      "required": false,
+      "default": "JavaScript",
+      "description": "Programming language for the code examples (JavaScript, Python, TypeScript, Go, etc.)"
+    },
+    "difficulty": {
+      "type": "string",
+      "required": false,
+      "default": "intermediate",
+      "description": "Difficulty level: beginner, intermediate, advanced"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for code generation",
+      "type": "code",
+      "code": {
+        "source": "const task = $.input.codingTask;\nconst lang = $.input.language || 'JavaScript';\nconst difficulty = $.input.difficulty || 'intermediate';\n\nlet prompt = 'You are an expert programmer and coding instructor. Generate clear, well-documented code examples for the following task.\\n\\n';\nprompt += 'CODING TASK: ' + task + '\\n';\nprompt += 'LANGUAGE: ' + lang + '\\n';\nprompt += 'DIFFICULTY: ' + difficulty + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Generate 2-3 code examples that progressively demonstrate the concept\\n';\nprompt += '- Include inline comments explaining key parts\\n';\nprompt += '- Add a brief explanation before each example\\n';\nprompt += '- Include common pitfalls or best practices\\n';\nprompt += '- For ' + difficulty + ' level: adjust complexity accordingly\\n';\nprompt += '- Keep each code block under 2500 characters\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"descriptive title\",\\n';\nprompt += '  \"overview\": \"brief overview of the concept\",\\n';\nprompt += '  \"examples\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"name\": \"Example 1: Basic usage\",\\n';\nprompt += '      \"explanation\": \"what this example demonstrates\",\\n';\nprompt += '      \"code\": \"the code with comments\",\\n';\nprompt += '      \"output\": \"expected output if applicable\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"bestPractices\": [\"practice 1\", \"practice 2\"],\\n';\nprompt += '  \"commonPitfalls\": [\"pitfall 1\", \"pitfall 2\"],\\n';\nprompt += '  \"furtherReading\": [\"topic or resource 1\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5407-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI code generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5407-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: $.input.codingTask, overview: '', examples: [{ name: 'Code', explanation: '', code: raw.slice(0, 2500), output: '' }], bestPractices: [], commonPitfalls: [], furtherReading: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit code snippet message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst lang = $.input.language || 'JavaScript';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: (ai.title || $.input.codingTask).slice(0, 150), emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Language:* ' + lang + ' | *Difficulty:* ' + ($.input.difficulty || 'intermediate') } });\n\nif (ai.overview) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.overview.slice(0, 2900) } });\n}\nblocks.push({ type: 'divider' });\n\n(ai.examples || []).forEach((ex, i) => {\n  if (ex.name) {\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + ex.name + '*' } });\n  }\n  if (ex.explanation) {\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ex.explanation.slice(0, 1500) } });\n  }\n  if (ex.code) {\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '```' + ex.code.slice(0, 2800) + '```' } });\n  }\n  if (ex.output) {\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '_Output:_ `' + ex.output.slice(0, 500) + '`' } });\n  }\n  blocks.push({ type: 'divider' });\n});\n\nif (ai.bestPractices && ai.bestPractices.length > 0) {\n  let bpText = ':white_check_mark: *Best Practices:*\\n';\n  ai.bestPractices.forEach((p, i) => { bpText += (i + 1) + '. ' + p + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: bpText.slice(0, 2900) } });\n}\n\nif (ai.commonPitfalls && ai.commonPitfalls.length > 0) {\n  let cpText = ':warning: *Common Pitfalls:*\\n';\n  ai.commonPitfalls.forEach((p, i) => { cpText += (i + 1) + '. ' + p + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: cpText.slice(0, 2900) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Generated with Claude AI | One CLI' }] });\n\nconst fallback = 'Code Snippets: ' + (ai.title || $.input.codingTask) + ' (' + lang + ')';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post code snippets to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

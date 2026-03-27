@@ -1,0 +1,175 @@
+{
+  "key": "n8n-2415-notion-ai-content-generator",
+  "name": "Notion AI Content Generator",
+  "description": "Searches Notion for existing pages on a topic, uses Claude AI to generate new content (articles, documentation, summaries) informed by existing knowledge, and creates a new Notion page with the generated content. Adapted from n8n's Notion AI assistant generator workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2415,
+    "url": "https://n8n.io/workflows/2415",
+    "originalName": "Notion AI assistant generator",
+    "totalViews": 48989,
+    "rank": 123,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "notionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Notion connection key for searching and creating pages",
+      "connection": {
+        "platform": "notion"
+      }
+    },
+    "notionParentPageId": {
+      "type": "string",
+      "required": true,
+      "description": "Notion parent page ID where the new content will be created"
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic or title for the content to generate (e.g. 'Onboarding guide for new engineers')"
+    },
+    "contentType": {
+      "type": "string",
+      "required": false,
+      "default": "article",
+      "description": "Type of content to generate: article, documentation, summary, how-to, FAQ"
+    },
+    "tone": {
+      "type": "string",
+      "required": false,
+      "default": "professional",
+      "description": "Tone of the generated content: professional, casual, technical, friendly"
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting notification",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the completion notification"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchExisting",
+      "name": "Search Notion for existing pages on the topic",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5En67fz04::-CJAS419SVWm7L2l6brp6A",
+        "connectionKey": "$.input.notionKey",
+        "data": {
+          "query": "$.input.topic",
+          "page_size": 5
+        }
+      }
+    },
+    {
+      "id": "extractExisting",
+      "name": "Extract existing page titles and summaries",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchExisting.response.results || [];\nconst pages = results.filter(r => r.object === 'page').slice(0, 5).map(r => {\n  let title = '';\n  if (r.properties) {\n    const titleProp = Object.values(r.properties).find(p => p.type === 'title');\n    if (titleProp && titleProp.title && titleProp.title.length > 0) {\n      title = titleProp.title.map(t => t.plain_text || '').join('');\n    }\n  }\n  return { id: r.id, title: title || 'Untitled', url: r.url || '' };\n});\nlet context = '';\npages.forEach((p, i) => {\n  context += (i + 1) + '. ' + p.title + (p.url ? ' (' + p.url + ')' : '') + '\\n';\n});\nreturn { existingPages: context, pageCount: pages.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for content generation",
+      "type": "code",
+      "code": {
+        "source": "const existing = $.steps.extractExisting.output;\nconst topic = $.input.topic;\nconst contentType = $.input.contentType || 'article';\nconst tone = $.input.tone || 'professional';\n\nlet prompt = 'You are a skilled content writer. Generate a ' + contentType + ' about the following topic in a ' + tone + ' tone.\\n\\n';\nprompt += 'TOPIC: ' + topic + '\\n\\n';\n\nif (existing.pageCount > 0) {\n  prompt += 'EXISTING NOTION PAGES ON THIS TOPIC (for context, do not duplicate):\\n';\n  prompt += existing.existingPages + '\\n';\n  prompt += 'Build upon and complement the existing content. Do not repeat what already exists.\\n\\n';\n}\n\nprompt += 'CONTENT TYPE: ' + contentType + '\\n';\nprompt += 'TONE: ' + tone + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Generate well-structured content with clear headings and sections\\n';\nprompt += '- Each text block must be 1900 characters or fewer (Notion API limit)\\n';\nprompt += '- Include an introduction, main body with subsections, and conclusion\\n';\nprompt += '- Make it actionable and useful\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"page title\",\\n';\nprompt += '  \"summary\": \"one-sentence summary\",\\n';\nprompt += '  \"sections\": [\\n';\nprompt += '    { \"heading\": \"Section Title\", \"content\": \"section text under 1900 chars\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"tags\": [\"tag1\", \"tag2\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2415-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI content generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2415-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: $.input.topic, summary: 'Generated content', sections: [{ heading: 'Content', content: raw.slice(0, 1900) }], tags: [] }; }"
+      }
+    },
+    {
+      "id": "buildNotionBlocks",
+      "name": "Build Notion page blocks from AI content",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\n\nif (ai.summary) {\n  blocks.push({ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ text: { content: ai.summary.slice(0, 1900) } }] } });\n  blocks.push({ object: 'block', type: 'divider', divider: {} });\n}\n\n(ai.sections || []).forEach(section => {\n  if (section.heading) {\n    blocks.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: [{ text: { content: section.heading.slice(0, 1900) } }] } });\n  }\n  if (section.content) {\n    const chunks = [];\n    let remaining = section.content;\n    while (remaining.length > 0) {\n      chunks.push(remaining.slice(0, 1900));\n      remaining = remaining.slice(1900);\n    }\n    chunks.forEach(chunk => {\n      blocks.push({ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ text: { content: chunk } }] } });\n    });\n  }\n});\n\nreturn { blocks, title: ai.title || $.input.topic, tags: ai.tags || [] };"
+      }
+    },
+    {
+      "id": "createNotionPage",
+      "name": "Create new Notion page with generated content",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5EnlW1AEk::mEAQjNttT1GjVqNeMTvDiw",
+        "connectionKey": "$.input.notionKey",
+        "data": {
+          "parent": {
+            "page_id": "$.input.notionParentPageId"
+          },
+          "properties": {
+            "title": [
+              {
+                "text": {
+                  "content": "$.steps.buildNotionBlocks.output.title"
+                }
+              }
+            ]
+          },
+          "children": "$.steps.buildNotionBlocks.output.blocks"
+        }
+      }
+    },
+    {
+      "id": "buildSlackNotification",
+      "name": "Build Slack notification for new content",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst pageResponse = $.steps.createNotionPage.response || {};\nconst pageUrl = pageResponse.url || '';\nconst title = $.steps.buildNotionBlocks.output.title;\nconst sectionCount = (ai.sections || []).length;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'New Notion Content Created', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Title:* ' + title + '\\n*Type:* ' + ($.input.contentType || 'article') + ' | *Sections:* ' + sectionCount } });\n\nif (ai.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:* ' + ai.summary } });\n}\n\nif (pageUrl) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':link: <' + pageUrl + '|View in Notion>' } });\n}\n\nif (ai.tags && ai.tags.length > 0) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Tags: ' + ai.tags.join(', ') + ' | Generated with Claude AI | One CLI' }] });\n}\n\nconst fallback = 'New Notion page created: ' + title;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post notification to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackNotification.output.fallback",
+          "blocks": "$.steps.buildSlackNotification.output.blocks"
+        }
+      }
+    }
+  ]
+}

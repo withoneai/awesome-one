@@ -1,0 +1,194 @@
+{
+  "key": "n8n-2315-autonomous-ai-crawler",
+  "name": "Autonomous AI Crawler",
+  "description": "Uses Exa to search for pages matching a query, Firecrawl to scrape multiple pages for deep content, Claude AI to analyze and extract structured data, and posts a comprehensive report to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2315,
+    "url": "https://n8n.io/workflows/2315",
+    "originalName": "Autonomous AI crawler",
+    "totalViews": 74316,
+    "rank": 77,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping pages",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting results",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the crawl report"
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": true,
+      "description": "What to search for (e.g. 'social media profiles for tech companies')"
+    },
+    "extractionGoal": {
+      "type": "string",
+      "required": false,
+      "default": "Extract all relevant structured data, contacts, links, and key information",
+      "description": "What specific data to extract from crawled pages"
+    },
+    "maxPages": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Maximum number of pages to crawl (1-10)"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchExa",
+      "name": "Search for relevant pages via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.searchQuery",
+          "numResults": 10,
+          "type": "auto",
+          "useAutoprompt": true,
+          "contents": {
+            "text": {
+              "maxCharacters": 500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "selectPages",
+      "name": "Select top pages to crawl",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchExa.response.results || $.steps.searchExa.response.data || [];\nconst maxPages = $.input.maxPages || 5;\nconst pages = results.slice(0, maxPages).map((r, i) => ({\n  index: i + 1,\n  url: r.url || '',\n  title: r.title || 'Page ' + (i + 1),\n  snippet: (r.text || '').slice(0, 300)\n})).filter(p => p.url.length > 0);\n\nlet summary = '';\npages.forEach(p => {\n  summary += p.index + '. ' + p.title + ' - ' + p.url + '\\n';\n});\n\nreturn { pages, pageCount: pages.length, summary };"
+      }
+    },
+    {
+      "id": "crawlPages",
+      "name": "Scrape selected pages with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.selectPages.output.pages",
+        "as": "page",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapePage",
+            "name": "Scrape individual page",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.page.url",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileContent",
+      "name": "Compile all crawled content",
+      "type": "code",
+      "code": {
+        "source": "const pages = $.steps.selectPages.output.pages;\nconst iterations = $.steps.crawlPages.response.iterations || [];\n\nlet allContent = '';\nlet successCount = 0;\nlet failCount = 0;\n\niterations.forEach((iter, i) => {\n  const page = pages[i] || { url: 'Unknown', title: 'Unknown' };\n  const resp = (iter.scrapePage && iter.scrapePage.response && iter.scrapePage.response.data) ? iter.scrapePage.response.data : null;\n\n  allContent += '=== PAGE ' + (i + 1) + ': ' + page.title + ' ===\\n';\n  allContent += 'URL: ' + page.url + '\\n';\n\n  if (resp && resp.markdown) {\n    successCount++;\n    allContent += 'Content:\\n' + resp.markdown.slice(0, 4000) + '\\n\\n';\n  } else {\n    failCount++;\n    allContent += 'Status: Failed to scrape\\n\\n';\n  }\n});\n\nreturn { allContent, successCount, failCount, totalPages: pages.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for analysis",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileContent.output;\nconst goal = $.input.extractionGoal || 'Extract all relevant structured data, contacts, links, and key information';\nconst query = $.input.searchQuery;\n\nlet prompt = 'You are an autonomous web crawler and data extraction specialist. Analyze the following crawled pages and extract structured information.\\n\\n';\nprompt += 'ORIGINAL SEARCH QUERY: ' + query + '\\n';\nprompt += 'EXTRACTION GOAL: ' + goal + '\\n';\nprompt += 'PAGES CRAWLED: ' + d.successCount + ' of ' + d.totalPages + '\\n\\n';\nprompt += 'CRAWLED CONTENT:\\n' + d.allContent + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract all data matching the extraction goal from every page\\n';\nprompt += '- Identify links, contacts, profiles, or entities discovered\\n';\nprompt += '- Cross-reference data between pages for completeness\\n';\nprompt += '- Flag any pages that need deeper crawling\\n';\nprompt += '- Organize findings in a clear structure\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"summary\": \"2-3 sentence overview of crawl results\",\\n';\nprompt += '  \"pagesAnalyzed\": [\\n';\nprompt += '    { \"pageNumber\": 1, \"url\": \"url\", \"title\": \"title\", \"dataFound\": [\"item1\", \"item2\"], \"linksDiscovered\": [\"link1\"] }\\n';\nprompt += '  ],\\n';\nprompt += '  \"extractedEntities\": [\\n';\nprompt += '    { \"name\": \"entity\", \"type\": \"person|company|profile|link\", \"source\": \"url\", \"details\": \"extra info\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"crossPageInsights\": [\"insight spanning multiple pages\"],\\n';\nprompt += '  \"suggestedNextCrawls\": [\"url to crawl next for more data\"],\\n';\nprompt += '  \"totalEntitiesFound\": 0\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2315-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI crawl analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2315-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, pagesAnalyzed: [], extractedEntities: [], crossPageInsights: [], suggestedNextCrawls: [], totalEntitiesFound: 0 }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit crawl report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst stats = $.steps.compileContent.output;\nconst query = $.input.searchQuery;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Autonomous AI Crawler Report', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Query:*\\n' + query },\n  { type: 'mrkdwn', text: '*Pages Crawled:*\\n' + stats.successCount + '/' + stats.totalPages }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Entities Found:*\\n' + (ai.totalEntitiesFound || 0) },\n  { type: 'mrkdwn', text: '*Failed:*\\n' + stats.failCount }\n] });\nblocks.push({ type: 'divider' });\n\nconst summary = (ai.summary || 'No summary available.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:*\\n' + summary } });\n\nif (ai.extractedEntities && ai.extractedEntities.length > 0) {\n  blocks.push({ type: 'divider' });\n  let entityText = '*Extracted Entities:*\\n';\n  ai.extractedEntities.slice(0, 10).forEach((e, i) => {\n    entityText += (i + 1) + '. *' + (e.name || 'N/A') + '* (' + (e.type || 'unknown') + ')';\n    if (e.details) entityText += ' - ' + e.details;\n    entityText += '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: entityText.slice(0, 1800) } });\n}\n\nif (ai.pagesAnalyzed && ai.pagesAnalyzed.length > 0) {\n  blocks.push({ type: 'divider' });\n  let pageText = '*Pages Analyzed:*\\n';\n  ai.pagesAnalyzed.slice(0, 5).forEach((p, i) => {\n    pageText += (i + 1) + '. <' + (p.url || '#') + '|' + (p.title || 'Page') + '> - ' + ((p.dataFound || []).length) + ' items found\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: pageText.slice(0, 1800) } });\n}\n\nif (ai.crossPageInsights && ai.crossPageInsights.length > 0) {\n  blocks.push({ type: 'divider' });\n  let insightText = '*Cross-Page Insights:*\\n';\n  ai.crossPageInsights.slice(0, 5).forEach((ins, i) => { insightText += (i + 1) + '. ' + ins + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: insightText.slice(0, 1800) } });\n}\n\nif (ai.suggestedNextCrawls && ai.suggestedNextCrawls.length > 0) {\n  blocks.push({ type: 'divider' });\n  let nextText = '*Suggested Next Crawls:*\\n';\n  ai.suggestedNextCrawls.slice(0, 5).forEach((url, i) => { nextText += (i + 1) + '. ' + url + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: nextText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa + Firecrawl + Claude AI | One CLI' }] });\n\nconst fallbackText = 'AI Crawler: ' + stats.successCount + ' pages crawled, ' + (ai.totalEntitiesFound || 0) + ' entities found - ' + (ai.summary || '').slice(0, 100);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post crawl report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

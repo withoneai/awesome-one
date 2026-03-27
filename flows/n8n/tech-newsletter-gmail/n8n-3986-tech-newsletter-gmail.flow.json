@@ -1,0 +1,164 @@
+{
+  "key": "n8n-3986-tech-newsletter-gmail",
+  "name": "AI Tech Newsletter via Gmail",
+  "description": "Uses Exa to search for trending tech stories across multiple topics, Claude AI curates and writes a polished newsletter with summaries and analysis, then sends the formatted HTML newsletter via Gmail.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3986,
+    "url": "https://n8n.io/workflows/3986",
+    "originalName": "Personalized AI tech newsletter using RSS, OpenAI and Gmail",
+    "totalViews": 68930,
+    "rank": 84,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for searching tech news",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending the newsletter",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "recipientEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to send the newsletter to"
+    },
+    "senderName": {
+      "type": "string",
+      "required": false,
+      "default": "AI Tech Digest",
+      "description": "Name shown as the newsletter sender"
+    },
+    "topics": {
+      "type": "string",
+      "required": false,
+      "default": "AI, cloud computing, cybersecurity, startups, developer tools",
+      "description": "Comma-separated tech topics of interest"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQueries",
+      "name": "Build search queries for tech topics",
+      "type": "code",
+      "code": {
+        "source": "const topics = ($.input.topics || 'AI, cloud computing, cybersecurity, startups, developer tools').split(',').map(t => t.trim()).filter(Boolean);\nconst today = new Date();\nconst weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];\nconst todayStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });\n\nconst queries = topics.slice(0, 6).map(topic => ({\n  topic,\n  query: topic + ' latest news trends developments ' + today.getFullYear()\n}));\n\nreturn { queries, topics, weekAgo, today: todayStr, topicCount: topics.length };"
+      }
+    },
+    {
+      "id": "searchAllTopics",
+      "name": "Search Exa for all tech topics",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.buildQueries.output.queries",
+        "as": "queryObj",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "searchTopic",
+            "name": "Search Exa for topic",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "exa",
+              "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+              "connectionKey": "$.input.exaKey",
+              "data": {
+                "query": "$.loop.queryObj.query",
+                "numResults": 5,
+                "type": "neural",
+                "useAutoprompt": true,
+                "startPublishedDate": "$.steps.buildQueries.output.weekAgo",
+                "contents": {
+                  "text": {
+                    "maxCharacters": 1500
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileAllNews",
+      "name": "Compile all search results by topic",
+      "type": "code",
+      "code": {
+        "source": "const queries = $.steps.buildQueries.output.queries;\nconst iterations = $.steps.searchAllTopics.response.iterations || [];\nlet compiled = '';\nlet totalArticles = 0;\n\niterations.forEach((iter, i) => {\n  const topic = queries[i] ? queries[i].topic : 'Topic ' + (i + 1);\n  const results = (iter.searchTopic && iter.searchTopic.response) ? (iter.searchTopic.response.results || iter.searchTopic.response.data || []) : [];\n  compiled += '=== TOPIC: ' + topic.toUpperCase() + ' ===\\n';\n  results.slice(0, 5).forEach((r, j) => {\n    compiled += 'Article ' + (j + 1) + ': ' + (r.title || 'N/A') + '\\n';\n    compiled += 'URL: ' + (r.url || '') + '\\n';\n    compiled += 'Content: ' + (r.text || r.content || '').slice(0, 1200) + '\\n\\n';\n    totalArticles++;\n  });\n  compiled += '\\n';\n});\n\nreturn { compiled, totalArticles };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for newsletter writing",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileAllNews.output;\nconst q = $.steps.buildQueries.output;\n\nlet prompt = 'You are a senior tech journalist and newsletter editor. Write a compelling, well-curated tech newsletter for ' + q.today + '.\\n\\n';\nprompt += 'TOPICS COVERED: ' + q.topics.join(', ') + '\\n';\nprompt += 'TOTAL ARTICLES FOUND: ' + d.totalArticles + '\\n\\n';\nprompt += 'SOURCE ARTICLES:\\n' + d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Write a professional newsletter with a catchy subject line\\n';\nprompt += '- Include a brief editorial intro (2-3 sentences)\\n';\nprompt += '- For each topic, pick the 2-3 most interesting stories\\n';\nprompt += '- Write concise, engaging summaries\\n';\nprompt += '- Add brief \"why it matters\" analysis for key stories\\n';\nprompt += '- Include source URLs as references\\n';\nprompt += '- End with a Quick Bites section for smaller items\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"subjectLine\": \"newsletter subject line\",\\n';\nprompt += '  \"preheader\": \"email preview text (50 chars)\",\\n';\nprompt += '  \"editorialIntro\": \"opening paragraph\",\\n';\nprompt += '  \"sections\": [\\n';\nprompt += '    { \"topic\": \"AI\", \"stories\": [{ \"headline\": \"title\", \"summary\": \"2-3 sentences\", \"whyItMatters\": \"brief\", \"url\": \"source\" }] }\\n';\nprompt += '  ],\\n';\nprompt += '  \"quickBites\": [\"short item 1\", \"item 2\"],\\n';\nprompt += '  \"closingNote\": \"brief sign-off\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3986-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI to write newsletter",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3986-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude AI output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { subjectLine: 'Weekly Tech Digest', preheader: 'Top tech news', editorialIntro: raw.slice(0, 500), sections: [], quickBites: [], closingNote: '' }; }"
+      }
+    },
+    {
+      "id": "buildEmailHtml",
+      "name": "Build HTML email body",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = $.steps.buildQueries.output.today;\n\nlet html = '<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>';\nhtml += 'body { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; margin: 0; padding: 0; background: #f5f5f5; color: #333; }';\nhtml += '.container { max-width: 620px; margin: 20px auto; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }';\nhtml += '.header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 30px; text-align: center; }';\nhtml += '.header h1 { margin: 0; font-size: 24px; }';\nhtml += '.header p { margin: 8px 0 0; opacity: 0.9; font-size: 14px; }';\nhtml += '.content { padding: 24px; }';\nhtml += '.intro { font-size: 15px; line-height: 1.6; color: #555; margin-bottom: 24px; border-left: 3px solid #667eea; padding-left: 16px; }';\nhtml += '.section-title { font-size: 18px; color: #333; margin: 24px 0 12px; padding-bottom: 8px; border-bottom: 2px solid #667eea; }';\nhtml += '.story { margin: 16px 0; padding: 12px; background: #f9f9f9; border-radius: 6px; }';\nhtml += '.story h3 { margin: 0 0 8px; font-size: 15px; }';\nhtml += '.story h3 a { color: #667eea; text-decoration: none; }';\nhtml += '.story p { margin: 4px 0; font-size: 14px; line-height: 1.5; color: #555; }';\nhtml += '.story .why { font-style: italic; color: #764ba2; font-size: 13px; }';\nhtml += '.quick-bites { margin: 24px 0; padding: 16px; background: #f0f0ff; border-radius: 6px; }';\nhtml += '.quick-bites h3 { margin: 0 0 12px; color: #667eea; }';\nhtml += '.quick-bites ul { margin: 0; padding-left: 20px; }';\nhtml += '.quick-bites li { margin: 6px 0; font-size: 14px; line-height: 1.4; }';\nhtml += '.footer { text-align: center; padding: 20px; color: #999; font-size: 12px; border-top: 1px solid #eee; }';\nhtml += '</style></head><body>';\nhtml += '<div class=\"container\">';\nhtml += '<div class=\"header\"><h1>' + ($.input.senderName || 'AI Tech Digest') + '</h1><p>' + today + '</p></div>';\nhtml += '<div class=\"content\">';\n\nif (ai.editorialIntro) {\n  html += '<div class=\"intro\">' + ai.editorialIntro + '</div>';\n}\n\nif (ai.sections && ai.sections.length > 0) {\n  ai.sections.forEach(section => {\n    html += '<h2 class=\"section-title\">' + (section.topic || 'News') + '</h2>';\n    (section.stories || []).forEach(story => {\n      html += '<div class=\"story\">';\n      if (story.url) {\n        html += '<h3><a href=\"' + story.url + '\">' + (story.headline || 'Story') + '</a></h3>';\n      } else {\n        html += '<h3>' + (story.headline || 'Story') + '</h3>';\n      }\n      html += '<p>' + (story.summary || '') + '</p>';\n      if (story.whyItMatters) html += '<p class=\"why\">Why it matters: ' + story.whyItMatters + '</p>';\n      html += '</div>';\n    });\n  });\n}\n\nif (ai.quickBites && ai.quickBites.length > 0) {\n  html += '<div class=\"quick-bites\"><h3>Quick Bites</h3><ul>';\n  ai.quickBites.forEach(b => { html += '<li>' + b + '</li>'; });\n  html += '</ul></div>';\n}\n\nif (ai.closingNote) {\n  html += '<p style=\"font-size: 14px; color: #555; margin-top: 24px;\">' + ai.closingNote + '</p>';\n}\n\nhtml += '</div>';\nhtml += '<div class=\"footer\">Curated by AI | Powered by Exa + Claude AI | One CLI</div>';\nhtml += '</div></body></html>';\n\nreturn { html, subject: ai.subjectLine || 'Weekly Tech Digest - ' + today };"
+      }
+    },
+    {
+      "id": "sendNewsletter",
+      "name": "Send newsletter via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.recipientEmail",
+          "subject": "$.steps.buildEmailHtml.output.subject",
+          "body": "$.steps.buildEmailHtml.output.html",
+          "isHtml": true
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,129 @@
+{
+  "key": "n8n-2621-supabase-file-chat",
+  "name": "AI Supabase File Chat Agent",
+  "description": "Lists storage buckets and files from Supabase, lets users ask questions about their stored data, Claude AI analyzes the file inventory and answers questions, then posts the response to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2621,
+    "url": "https://n8n.io/workflows/2621",
+    "originalName": "AI agent to chat with files in Supabase Storage",
+    "totalViews": 80124,
+    "rank": 71,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "supabaseKey": {
+      "type": "string",
+      "required": true,
+      "description": "Supabase connection key for accessing storage",
+      "connection": {
+        "platform": "supabase"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting responses",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the file analysis"
+    },
+    "projectRef": {
+      "type": "string",
+      "required": true,
+      "description": "Supabase project reference ID (20-char string from project URL)"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Question to ask about the Supabase storage files (e.g. 'What types of files are stored?', 'How is the storage organized?')"
+    }
+  },
+  "steps": [
+    {
+      "id": "listBuckets",
+      "name": "List all Supabase storage buckets",
+      "type": "action",
+      "action": {
+        "platform": "supabase",
+        "actionId": "conn_mod_def::GC40Vqn3jwA::XzZUOU0vQ-eJc-q--4CV6A",
+        "connectionKey": "$.input.supabaseKey",
+        "pathVariables": {
+          "ref": "$.input.projectRef"
+        }
+      }
+    },
+    {
+      "id": "compileBucketData",
+      "name": "Compile bucket and file data",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.listBuckets.response;\nconst buckets = Array.isArray(response) ? response : (response.data || response.buckets || []);\nlet compiled = '';\nlet bucketCount = 0;\n\nbuckets.forEach((b, i) => {\n  compiled += 'Bucket ' + (i + 1) + ':\\n';\n  compiled += '  ID: ' + (b.id || 'N/A') + '\\n';\n  compiled += '  Name: ' + (b.name || 'N/A') + '\\n';\n  compiled += '  Public: ' + (b.public || false) + '\\n';\n  compiled += '  Created: ' + (b.created_at || 'N/A') + '\\n';\n  compiled += '  Updated: ' + (b.updated_at || 'N/A') + '\\n\\n';\n  bucketCount++;\n});\n\nreturn { compiled, bucketCount, buckets };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for file chat",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileBucketData.output;\nconst question = $.input.question;\nconst projectRef = $.input.projectRef;\n\nlet prompt = 'You are a Supabase storage expert assistant. The user has a question about their Supabase Storage files and buckets.\\n\\n';\nprompt += 'PROJECT REF: ' + projectRef + '\\n';\nprompt += 'TOTAL BUCKETS: ' + d.bucketCount + '\\n\\n';\nprompt += '=== STORAGE BUCKETS ===\\n' + (d.compiled || 'No buckets found.') + '\\n\\n';\nprompt += 'USER QUESTION: ' + question + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Answer the user question based on the storage data provided\\n';\nprompt += '- Provide insights about storage organization, naming conventions, and usage patterns\\n';\nprompt += '- Suggest best practices for Supabase storage if relevant\\n';\nprompt += '- If the data is insufficient to fully answer, explain what additional info would help\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"comprehensive answer to the question\",\\n';\nprompt += '  \"insights\": [\"insight 1\", \"insight 2\"],\\n';\nprompt += '  \"recommendations\": [\"recommendation 1\"],\\n';\nprompt += '  \"storageOverview\": { \"totalBuckets\": ' + d.bucketCount + ', \"publicBuckets\": 0, \"privateBuckets\": 0 },\\n';\nprompt += '  \"additionalContext\": \"any helpful extra context\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2621-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI to answer file question",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2621-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude AI output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, insights: [], recommendations: [], storageOverview: {}, additionalContext: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit response",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst d = $.steps.compileBucketData.output;\nconst question = $.input.question;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Supabase File Chat', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Buckets:*\\n' + d.bucketCount },\n  { type: 'mrkdwn', text: '*Project:*\\n' + $.input.projectRef }\n] });\nblocks.push({ type: 'divider' });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:*\\n' + question } });\nblocks.push({ type: 'divider' });\n\nconst answer = (ai.answer || 'No answer available.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Answer:*\\n' + answer } });\n\nif (ai.insights && ai.insights.length > 0) {\n  blocks.push({ type: 'divider' });\n  let iText = '*Insights:*\\n';\n  ai.insights.forEach((ins, i) => { iText += (i + 1) + '. ' + ins + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: iText.slice(0, 1800) } });\n}\n\nif (ai.recommendations && ai.recommendations.length > 0) {\n  blocks.push({ type: 'divider' });\n  let rText = '*Recommendations:*\\n';\n  ai.recommendations.forEach((rec, i) => { rText += (i + 1) + '. ' + rec + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: rText.slice(0, 1800) } });\n}\n\nif (ai.additionalContext) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '_' + ai.additionalContext.slice(0, 1800) + '_' } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Supabase + Claude AI | One CLI' }] });\n\nconst fallbackText = 'Supabase File Chat: ' + (ai.answer || '').slice(0, 100);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post file chat response to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

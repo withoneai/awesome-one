@@ -1,0 +1,136 @@
+{
+  "key": "n8n-2201-ai-assistant-drive-knowledge",
+  "name": "AI Knowledge Assistant with Google Drive Documents",
+  "description": "Retrieves a document from Google Drive, processes it as a knowledge base with Claude AI, allows asking questions against the document content, and posts answers to Slack. Replicates the OpenAI Assistant pattern using Claude.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2201,
+    "url": "https://n8n.io/workflows/2201",
+    "originalName": "OpenAI Assistant workflow: upload file, create an Assistant, chat with it!",
+    "totalViews": 22455,
+    "rank": 273,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "fileId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive file ID containing the knowledge base document"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Question to ask about the document content"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the answer"
+    },
+    "assistantRole": {
+      "type": "string",
+      "required": false,
+      "default": "You are a helpful knowledge assistant. Answer questions accurately based ONLY on the provided document. If the answer is not in the document, say so.",
+      "description": "System prompt for the AI assistant"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchDocument",
+      "name": "Retrieve document from Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {
+          "fileId": "$.input.fileId",
+          "operation": "get"
+        }
+      }
+    },
+    {
+      "id": "extractContent",
+      "name": "Extract document content for knowledge base",
+      "type": "code",
+      "code": {
+        "source": "const file = $.steps.fetchDocument.response || {};\nconst name = file.name || file.title || 'Document';\nconst content = file.content || file.body || '';\nconst contentStr = typeof content === 'string' ? content : JSON.stringify(content);\nreturn { name, content: contentStr.slice(0, 8000), fullLength: contentStr.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt with document context and question",
+      "type": "code",
+      "code": {
+        "source": "const doc = $.steps.extractContent.output;\nconst prompt = $.input.assistantRole + '\\n\\nDOCUMENT: ' + doc.name + '\\n\\nCONTENT:\\n' + doc.content + '\\n\\nUSER QUESTION: ' + $.input.question + '\\n\\nProvide a clear, specific answer based on the document. If quoting from the document, use quotation marks. Return ONLY valid JSON:\\n{\\n  \"answer\": \"your detailed answer\",\\n  \"confidence\": \"high/medium/low\",\\n  \"relevantQuotes\": [\"quote from document if applicable\"],\\n  \"followUpQuestions\": [\"suggested follow-up question 1\"]\\n}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2201-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnswer",
+      "name": "Generate answer with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2201-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnswer.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, confidence: 'medium', relevantQuotes: [], followUpQuestions: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackMessage",
+      "name": "Build Slack message with answer",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst doc = $.steps.extractContent.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Knowledge Assistant Answer', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Document:*\\n' + doc.name },\n  { type: 'mrkdwn', text: '*Confidence:*\\n' + (ai.confidence || 'N/A') }\n] });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Q:* ' + $.input.question } });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*A:* ' + (ai.answer || 'No answer generated').slice(0, 1800) } });\nif (ai.relevantQuotes && ai.relevantQuotes.length > 0) {\n  let qText = '*Relevant Quotes:*\\n';\n  ai.relevantQuotes.forEach(q => { qText += '> ' + q + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: qText.slice(0, 1800) } });\n}\nif (ai.followUpQuestions && ai.followUpQuestions.length > 0) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Follow-up: ' + ai.followUpQuestions.join(' | ') }] });\n}\nconst fallback = 'Q: ' + $.input.question + ' A: ' + (ai.answer || '').slice(0, 200);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackMessage.output.fallback",
+          "blocks": "$.steps.buildSlackMessage.output.blocks"
+        }
+      }
+    }
+  ]
+}

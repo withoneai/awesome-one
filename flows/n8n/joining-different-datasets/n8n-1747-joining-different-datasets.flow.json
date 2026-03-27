@@ -1,0 +1,108 @@
+{
+  "key": "n8n-1747-joining-different-datasets",
+  "name": "Joining different datasets",
+  "description": "Data merger pipeline: fetches data from two different API endpoints, merges and joins the datasets using SQL-like logic in a code step, and posts the combined results to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1747,
+    "url": "https://n8n.io/workflows/1747",
+    "originalName": "Joining different datasets",
+    "totalViews": 126266,
+    "rank": 37,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "apiUrlA": {
+      "type": "string",
+      "required": false,
+      "default": "https://jsonplaceholder.typicode.com/users",
+      "description": "First API endpoint URL (default: JSONPlaceholder users)"
+    },
+    "apiUrlB": {
+      "type": "string",
+      "required": false,
+      "default": "https://jsonplaceholder.typicode.com/posts",
+      "description": "Second API endpoint URL (default: JSONPlaceholder posts)"
+    },
+    "joinKey": {
+      "type": "string",
+      "required": false,
+      "default": "id:userId",
+      "description": "Join key as 'keyA:keyB' (default: 'id:userId' to join users with their posts)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post merged results"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchDatasetA",
+      "name": "Fetch Dataset A from first API",
+      "type": "bash",
+      "bash": {
+        "command": "curl -s '{{$.input.apiUrlA}}'",
+        "timeout": 30000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "fetchDatasetB",
+      "name": "Fetch Dataset B from second API",
+      "type": "bash",
+      "bash": {
+        "command": "curl -s '{{$.input.apiUrlB}}'",
+        "timeout": 30000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseDatasets",
+      "name": "Parse both datasets from JSON",
+      "type": "code",
+      "code": {
+        "source": "let rawA = $.steps.fetchDatasetA.output || '';\nlet rawB = $.steps.fetchDatasetB.output || '';\nrawA = rawA.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\nrawB = rawB.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\nlet dataA, dataB;\ntry { dataA = JSON.parse(rawA); } catch(e) { dataA = []; }\ntry { dataB = JSON.parse(rawB); } catch(e) { dataB = []; }\nif (!Array.isArray(dataA)) dataA = [dataA];\nif (!Array.isArray(dataB)) dataB = [dataB];\nreturn { dataA, dataB, countA: dataA.length, countB: dataB.length };"
+      }
+    },
+    {
+      "id": "mergeDatasets",
+      "name": "Merge/join the two datasets",
+      "type": "code",
+      "code": {
+        "source": "const { dataA, dataB } = $.steps.parseDatasets.output;\nconst joinParts = ($.input.joinKey || 'id:id').split(':');\nconst keyA = joinParts[0].trim();\nconst keyB = (joinParts[1] || joinParts[0]).trim();\n\n// Build index on dataset B\nconst indexB = {};\ndataB.forEach(item => {\n  const key = String(item[keyB] || '');\n  if (!indexB[key]) indexB[key] = [];\n  indexB[key].push(item);\n});\n\n// Inner join: items from A that have matching items in B\nconst innerJoin = [];\ndataA.forEach(a => {\n  const key = String(a[keyA] || '');\n  const matches = indexB[key] || [];\n  matches.forEach(b => {\n    innerJoin.push({ ...a, _joined: b });\n  });\n});\n\n// Left join: all items from A, with B data if matched\nconst leftJoin = [];\ndataA.forEach(a => {\n  const key = String(a[keyA] || '');\n  const matches = indexB[key] || [];\n  if (matches.length > 0) {\n    matches.forEach(b => { leftJoin.push({ ...a, _joined: b, _matched: true }); });\n  } else {\n    leftJoin.push({ ...a, _joined: null, _matched: false });\n  }\n});\n\n// Union: all items from both datasets\nconst union = [...dataA.map(a => ({ _source: 'A', ...a })), ...dataB.map(b => ({ _source: 'B', ...b }))];\n\n// Only in A (not in B)\nconst onlyA = dataA.filter(a => {\n  const key = String(a[keyA] || '');\n  return !indexB[key];\n});\n\nreturn {\n  innerJoin: innerJoin.slice(0, 20),\n  leftJoin: leftJoin.slice(0, 20),\n  union: union.slice(0, 20),\n  onlyA: onlyA.slice(0, 10),\n  stats: {\n    datasetA: dataA.length,\n    datasetB: dataB.length,\n    innerJoinCount: innerJoin.length,\n    leftJoinCount: leftJoin.length,\n    unionCount: union.length,\n    onlyInA: onlyA.length,\n    joinKeyA: keyA,\n    joinKeyB: keyB\n  }\n};"
+      }
+    },
+    {
+      "id": "buildBlocks",
+      "name": "Build Slack Block Kit message with merge results",
+      "type": "code",
+      "code": {
+        "source": "const m = $.steps.mergeDatasets.output;\nconst s = m.stats;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Dataset Merge Results' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Sources*\\nDataset A: `' + $.input.apiUrlA + '` (' + s.datasetA + ' items)\\nDataset B: `' + $.input.apiUrlB + '` (' + s.datasetB + ' items)\\nJoin key: `' + s.joinKeyA + '` = `' + s.joinKeyB + '`' } });\nblocks.push({ type: 'divider' });\n\n// Stats fields\nconst fields = [\n  { type: 'mrkdwn', text: '*Inner Join*\\n' + s.innerJoinCount + ' rows' },\n  { type: 'mrkdwn', text: '*Left Join*\\n' + s.leftJoinCount + ' rows' },\n  { type: 'mrkdwn', text: '*Union All*\\n' + s.unionCount + ' rows' },\n  { type: 'mrkdwn', text: '*Only in A*\\n' + s.onlyInA + ' rows' }\n];\nblocks.push({ type: 'section', fields: fields.slice(0, 2) });\nblocks.push({ type: 'section', fields: fields.slice(2, 4) });\nblocks.push({ type: 'divider' });\n\n// Inner join sample\nif (m.innerJoin.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Inner Join Sample (first 3)*' } });\n  m.innerJoin.slice(0, 3).forEach(row => {\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '```' + JSON.stringify(row, null, 2).slice(0, 800) + '```' } });\n  });\n  blocks.push({ type: 'divider' });\n}\n\n// Only in A sample\nif (m.onlyA.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Items Only in Dataset A (no match in B) \u2014 first 3*' } });\n  m.onlyA.slice(0, 3).forEach(row => {\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '```' + JSON.stringify(row, null, 2).slice(0, 500) + '```' } });\n  });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Merged by One CLI Data Merger | Join key: ' + s.joinKeyA + ' = ' + s.joinKeyB }] });\nreturn { blocks, fallback: 'Dataset Merge: ' + s.innerJoinCount + ' inner join rows from ' + s.datasetA + ' + ' + s.datasetB + ' items' };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post merged results to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildBlocks.output.fallback",
+          "blocks": "$.steps.buildBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

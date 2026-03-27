@@ -1,0 +1,166 @@
+{
+  "key": "n8n-6550-social-media-content",
+  "name": "AI-powered social media content generator with strategic multi-stage pipeline",
+  "description": "Takes a content request, runs a multi-stage AI pipeline (intent extraction, strategy planning, emotional framing, content outline, and final generation) to produce polished social media posts, then delivers via Gmail and notifies Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 6550,
+    "url": "https://n8n.io/workflows/6550",
+    "originalName": "AI-powered social media content generator with strategic approach using GPT-4 models",
+    "totalViews": 28008,
+    "rank": 226,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for delivering content",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "contentRequest": {
+      "type": "string",
+      "required": true,
+      "description": "Content creation request (e.g. 'Write a Twitter thread about remote work productivity tips targeting tech professionals')"
+    },
+    "recipientEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email to send the generated content"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for content notifications"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildIntentPrompt",
+      "name": "Stage 1 - Extract content intent and platform requirements",
+      "type": "code",
+      "code": {
+        "source": "const request = $.input.contentRequest || '';\n\nlet prompt = 'You are a social media content strategist. Extract the content intent from this request.\\n\\n';\nprompt += 'REQUEST: ' + request + '\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"platform\": \"twitter|linkedin|instagram|facebook|general\",\\n';\nprompt += '  \"contentType\": \"post|thread|story|carousel|reel_caption\",\\n';\nprompt += '  \"topic\": \"main topic\",\\n';\nprompt += '  \"targetAudience\": \"who this is for\",\\n';\nprompt += '  \"tone\": \"desired tone\",\\n';\nprompt += '  \"goal\": \"engagement|education|promotion|awareness\",\\n';\nprompt += '  \"constraints\": { \"maxLength\": 0, \"hashtagCount\": 0, \"emojiLevel\": \"none|minimal|moderate|heavy\" }\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "saveIntentPrompt",
+      "name": "Save intent prompt",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-6550-intent.txt",
+        "content": "$.steps.buildIntentPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiIntent",
+      "name": "Run Claude AI intent extraction",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-6550-intent.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseIntent",
+      "name": "Parse intent extraction output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiIntent.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { platform: 'general', contentType: 'post', topic: $.input.contentRequest, targetAudience: 'general', tone: 'professional', goal: 'engagement', constraints: {} }; }"
+      }
+    },
+    {
+      "id": "buildStrategyPrompt",
+      "name": "Stage 2 - Build strategy and emotional framing prompt",
+      "type": "code",
+      "code": {
+        "source": "const intent = $.steps.parseIntent.output;\n\nlet prompt = 'You are a content strategist and copywriter. Given the content intent below, create a content strategy with emotional framing, outline, and the final polished content.\\n\\n';\nprompt += 'INTENT:\\n';\nprompt += '- Platform: ' + intent.platform + '\\n';\nprompt += '- Type: ' + intent.contentType + '\\n';\nprompt += '- Topic: ' + intent.topic + '\\n';\nprompt += '- Audience: ' + intent.targetAudience + '\\n';\nprompt += '- Tone: ' + intent.tone + '\\n';\nprompt += '- Goal: ' + intent.goal + '\\n\\n';\nprompt += 'ORIGINAL REQUEST: ' + $.input.contentRequest + '\\n\\n';\nprompt += 'Create the content through these stages:\\n';\nprompt += '1. Strategy: key messaging angles and hooks\\n';\nprompt += '2. Emotional Framing: what emotions to evoke\\n';\nprompt += '3. Outline: structure of the content\\n';\nprompt += '4. Final Content: polished, ready-to-publish\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"strategy\": { \"keyAngles\": [\"\"], \"hooks\": [\"\"], \"cta\": \"\" },\\n';\nprompt += '  \"emotionalFraming\": { \"primaryEmotion\": \"\", \"secondaryEmotion\": \"\", \"framework\": \"\" },\\n';\nprompt += '  \"outline\": [\"\"],\\n';\nprompt += '  \"content\": { \"text\": \"the final post text\", \"hashtags\": [\"\"], \"altVersions\": [\"shorter version\"] },\\n';\nprompt += '  \"metrics\": { \"estimatedEngagement\": \"high|medium|low\", \"bestTime\": \"\", \"tips\": [\"\"] }\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "saveStrategyPrompt",
+      "name": "Save strategy prompt",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-6550-strategy.txt",
+        "content": "$.steps.buildStrategyPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiStrategy",
+      "name": "Run Claude AI content strategy and generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-6550-strategy.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseStrategy",
+      "name": "Parse strategy and content output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiStrategy.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { strategy: { keyAngles: [], hooks: [], cta: '' }, emotionalFraming: { primaryEmotion: '', secondaryEmotion: '', framework: '' }, outline: [], content: { text: raw, hashtags: [], altVersions: [] }, metrics: {} }; }"
+      }
+    },
+    {
+      "id": "buildEmailBody",
+      "name": "Build email body with full content strategy",
+      "type": "code",
+      "code": {
+        "source": "const s = $.steps.parseStrategy.output;\nconst intent = $.steps.parseIntent.output;\n\nlet body = 'SOCIAL MEDIA CONTENT STRATEGY\\n';\nbody += '============================\\n\\n';\nbody += 'Platform: ' + intent.platform + ' | Type: ' + intent.contentType + '\\n';\nbody += 'Topic: ' + intent.topic + '\\n\\n';\nbody += 'STRATEGY\\n';\nif (s.strategy && s.strategy.hooks) {\n  body += 'Hooks: ' + s.strategy.hooks.join(', ') + '\\n';\n}\nif (s.strategy && s.strategy.cta) body += 'CTA: ' + s.strategy.cta + '\\n\\n';\nbody += 'EMOTIONAL FRAMING\\n';\nif (s.emotionalFraming) {\n  body += 'Primary: ' + s.emotionalFraming.primaryEmotion + '\\n';\n  body += 'Framework: ' + (s.emotionalFraming.framework || '') + '\\n\\n';\n}\nbody += 'FINAL CONTENT\\n';\nbody += '-------------\\n';\nbody += (s.content?.text || '') + '\\n\\n';\nif (s.content?.hashtags) body += 'Hashtags: ' + s.content.hashtags.join(' ') + '\\n\\n';\nif (s.content?.altVersions && s.content.altVersions.length > 0) {\n  body += 'ALT VERSION:\\n' + s.content.altVersions[0] + '\\n';\n}\nreturn { body: body, subject: 'Social Content: ' + intent.topic };"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send content strategy via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.recipientEmail",
+          "subject": "$.steps.buildEmailBody.output.subject",
+          "body": "$.steps.buildEmailBody.output.body"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack notification",
+      "type": "code",
+      "code": {
+        "source": "const s = $.steps.parseStrategy.output;\nconst intent = $.steps.parseIntent.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Social Media Content Generated', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Platform:*\\n' + (intent.platform || 'N/A') },\n  { type: 'mrkdwn', text: '*Type:*\\n' + (intent.contentType || 'N/A') }\n] });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: (s.content?.text || '').slice(0, 1800) } });\nif (s.content?.hashtags && s.content.hashtags.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: s.content.hashtags.join(' ') } });\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Sent to ' + $.input.recipientEmail + ' | Multi-stage AI pipeline' }] });\nconst fallbackText = 'Social content ready for ' + (intent.platform || 'posting') + ': ' + (intent.topic || $.input.contentRequest).slice(0, 80);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Post notification to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

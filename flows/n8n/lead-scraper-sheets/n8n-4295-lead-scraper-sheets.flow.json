@@ -1,0 +1,131 @@
+{
+  "key": "n8n-4295-lead-scraper-sheets",
+  "name": "Business lead scraper with AI cleaning to Google Sheets",
+  "description": "Scrapes a business directory or listings page with Firecrawl, uses Claude AI to extract and clean lead data (names, emails, phones, companies), and saves the structured leads to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4295,
+    "url": "https://n8n.io/workflows/4295",
+    "originalName": "Automate business lead scraping from Apify to Google Sheets with data cleaning",
+    "totalViews": 25424,
+    "rank": 251,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping the listings page",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving leads",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "targetUrl": {
+      "type": "string",
+      "required": true,
+      "description": "URL of the business directory or listings page to scrape (e.g. 'https://www.yelp.com/search?find_desc=plumbers&find_loc=San+Francisco')"
+    },
+    "leadType": {
+      "type": "string",
+      "required": false,
+      "default": "business leads",
+      "description": "Type of leads to extract (e.g. 'plumbers', 'SaaS companies', 'restaurants')"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapePage",
+      "name": "Scrape business listings page with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.targetUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "extractContent",
+      "name": "Extract scraped content",
+      "type": "code",
+      "code": {
+        "source": "var data = ($.steps.scrapePage.response && $.steps.scrapePage.response.data) ? $.steps.scrapePage.response.data : {};\nvar markdown = (data.markdown || '').slice(0, 8000);\nreturn { markdown: markdown, url: $.input.targetUrl };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for lead extraction and cleaning",
+      "type": "code",
+      "code": {
+        "source": "var content = $.steps.extractContent.output;\nvar prompt = 'You are a lead generation specialist. Extract and clean business lead data from the following scraped web content.\\n\\n';\nprompt += 'SOURCE URL: ' + content.url + '\\n';\nprompt += 'LEAD TYPE: ' + ($.input.leadType || 'business leads') + '\\n\\n';\nprompt += 'SCRAPED CONTENT:\\n' + content.markdown + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract every identifiable business or contact from the content\\n';\nprompt += '- Clean and standardize all data (proper capitalization, format phone numbers, validate emails)\\n';\nprompt += '- Remove duplicates\\n';\nprompt += '- Categorize each lead by quality: Hot, Warm, or Cold\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"leads\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"businessName\": \"...\",\\n';\nprompt += '      \"contactName\": \"...\",\\n';\nprompt += '      \"email\": \"...\",\\n';\nprompt += '      \"phone\": \"...\",\\n';\nprompt += '      \"address\": \"...\",\\n';\nprompt += '      \"website\": \"...\",\\n';\nprompt += '      \"category\": \"...\",\\n';\nprompt += '      \"quality\": \"Hot|Warm|Cold\",\\n';\nprompt += '      \"notes\": \"...\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"totalLeads\": 0,\\n';\nprompt += '  \"summary\": \"Brief summary of leads found\"\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4295-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExtract",
+      "name": "Run Claude AI to extract and clean leads",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4295-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExtract.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { leads: [], totalLeads: 0, summary: raw }; }"
+      }
+    },
+    {
+      "id": "formatSheetData",
+      "name": "Format leads for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar leads = ai.leads || [];\nvar date = new Date().toISOString().split('T')[0];\nvar leadType = $.input.leadType || 'Business';\nvar sheetData = leads.map(function(l, i) {\n  return {\n    'No': i + 1,\n    'Business Name': l.businessName || '',\n    'Contact Name': l.contactName || '',\n    'Email': l.email || '',\n    'Phone': l.phone || '',\n    'Address': (l.address || '').slice(0, 200),\n    'Website': l.website || '',\n    'Category': l.category || '',\n    'Quality': l.quality || '',\n    'Notes': (l.notes || '').slice(0, 200),\n    'Source URL': $.input.targetUrl,\n    'Date Scraped': date\n  };\n});\nvar sheetTitle = 'Leads - ' + leadType + ' - ' + date;\nreturn { sheetData: sheetData, leadCount: leads.length, date: date, summary: ai.summary || '', sheetTitle: sheetTitle };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save cleaned leads to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "title": "$.steps.formatSheetData.output.sheetTitle",
+          "sheetTitle": "Leads",
+          "data": "$.steps.formatSheetData.output.sheetData"
+        }
+      }
+    }
+  ]
+}

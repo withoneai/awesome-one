@@ -1,0 +1,143 @@
+{
+  "key": "n8n-1963-conversational-agent-custom",
+  "name": "Conversational AI agent with web search",
+  "description": "A multi-turn conversational AI agent. Takes a user question, performs Exa web search for real-time context, uses Claude to generate a thoughtful conversational response, and delivers the answer to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1963,
+    "url": "https://n8n.io/workflows/1963",
+    "originalName": "AI: conversational agent with custom tool written in JavaScript",
+    "totalViews": 54774,
+    "rank": 108,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the response",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The user's conversational question"
+    },
+    "conversationHistory": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Previous conversation context (optional, for multi-turn conversations)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for the conversation"
+    },
+    "personality": {
+      "type": "string",
+      "required": false,
+      "default": "helpful and friendly",
+      "description": "Agent personality (e.g. 'helpful and friendly', 'technical expert', 'creative writer')"
+    }
+  },
+  "steps": [
+    {
+      "id": "webSearch",
+      "name": "Search the web for relevant context via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1200
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile search results for context",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.webSearch.response.results || [];\nlet sourcesText = '';\nresults.forEach((r, i) => {\n  sourcesText += (i + 1) + '. ' + (r.title || 'Untitled') + '\\n';\n  sourcesText += '   URL: ' + r.url + '\\n';\n  sourcesText += '   ' + (r.text || '').slice(0, 1000) + '\\n\\n';\n});\nreturn { sourcesText, sourceCount: results.length, topSources: results.slice(0, 3).map(r => ({ title: r.title || r.url, url: r.url })) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build conversational Claude prompt",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst history = $.input.conversationHistory || '';\nconst personality = $.input.personality || 'helpful and friendly';\nconst sources = $.steps.compileSources.output;\n\nlet prompt = 'You are a conversational AI agent. Your personality is: ' + personality + '.\\n\\n';\n\nif (history) {\n  prompt += 'PREVIOUS CONVERSATION:\\n' + history + '\\n\\n';\n}\n\nprompt += 'CURRENT QUESTION: ' + question + '\\n\\n';\n\nif (sources.sourceCount > 0) {\n  prompt += 'WEB CONTEXT (' + sources.sourceCount + ' sources):\\n' + sources.sourcesText + '\\n\\n';\n}\n\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Respond conversationally, maintaining your personality\\n';\nprompt += '- Use web sources to ground your response in facts when relevant\\n';\nprompt += '- Cite sources naturally, e.g. [1]\\n';\nprompt += '- If the question is casual or personal, respond naturally without forcing sources\\n';\nprompt += '- Ask a follow-up question to keep the conversation going\\n';\nprompt += '- Use Slack mrkdwn: *bold*, _italic_, numbered lists\\n';\nprompt += '- Slack rules: use *bold* (NOT **bold**). No markdown tables. No # headings.\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"response\": \"<conversational response in Slack mrkdwn>\",\\n';\nprompt += '  \"followUpQuestion\": \"<a natural follow-up question>\",\\n';\nprompt += '  \"topicCategory\": \"<category of the question>\",\\n';\nprompt += '  \"usedSources\": true,\\n';\nprompt += '  \"mood\": \"informative|casual|technical|creative\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1963-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for conversational response",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1963-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { response: raw, followUpQuestion: '', topicCategory: 'general', usedSources: false, mood: 'informative' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit conversational message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst topSources = $.steps.compileSources.output.topSources || [];\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'AI Conversational Agent' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*You asked:* ' + question } });\nblocks.push({ type: 'divider' });\n\nconst responseText = (ai.response || 'No response.').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: responseText } });\n\nif (ai.followUpQuestion) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':speech_balloon: *Follow-up:* ' + ai.followUpQuestion } });\n}\n\nif (ai.usedSources && topSources.length > 0) {\n  blocks.push({ type: 'divider' });\n  let srcText = '*Sources:*\\n';\n  topSources.slice(0, 3).forEach((s, i) => { srcText += (i + 1) + '. <' + s.url + '|' + (s.title || s.url).slice(0, 60) + '>\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Topic: *' + (ai.topicCategory || 'general') + '* | Mood: *' + (ai.mood || 'informative') + '*' }] });\n\nconst fallback = 'AI Agent response to: ' + question;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post conversational response to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

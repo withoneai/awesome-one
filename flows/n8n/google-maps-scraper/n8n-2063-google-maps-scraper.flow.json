@@ -1,0 +1,170 @@
+{
+  "key": "n8n-2063-google-maps-scraper",
+  "name": "Google Maps business scraper",
+  "description": "Scrapes business data from Google Maps by searching via Exa for businesses in a location, scraping each result with Firecrawl for detailed info, using Claude to extract structured data (name, address, phone, hours, ratings), and saving everything to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2063,
+    "url": "https://n8n.io/workflows/2063",
+    "originalName": "Google Maps scraper",
+    "totalViews": 61856,
+    "rank": 98,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for business search",
+      "default": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping business pages",
+      "default": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving results",
+      "default": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": true,
+      "description": "Business search query (e.g. 'coffee shops in San Francisco')"
+    },
+    "maxResults": {
+      "type": "number",
+      "required": false,
+      "description": "Maximum number of businesses to scrape",
+      "default": 10
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery_searchBusinesses",
+      "name": "Build search query for searchBusinesses",
+      "type": "code",
+      "code": {
+        "source": "const parts = [$.input.searchQuery];\nconst staticTerms = \"{{}} address phone hours rating reviews\";\nreturn { query: parts.filter(Boolean).join(\" \") + \" \" + staticTerms };"
+      }
+    },
+    {
+      "id": "searchBusinesses",
+      "name": "Search for businesses via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_searchBusinesses.output.query",
+          "numResults": "{{$.input.maxResults}}",
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 2000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "getTopUrl",
+      "name": "Extract top business URL for detailed scraping",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchBusinesses.response.results || [];\nconst topUrl = results.length > 0 ? results[0].url : '';\nconst searchSummary = results.map((r, i) => {\n  return (i+1) + '. ' + (r.title || 'Unknown') + '\\n   URL: ' + r.url + '\\n   ' + (r.text || '').slice(0, 800);\n}).join('\\n\\n');\nreturn { topUrl, searchSummary, totalFound: results.length };"
+      }
+    },
+    {
+      "id": "scrapeTopResult",
+      "name": "Scrape the top business result with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "{{$.steps.getTopUrl.output.topUrl}}",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for business data extraction",
+      "type": "code",
+      "code": {
+        "source": "const searchData = $.steps.getTopUrl.output.searchSummary;\nconst scrapeResp = $.steps.scrapeTopResult.response || {};\nconst scrapeData = (scrapeResp.data && scrapeResp.data.markdown) ? scrapeResp.data.markdown.slice(0, 4000) : '';\n\nconst prompt = `You are a business data extraction specialist. Extract detailed business information from the following search results and scraped content.\\n\\nSEARCH QUERY: ${$.input.searchQuery}\\n\\nSEARCH RESULTS (${$.steps.getTopUrl.output.totalFound} businesses found):\\n${searchData}\\n\\nDETAILED SCRAPE OF TOP RESULT:\\n${scrapeData}\\n\\nINSTRUCTIONS:\\n- Extract every business identified from the search results\\n- For each business, find: name, address, phone, website, hours, rating, review count, category, description\\n- Use empty string for unavailable fields\\n- Deduplicate entries\\n\\nReturn ONLY valid JSON:\\n{\\n  \"businesses\": [\\n    {\\n      \"name\": \"\",\\n      \"address\": \"\",\\n      \"phone\": \"\",\\n      \"website\": \"\",\\n      \"hours\": \"\",\\n      \"rating\": \"\",\\n      \"reviewCount\": \"\",\\n      \"category\": \"\",\\n      \"description\": \"\"\\n    }\\n  ],\\n  \"totalBusinesses\": 0,\\n  \"searchQuery\": \"${$.input.searchQuery}\"\\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2063-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for business data extraction",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2063-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { businesses: [], totalBusinesses: 0, searchQuery: $.input.searchQuery }; }"
+      }
+    },
+    {
+      "id": "formatSheetData",
+      "name": "Format business data for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst businesses = ai.businesses || [];\nconst date = new Date().toISOString().split('T')[0];\nconst sheetData = businesses.map((b, i) => ({\n  '#': i + 1,\n  'Business Name': b.name || '',\n  'Address': b.address || '',\n  'Phone': b.phone || '',\n  'Website': b.website || '',\n  'Hours': (b.hours || '').slice(0, 200),\n  'Rating': b.rating || '',\n  'Reviews': b.reviewCount || '',\n  'Category': b.category || '',\n  'Description': (b.description || '').slice(0, 200),\n  'Source': 'Exa + Firecrawl',\n  'Date': date\n}));\nreturn { sheetData, businessCount: businesses.length, date };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save business data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "title": "Business Scrape - {{$.input.searchQuery}} - {{$.steps.formatSheetData.output.date}}",
+          "sheetTitle": "Businesses",
+          "data": "$.steps.formatSheetData.output.sheetData"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,152 @@
+{
+  "key": "n8n-2703-calendar-ai-assistant",
+  "name": "Calendar AI Scheduling Assistant",
+  "description": "Fetches Google Calendar events, uses Claude AI to help with scheduling decisions, suggests meeting preparation tasks, identifies optimal time slots, and posts actionable recommendations to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2703,
+    "url": "https://n8n.io/workflows/2703",
+    "originalName": "AI agent : Google calendar assistant using OpenAI",
+    "totalViews": 68767,
+    "rank": 85,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "calendarKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Calendar connection key",
+      "connection": {
+        "platform": "google-calendar"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting suggestions",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post scheduling suggestions"
+    },
+    "schedulingRequest": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Optional scheduling request (e.g. 'Find time for a 1-hour team sync this week')"
+    },
+    "workHoursStart": {
+      "type": "number",
+      "required": false,
+      "default": 9,
+      "description": "Work day start hour (default: 9)"
+    },
+    "workHoursEnd": {
+      "type": "number",
+      "required": false,
+      "default": 17,
+      "description": "Work day end hour (default: 17)"
+    }
+  },
+  "steps": [
+    {
+      "id": "getDateRange",
+      "name": "Calculate this week's date range",
+      "type": "code",
+      "code": {
+        "source": "const now = new Date();\nconst dayOfWeek = now.getDay();\nconst mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;\nconst monday = new Date(now);\nmonday.setDate(now.getDate() + mondayOffset);\nmonday.setHours(0, 0, 0, 0);\nconst nextFriday = new Date(monday);\nnextFriday.setDate(monday.getDate() + 11);\nnextFriday.setHours(23, 59, 59, 999);\n\nconst todayStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });\nconst workStart = $.input.workHoursStart || 9;\nconst workEnd = $.input.workHoursEnd || 17;\n\nreturn { timeMin: monday.toISOString(), timeMax: nextFriday.toISOString(), today: todayStr, workStart, workEnd };"
+      }
+    },
+    {
+      "id": "listEvents",
+      "name": "Fetch calendar events for this and next week",
+      "type": "action",
+      "action": {
+        "platform": "google-calendar",
+        "actionId": "conn_mod_def::GJ6RlnIYK20::YzuWSmaVQgurletRDNJavA",
+        "connectionKey": "$.input.calendarKey",
+        "pathVars": {
+          "calendarId": "primary"
+        },
+        "queryParams": {
+          "timeMin": "$.steps.getDateRange.output.timeMin",
+          "timeMax": "$.steps.getDateRange.output.timeMax",
+          "singleEvents": true,
+          "orderBy": "startTime",
+          "maxResults": 60
+        }
+      }
+    },
+    {
+      "id": "compileSchedule",
+      "name": "Compile schedule data",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.listEvents.response;\nconst events = response.items || response.data || [];\nlet compiled = '';\nlet eventCount = 0;\n\nif (Array.isArray(events)) {\n  events.forEach((e, i) => {\n    const startTime = e.start ? (e.start.dateTime || e.start.date || '') : '';\n    const endTime = e.end ? (e.end.dateTime || e.end.date || '') : '';\n    compiled += 'EVENT ' + (i + 1) + ': ' + (e.summary || '(no title)') + '\\n';\n    compiled += '  Start: ' + startTime + ' | End: ' + endTime + '\\n';\n    if (e.location) compiled += '  Location: ' + e.location + '\\n';\n    const attendees = (e.attendees || []).map(a => (a.displayName || a.email)).join(', ');\n    if (attendees) compiled += '  Attendees: ' + attendees + '\\n';\n    if (e.description) compiled += '  Notes: ' + (e.description || '').slice(0, 150) + '\\n';\n    compiled += '\\n';\n    eventCount++;\n  });\n}\n\nreturn { compiled, eventCount };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for scheduling assistant",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileSchedule.output;\nconst dr = $.steps.getDateRange.output;\nconst request = $.input.schedulingRequest || '';\n\nlet prompt = 'You are an expert calendar and scheduling assistant. Analyze the following calendar and provide comprehensive scheduling advice.\\n\\n';\nprompt += 'CURRENT DATE: ' + dr.today + '\\n';\nprompt += 'WORK HOURS: ' + dr.workStart + ':00 to ' + dr.workEnd + ':00\\n';\nprompt += 'TOTAL EVENTS: ' + d.eventCount + '\\n\\n';\n\nif (request) {\n  prompt += 'SCHEDULING REQUEST: ' + request + '\\n\\n';\n}\n\nprompt += 'CALENDAR EVENTS:\\n' + d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Find available time slots for meetings (minimum 30 min blocks)\\n';\nprompt += '- Suggest meetings that could be rescheduled to optimize the week\\n';\nprompt += '- Identify back-to-back meetings needing buffer time\\n';\nprompt += '- Suggest meeting prep tasks for important meetings\\n';\nprompt += '- Recommend times for deep focus work\\n';\nprompt += '- If a scheduling request was given, provide specific slot recommendations\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"availableSlots\": [{ \"day\": \"Monday\", \"date\": \"YYYY-MM-DD\", \"time\": \"10:00-11:00\", \"duration\": \"1 hour\", \"quality\": \"ideal|good|okay\" }],\\n';\nprompt += '  \"rescheduleSuggestions\": [{ \"event\": \"meeting name\", \"currentTime\": \"when\", \"suggestedTime\": \"when\", \"reason\": \"why\" }],\\n';\nprompt += '  \"bufferNeeded\": [{ \"between\": [\"meeting1\", \"meeting2\"], \"suggestion\": \"add 15 min buffer\" }],\\n';\nprompt += '  \"meetingPrep\": [{ \"meeting\": \"name\", \"when\": \"day/time\", \"prepTasks\": [\"task 1\", \"task 2\"], \"prepTime\": \"30 min\" }],\\n';\nprompt += '  \"focusTimeBlocks\": [{ \"day\": \"day\", \"time\": \"start-end\", \"bestFor\": \"type of work\" }],\\n';\nprompt += '  \"schedulingResponse\": \"response to the specific scheduling request if any\",\\n';\nprompt += '  \"weekSummary\": \"overview of the week ahead\",\\n';\nprompt += '  \"topRecommendation\": \"single most important scheduling advice\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2703-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI scheduling analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2703-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude AI output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { availableSlots: [], rescheduleSuggestions: [], bufferNeeded: [], meetingPrep: [], focusTimeBlocks: [], schedulingResponse: '', weekSummary: raw, topRecommendation: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit scheduling assistant",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst dr = $.steps.getDateRange.output;\nconst request = $.input.schedulingRequest || '';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'AI Calendar Scheduling Assistant', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Date:* ' + dr.today + ' | *Work hours:* ' + dr.workStart + ':00 - ' + dr.workEnd + ':00' } });\n\nif (ai.topRecommendation) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':bulb: *Top Recommendation:* ' + ai.topRecommendation } });\n}\nblocks.push({ type: 'divider' });\n\nconst summary = (ai.weekSummary || 'No analysis available.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Week Overview:*\\n' + summary } });\n\nif (request && ai.schedulingResponse) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Your Request:* ' + request + '\\n\\n*Response:* ' + ai.schedulingResponse } });\n}\n\nif (ai.availableSlots && ai.availableSlots.length > 0) {\n  blocks.push({ type: 'divider' });\n  let slotText = '*Available Time Slots:*\\n';\n  ai.availableSlots.slice(0, 8).forEach(s => {\n    const qualityIcon = s.quality === 'ideal' ? ':star:' : s.quality === 'good' ? ':white_check_mark:' : ':ok:';\n    slotText += qualityIcon + ' ' + s.day + ' ' + s.time + ' (' + s.duration + ')\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: slotText.slice(0, 1800) } });\n}\n\nif (ai.rescheduleSuggestions && ai.rescheduleSuggestions.length > 0) {\n  blocks.push({ type: 'divider' });\n  let reText = '*Reschedule Suggestions:*\\n';\n  ai.rescheduleSuggestions.slice(0, 5).forEach((r, i) => {\n    reText += (i + 1) + '. *' + r.event + '*: Move from ' + r.currentTime + ' to ' + r.suggestedTime + '\\n';\n    reText += '   _Reason: ' + r.reason + '_\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: reText.slice(0, 1800) } });\n}\n\nif (ai.meetingPrep && ai.meetingPrep.length > 0) {\n  blocks.push({ type: 'divider' });\n  let prepText = '*Meeting Prep:*\\n';\n  ai.meetingPrep.slice(0, 5).forEach((m, i) => {\n    prepText += (i + 1) + '. *' + m.meeting + '* (' + m.when + ') - ' + m.prepTime + ' needed\\n';\n    (m.prepTasks || []).forEach(t => { prepText += '   - ' + t + '\\n'; });\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: prepText.slice(0, 1800) } });\n}\n\nif (ai.focusTimeBlocks && ai.focusTimeBlocks.length > 0) {\n  blocks.push({ type: 'divider' });\n  let focusText = '*Focus Time Blocks:*\\n';\n  ai.focusTimeBlocks.slice(0, 5).forEach((f, i) => {\n    focusText += (i + 1) + '. ' + f.day + ' ' + f.time + ' - Best for: ' + f.bestFor + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: focusText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Google Calendar + Claude AI | One CLI' }] });\n\nconst fallbackText = 'Calendar Assistant: ' + (ai.availableSlots || []).length + ' slots found - ' + (ai.topRecommendation || ai.weekSummary || '').slice(0, 100);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post scheduling suggestions to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,226 @@
+{
+  "key": "n8n-3904-linkedin-company-scorer",
+  "name": "LinkedIn company search, AI scoring, and Sheets CRM",
+  "description": "Searches for companies using Exa, scrapes their websites with Firecrawl, uses Claude AI to score and qualify them, and adds the results to a Google Sheets CRM. Adapted from n8n's LinkedIn company search and scoring workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3904,
+    "url": "https://n8n.io/workflows/3904",
+    "originalName": "Search LinkedIn companies, score with AI and add them to Google Sheet CRM",
+    "totalViews": 30499,
+    "rank": 201,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for company search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for website scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for CRM output",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for scoring results"
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": true,
+      "description": "Company search query (e.g. 'AI startups in fintech')"
+    },
+    "scoringCriteria": {
+      "type": "string",
+      "required": false,
+      "default": "B2B SaaS companies with product-market fit, 10-500 employees, funded",
+      "description": "Criteria for scoring companies"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for the CRM"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery_searchCompanies",
+      "name": "Build search query for company discovery",
+      "type": "code",
+      "code": {
+        "source": "const q = $.input.searchQuery;\nconst staticTerms = 'company about us team';\nreturn { query: q + ' ' + staticTerms };"
+      }
+    },
+    {
+      "id": "searchCompanies",
+      "name": "Search for companies via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_searchCompanies.output.query",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1200
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "extractCompanies",
+      "name": "Extract company URLs and metadata",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchCompanies.response.results || [];\nconst companies = results.map((r, i) => ({\n  index: i + 1,\n  title: r.title || 'Unknown',\n  url: r.url || '',\n  snippet: (r.text || '').slice(0, 600)\n})).filter(c => c.url.length > 0);\nreturn { companies, count: companies.length };"
+      }
+    },
+    {
+      "id": "scrapeCompanies",
+      "name": "Scrape company websites with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractCompanies.output.companies",
+        "as": "company",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapeOne",
+            "name": "Scrape individual company website",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.company.url"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileData",
+      "name": "Compile all company data for AI scoring",
+      "type": "code",
+      "code": {
+        "source": "const companies = $.steps.extractCompanies.output.companies || [];\nconst iterations = $.steps.scrapeCompanies.response.iterations || [];\nlet compiled = '';\ncompanies.forEach((c, i) => {\n  compiled += '--- COMPANY ' + c.index + ' ---\\n';\n  compiled += 'Name: ' + c.title + '\\n';\n  compiled += 'URL: ' + c.url + '\\n';\n  compiled += 'Snippet: ' + c.snippet + '\\n';\n  if (iterations[i] && iterations[i].scrapeOne && iterations[i].scrapeOne.response) {\n    const s = iterations[i].scrapeOne.response;\n    const content = (typeof s === 'string') ? s : JSON.stringify(s);\n    compiled += 'Website: ' + content.slice(0, 2500) + '\\n';\n  }\n  compiled += '\\n';\n});\nreturn { compiled: compiled.slice(0, 30000), count: companies.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude AI scoring prompt",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileData.output;\nconst criteria = $.input.scoringCriteria;\nlet prompt = 'You are a business analyst. Score and qualify these companies based on the following criteria.\\n\\n';\nprompt += 'SCORING CRITERIA: ' + criteria + '\\n\\n';\nprompt += 'COMPANIES (' + d.count + '):\\n';\nprompt += d.compiled + '\\n';\nprompt += 'For each company, score 1-100 and classify as A (80+), B (50-79), or C (below 50).\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"companies\": [{\\n';\nprompt += '    \"name\": \"company name\",\\n';\nprompt += '    \"url\": \"website url\",\\n';\nprompt += '    \"score\": 85,\\n';\nprompt += '    \"grade\": \"A\",\\n';\nprompt += '    \"industry\": \"industry\",\\n';\nprompt += '    \"estimatedSize\": \"10-50|50-200|200-1000|1000+\",\\n';\nprompt += '    \"strengths\": [\"strength1\", \"strength2\"],\\n';\nprompt += '    \"notes\": \"brief analyst note\"\\n';\nprompt += '  }],\\n';\nprompt += '  \"summary\": \"pipeline summary\",\\n';\nprompt += '  \"topPicks\": [\"company1\", \"company2\"]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3904-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiScore",
+      "name": "Run Claude AI company scoring",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3904-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiScore.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { companies: [], summary: raw, topPicks: [] }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Google Sheets CRM rows",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst companies = ai.companies || [];\nconst header = ['Company', 'URL', 'Score', 'Grade', 'Industry', 'Est. Size', 'Strengths', 'Notes'];\nconst rows = companies.map(c => [\n  c.name || 'Unknown',\n  c.url || '',\n  String(c.score || 0),\n  c.grade || 'C',\n  c.industry || '',\n  c.estimatedSize || '',\n  (c.strengths || []).join('; '),\n  c.notes || ''\n]);\nreturn { values: [header].concat(rows), totalCompanies: companies.length, summary: ai.summary || '' };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save scored companies to Google Sheets CRM",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "CRM",
+          "values": "$.steps.buildSheetRows.output.values",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit notification",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst companies = ai.companies || [];\nconst topPicks = ai.topPicks || [];\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Company Scoring Complete', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + companies.length + ' companies* scored and added to CRM' } });\n\nconst gradeA = companies.filter(c => c.grade === 'A').length;\nconst gradeB = companies.filter(c => c.grade === 'B').length;\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Grade A:* ' + gradeA },\n  { type: 'mrkdwn', text: '*Grade B:* ' + gradeB }\n] });\n\nif (topPicks.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Top Picks:* ' + topPicks.join(', ') } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa + Firecrawl + Claude AI' }] });\n\nconst fallback = 'Company Scoring: ' + companies.length + ' companies scored, ' + gradeA + ' Grade A';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post scoring results to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

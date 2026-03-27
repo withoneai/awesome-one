@@ -1,0 +1,122 @@
+{
+  "key": "n8n-1748-preparing-data-service",
+  "name": "Data preparation and transformation pipeline",
+  "description": "Fetches raw data from a URL, uses a code step to transform, clean, and normalize the data into the correct format, and saves the prepared data to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1748,
+    "url": "https://n8n.io/workflows/1748",
+    "originalName": "Preparing data to be sent to a service",
+    "totalViews": 64761,
+    "rank": 94,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for fetching URL data",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "dataUrl": {
+      "type": "string",
+      "required": true,
+      "description": "URL to fetch data from (e.g. a page with tabular data, listings, or a data feed)"
+    },
+    "fieldMapping": {
+      "type": "string",
+      "required": false,
+      "description": "Optional field mapping instructions (e.g. 'rename name to Full Name, drop age column, add timestamp')"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchData",
+      "name": "Fetch data from source URL with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.dataUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for data extraction and preparation",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.fetchData.response || {};\nconst data = resp.data || {};\nconst md = data.markdown || '';\nconst fieldMapping = $.input.fieldMapping || 'Use reasonable field names. Include all data columns found.';\n\nconst prompt = `You are a data preparation specialist. Extract and transform data from the following scraped content into a clean, structured format ready for Google Sheets.\\n\\nSOURCE URL: ${$.input.dataUrl}\\n\\nFIELD MAPPING INSTRUCTIONS: ${fieldMapping}\\n\\nSCRAPED CONTENT:\\n${md.slice(0, 8000)}\\n\\nINSTRUCTIONS:\\n- Identify all tabular or repeating data in the content\\n- Extract each record with consistent fields\\n- Clean and normalize values (trim whitespace, fix formatting)\\n- Apply field mapping/renaming as specified\\n- Add a timestamp field to each record\\n- Remove duplicate entries\\n\\nReturn ONLY valid JSON:\\n{\\n  \"headers\": [\"col1\", \"col2\"],\\n  \"records\": [\\n    { \"col1\": \"value\", \"col2\": \"value\" }\\n  ],\\n  \"totalRecords\": 0,\\n  \"dataSource\": \"${$.input.dataUrl}\",\\n  \"transformations\": [\"<list of transforms applied>\"]\\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1748-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for data extraction and transformation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1748-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { headers: [], records: [], totalRecords: 0, dataSource: $.input.dataUrl, transformations: [] }; }"
+      }
+    },
+    {
+      "id": "transformData",
+      "name": "Clean and format data for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst records = ai.records || [];\nconst date = new Date().toISOString().split('T')[0];\nconst timestamp = new Date().toISOString();\n\nconst sheetData = records.map((record, i) => {\n  const row = { '#': i + 1 };\n  Object.keys(record).forEach(key => {\n    let val = record[key];\n    if (val === null || val === undefined) val = '';\n    val = String(val).trim();\n    row[key] = val;\n  });\n  if (!row['Timestamp']) row['Timestamp'] = timestamp;\n  return row;\n});\n\nreturn { sheetData, recordCount: records.length, date, transformations: ai.transformations || [] };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save prepared data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "title": "Prepared Data - {{$.steps.transformData.output.date}}",
+          "sheetTitle": "Data",
+          "data": "$.steps.transformData.output.sheetData"
+        }
+      }
+    }
+  ]
+}

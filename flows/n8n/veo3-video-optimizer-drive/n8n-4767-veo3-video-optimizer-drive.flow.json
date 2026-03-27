@@ -1,0 +1,159 @@
+{
+  "key": "n8n-4767-veo3-video-optimizer-drive",
+  "name": "AI Video Prompt Optimizer with Google Drive Storage",
+  "description": "Takes a simple video idea, optimizes the prompt using Claude AI for cinematic quality, researches visual styles via Exa, generates a complete video specification document, and stores it in Google Drive with Slack notification.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4767,
+    "url": "https://n8n.io/workflows/4767",
+    "originalName": "VEO3 video generator with AI optimization and Google Drive storage",
+    "totalViews": 21904,
+    "rank": 281,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for visual style research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "videoIdea": {
+      "type": "string",
+      "required": true,
+      "description": "Simple video idea or description to optimize"
+    },
+    "videoLength": {
+      "type": "string",
+      "required": false,
+      "default": "8",
+      "description": "Target video length in seconds"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for completion notification"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildExaQuery",
+      "name": "Build Exa query for cinematography research",
+      "type": "code",
+      "code": {
+        "source": "const idea = $.input.videoIdea || '';\nconst query = 'cinematic video techniques AI generation ' + idea.split(' ').slice(0, 4).join(' ');\nreturn { query };"
+      }
+    },
+    {
+      "id": "researchStyles",
+      "name": "Research cinematic styles via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildExaQuery.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 300
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for video prompt optimization",
+      "type": "code",
+      "code": {
+        "source": "const idea = $.input.videoIdea;\nconst length = $.input.videoLength || '8';\nconst results = $.steps.researchStyles.response.results || [];\nlet refs = '';\nresults.forEach((r, i) => { refs += (i + 1) + '. ' + (r.title || '') + ': ' + (r.text || '').slice(0, 150) + '\\n'; });\n\nconst prompt = 'You are a cinematic AI video prompt engineer. Transform a simple video idea into a detailed, optimized prompt for AI video generation (VEO3/Sora-style models).\\n\\nORIGINAL IDEA: ' + idea + '\\nTARGET LENGTH: ' + length + ' seconds\\n\\nCINEMATOGRAPHY RESEARCH:\\n' + refs + '\\n\\nReturn ONLY valid JSON:\\n{\\n  \"originalIdea\": \"the input idea\",\\n  \"optimizedPrompt\": \"detailed cinematic prompt with camera angles, lighting, movement, textures, atmosphere - 2-3 sentences\",\\n  \"negativePrompt\": \"what to avoid in generation\",\\n  \"stylePreset\": \"cinematic/documentary/abstract/commercial/music-video\",\\n  \"cameraMovement\": \"dolly/pan/tilt/crane/steadicam/drone/static\",\\n  \"lightingSetup\": \"golden hour/studio/natural/neon/dramatic\",\\n  \"colorGrading\": \"warm/cool/desaturated/vivid/filmic\",\\n  \"fps\": 24,\\n  \"resolution\": \"1080p/4K\",\\n  \"aspectRatio\": \"16:9/9:16/1:1\",\\n  \"audioDescription\": \"native audio or ambient sound description\",\\n  \"alternativePrompts\": [\"variation 1\", \"variation 2\"],\\n  \"qualityScore\": \"estimated quality improvement from original 1-10\"\\n}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4767-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiOptimize",
+      "name": "Optimize video prompt with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4767-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiOptimize.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { optimizedPrompt: raw, stylePreset: 'cinematic' }; }"
+      }
+    },
+    {
+      "id": "buildSpec",
+      "name": "Build video specification document",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nlet doc = 'AI VIDEO SPECIFICATION\\n';\ndoc += '=====================\\n\\n';\ndoc += 'Date: ' + new Date().toISOString().split('T')[0] + '\\n';\ndoc += 'Original Idea: ' + $.input.videoIdea + '\\n';\ndoc += 'Target Length: ' + $.input.videoLength + 's\\n\\n';\ndoc += 'OPTIMIZED PROMPT\\n';\ndoc += '----------------\\n';\ndoc += (ai.optimizedPrompt || '') + '\\n\\n';\nif (ai.negativePrompt) { doc += 'Negative Prompt: ' + ai.negativePrompt + '\\n\\n'; }\ndoc += 'TECHNICAL SPECS\\n';\ndoc += '---------------\\n';\ndoc += 'Style: ' + (ai.stylePreset || '') + '\\n';\ndoc += 'Camera: ' + (ai.cameraMovement || '') + '\\n';\ndoc += 'Lighting: ' + (ai.lightingSetup || '') + '\\n';\ndoc += 'Color: ' + (ai.colorGrading || '') + '\\n';\ndoc += 'FPS: ' + (ai.fps || 24) + '\\n';\ndoc += 'Resolution: ' + (ai.resolution || '1080p') + '\\n';\ndoc += 'Aspect Ratio: ' + (ai.aspectRatio || '16:9') + '\\n';\nif (ai.audioDescription) { doc += 'Audio: ' + ai.audioDescription + '\\n'; }\nif (ai.alternativePrompts && ai.alternativePrompts.length > 0) {\n  doc += '\\nALTERNATIVE PROMPTS\\n';\n  ai.alternativePrompts.forEach((p, i) => { doc += (i + 1) + '. ' + p + '\\n'; });\n}\ndoc += '\\nQuality Score: ' + (ai.qualityScore || 'N/A') + '/10';\nconst title = 'Video Spec - ' + $.input.videoIdea.slice(0, 40);\nconst slackText = 'Video spec ready: \"' + $.input.videoIdea.slice(0, 50) + '\" | ' + (ai.stylePreset || '') + ' | ' + (ai.cameraMovement || '') + ' | Quality: ' + (ai.qualityScore || 'N/A') + '/10';\nreturn { doc, title, slackText };"
+      }
+    },
+    {
+      "id": "saveToDrive",
+      "name": "Save video spec to Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {
+          "name": "$.steps.buildSpec.output.title",
+          "content": "$.steps.buildSpec.output.doc",
+          "mimeType": "text/plain"
+        }
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Notify Slack of completion",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSpec.output.slackText"
+        }
+      }
+    }
+  ]
+}

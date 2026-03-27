@@ -1,0 +1,183 @@
+{
+  "key": "n8n-5677-hackernews-to-docs",
+  "name": "HackerNews Trend Extractor & Report Generator",
+  "description": "Fetches trending HackerNews discussions via Exa search, uses Claude AI to transform raw threads into human-readable insights, and saves a formatted report to Google Sheets. Adapted from n8n's HackerNews-to-Google-Docs workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5677,
+    "url": "https://n8n.io/workflows/5677",
+    "originalName": "Extract & transform HackerNews data to Google Docs using Gemini 2.0 flash",
+    "totalViews": 21541,
+    "rank": 287,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for searching HackerNews",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving the report",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID to save the report"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "HN Trends",
+      "description": "Sheet tab name for the report"
+    },
+    "topics": {
+      "type": "string",
+      "required": false,
+      "default": "AI, programming, startups, tech industry",
+      "description": "Comma-separated topics to search for on HackerNews"
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the summary"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build Exa search query for HackerNews topics",
+      "type": "code",
+      "code": {
+        "source": "const topics = $.input.topics || 'AI, programming, startups, tech industry';\nconst query = 'site:news.ycombinator.com trending discussions about ' + topics;\nreturn { query };"
+      }
+    },
+    {
+      "id": "searchHN",
+      "name": "Search HackerNews via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery.output.query",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 2000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileResults",
+      "name": "Compile HackerNews search results",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchHN.response.results || [];\nlet compiled = '';\nconst items = [];\nresults.forEach((r, i) => {\n  compiled += 'THREAD ' + (i + 1) + ':\\n';\n  compiled += 'Title: ' + (r.title || 'Untitled') + '\\n';\n  compiled += 'URL: ' + (r.url || '') + '\\n';\n  compiled += 'Content: ' + (r.text || '').slice(0, 1500) + '\\n\\n';\n  items.push({ index: i + 1, title: r.title || 'Untitled', url: r.url || '' });\n});\nreturn { compiled, items, count: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for HN analysis",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileResults.output;\nconst topics = $.input.topics || 'AI, programming, startups, tech industry';\n\nlet prompt = 'You are a tech industry analyst specializing in HackerNews trends. Analyze the following HackerNews discussions and create structured insights.\\n\\n';\nprompt += 'TOPICS OF INTEREST: ' + topics + '\\n';\nprompt += 'THREADS FOUND: ' + d.count + '\\n\\n';\nprompt += d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Summarize each thread into a concise, human-readable insight\\n';\nprompt += '- Identify overarching trends across threads\\n';\nprompt += '- Rate each thread by relevance and engagement potential (1-10)\\n';\nprompt += '- Group related threads by theme\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"threads\": [\\n';\nprompt += '    { \"title\": \"thread title\", \"url\": \"url\", \"summary\": \"2-3 sentence insight\", \"theme\": \"category\", \"relevanceScore\": 8, \"keyTakeaway\": \"one-line takeaway\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"trendingSummary\": \"2-3 sentence overview of what the HN community is discussing\",\\n';\nprompt += '  \"topThemes\": [{ \"theme\": \"name\", \"threadCount\": 2, \"description\": \"brief\" }],\\n';\nprompt += '  \"actionableInsights\": [\"insight 1\", \"insight 2\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5677-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI HackerNews analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5677-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { threads: [], trendingSummary: raw, topThemes: [], actionableInsights: [] }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Google Sheets rows from analysis",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = new Date().toISOString().slice(0, 10);\nconst rows = [];\nrows.push(['Date', 'Title', 'URL', 'Theme', 'Summary', 'Key Takeaway', 'Relevance Score']);\n(ai.threads || []).forEach(t => {\n  rows.push([today, t.title || '', t.url || '', t.theme || '', t.summary || '', t.keyTakeaway || '', String(t.relevanceScore || '')]);\n});\nreturn { rows };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save HN trend data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": "$.steps.buildSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack summary of HN trends",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'HackerNews Trend Report', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Trending Summary:* ' + (ai.trendingSummary || 'No summary available').slice(0, 1800) } });\nblocks.push({ type: 'divider' });\n\nif (ai.topThemes && ai.topThemes.length > 0) {\n  let themeText = '*Top Themes:*\\n';\n  ai.topThemes.forEach((t, i) => { themeText += (i + 1) + '. *' + t.theme + '* (' + t.threadCount + ' threads) - ' + t.description + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: themeText.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\n(ai.threads || []).slice(0, 5).forEach(t => {\n  let text = '*' + (t.title || 'Untitled') + '* (Score: ' + (t.relevanceScore || 'N/A') + ')\\n';\n  text += t.summary || '';\n  if (t.url) text += '\\n<' + t.url + '|View Thread>';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 1800) } });\n});\n\nif (ai.actionableInsights && ai.actionableInsights.length > 0) {\n  blocks.push({ type: 'divider' });\n  let insightText = '*Actionable Insights:*\\n';\n  ai.actionableInsights.forEach((ins, i) => { insightText += (i + 1) + '. ' + ins + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: insightText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Data saved to Google Sheets | Powered by Exa + Claude AI' }] });\nconst fallback = 'HN Trends: ' + (ai.trendingSummary || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post HN trend summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

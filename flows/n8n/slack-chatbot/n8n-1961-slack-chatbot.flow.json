@@ -1,0 +1,129 @@
+{
+  "key": "n8n-1961-slack-chatbot",
+  "name": "Slack Chatbot \u2014 Exa Search + Claude AI Answers",
+  "description": "Takes a question via input, searches the web with Exa for relevant sources, uses Claude AI to synthesize a comprehensive answer, and posts it to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1961,
+    "url": "https://n8n.io/workflows/1961",
+    "originalName": "Slack chatbot powered by AI",
+    "totalViews": 44346,
+    "rank": 142,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The question to answer (e.g. 'What is retrieval-augmented generation?')"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchExa",
+      "name": "Search the web for relevant sources",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 600
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile search results into context",
+      "type": "code",
+      "code": {
+        "source": "var results = $.steps.searchExa.response.results || [];\nvar context = '';\nvar urls = [];\nresults.forEach(function(r, i) {\n  context += (i + 1) + '. ' + (r.title || 'Untitled') + '\\n   URL: ' + r.url + '\\n   ' + (r.text || '').slice(0, 400) + '\\n\\n';\n  urls.push(r.url);\n});\nreturn { context: context, urls: urls, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt with search context",
+      "type": "code",
+      "code": {
+        "source": "var ctx = $.steps.compileSources.output;\nvar prompt = 'You are a helpful AI assistant embedded in Slack. Answer the following question comprehensively using the provided web search results as context.\\n\\nQUESTION: ' + $.input.question + '\\n\\nSEARCH RESULTS:\\n' + ctx.context + '\\n\\nGuidelines:\\n- Provide a clear, well-structured answer\\n- Cite sources with [1], [2], etc. referencing the numbered results\\n- Include practical examples or explanations where helpful\\n- Keep it concise but thorough\\n\\nReturn ONLY valid JSON:\\n{\\n  \"answer\": \"Your comprehensive answer with [1] [2] source citations\",\\n  \"tldr\": \"One-sentence summary\",\\n  \"relatedQuestions\": [\"follow-up question 1\", \"follow-up question 2\"]\\n}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/one-slack-chatbot-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnswer",
+      "name": "Run Claude AI to generate answer",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/one-slack-chatbot-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse AI response and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnswer.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar sources = $.steps.compileSources.output;\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':speech_balloon: ' + $.input.question.slice(0, 120), emoji: true } });\nif (ai.tldr) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*TL;DR:* ' + ai.tldr } });\n  blocks.push({ type: 'divider' });\n}\nif (ai.answer) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.answer.slice(0, 2900) } });\n}\nif (sources.urls.length > 0) {\n  blocks.push({ type: 'divider' });\n  var srcText = '*Sources*\\n';\n  sources.urls.slice(0, 5).forEach(function(u, i) { srcText += '[' + (i + 1) + '] <' + u + '>\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText } });\n}\nif (ai.relatedQuestions && ai.relatedQuestions.length > 0) {\n  blocks.push({ type: 'divider' });\n  var rqText = '*Related Questions*\\n';\n  ai.relatedQuestions.forEach(function(q) { rqText += ':grey_question: ' + q + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: rqText } });\n}\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':robot_face: Powered by Exa Search + Claude AI | ' + sources.sourceCount + ' sources analyzed' }] });\nvar fallback = ai.tldr || (ai.answer ? ai.answer.slice(0, 500) : (ai.text || '').slice(0, 500));\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

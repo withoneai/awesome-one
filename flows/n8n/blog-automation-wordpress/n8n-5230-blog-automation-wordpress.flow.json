@@ -1,0 +1,124 @@
+{
+  "key": "n8n-5230-blog-automation-wordpress",
+  "name": "AI Blog Automation for WordPress",
+  "description": "Generate SEO-optimized blog posts with Claude AI and publish them directly to WordPress. Provide a topic and keywords, and the AI writes a complete blog post with title, meta description, and structured content.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5230,
+    "url": "https://n8n.io/workflows/5230",
+    "originalName": "Content farming - : AI-powered blog automation for WordPress",
+    "totalViews": 33216,
+    "rank": 182,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "wordpressKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "word-press"
+      }
+    },
+    "wordpressSite": {
+      "type": "string",
+      "required": true,
+      "description": "WordPress site domain (e.g. 'mysite.wordpress.com' or site ID)"
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Blog post topic (e.g. '10 Best Practices for Remote Work in 2026')"
+    },
+    "keywords": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Comma-separated SEO keywords to target"
+    },
+    "tone": {
+      "type": "string",
+      "required": false,
+      "default": "informative and engaging",
+      "description": "Writing tone (e.g. 'conversational', 'professional', 'informative and engaging')"
+    },
+    "wordCount": {
+      "type": "number",
+      "required": false,
+      "default": 1500,
+      "description": "Target word count for the blog post"
+    },
+    "publishStatus": {
+      "type": "string",
+      "required": false,
+      "default": "draft",
+      "description": "Post status: 'draft' or 'publish'"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build blog post generation prompt",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar topic = fb($.input.topic, '');\nvar keywords = fb($.input.keywords, '');\nvar tone = fb($.input.tone, 'informative and engaging');\nvar wordCount = fb($.input.wordCount, 1500);\n\nvar prompt = 'You are an expert blog writer and SEO specialist. Write a complete, publish-ready blog post.\\n\\n';\nprompt += 'TOPIC: ' + topic + '\\n';\nif (keywords) prompt += 'TARGET KEYWORDS: ' + keywords + '\\n';\nprompt += 'TONE: ' + tone + '\\n';\nprompt += 'TARGET WORD COUNT: ' + wordCount + '\\n\\n';\nprompt += 'REQUIREMENTS:\\n';\nprompt += '- Write in HTML format suitable for WordPress\\n';\nprompt += '- Include H2 and H3 headings for structure\\n';\nprompt += '- Use short paragraphs (2-3 sentences max)\\n';\nprompt += '- Include a compelling introduction and conclusion\\n';\nprompt += '- Naturally incorporate SEO keywords\\n';\nprompt += '- Add internal linking suggestions\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"SEO-optimized blog title\",\\n';\nprompt += '  \"slug\": \"url-friendly-slug\",\\n';\nprompt += '  \"metaDescription\": \"155-character meta description\",\\n';\nprompt += '  \"content\": \"full HTML blog post content\",\\n';\nprompt += '  \"excerpt\": \"2-3 sentence excerpt for preview\",\\n';\nprompt += '  \"tags\": [\"tag1\", \"tag2\"],\\n';\nprompt += '  \"categories\": [\"category1\"],\\n';\nprompt += '  \"estimatedWordCount\": 0,\\n';\nprompt += '  \"seoScore\": \"estimated SEO quality: high/medium/low\",\\n';\nprompt += '  \"readingTime\": \"estimated reading time\"\\n';\nprompt += '}';\n\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/blog-automation-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Generate blog post with Claude",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/blog-automation-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse Claude response",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiGenerate.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: $.input.topic, content: raw, excerpt: '', tags: [], slug: '' }; }"
+      }
+    },
+    {
+      "id": "publishToWordPress",
+      "name": "Publish blog post to WordPress",
+      "type": "action",
+      "action": {
+        "platform": "word-press",
+        "actionId": "conn_mod_def::GJ8WW_SF41c::2UIlchnrQjqCWCK2VaWxwA",
+        "connectionKey": "$.input.wordpressKey",
+        "pathVars": {
+          "site": "$.input.wordpressSite"
+        },
+        "data": {
+          "title": "$.steps.parseResponse.output.title",
+          "content": "$.steps.parseResponse.output.content",
+          "excerpt": "$.steps.parseResponse.output.excerpt",
+          "status": "$.input.publishStatus",
+          "tags": "$.steps.parseResponse.output.tags",
+          "slug": "$.steps.parseResponse.output.slug"
+        }
+      }
+    },
+    {
+      "id": "buildConfirmation",
+      "name": "Build confirmation summary",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseResponse.output;\nvar wpResp = fb($.steps.publishToWordPress.response, {});\nvar status = fb($.input.publishStatus, 'draft');\n\nvar summary = ':white_check_mark: *Blog Post Published to WordPress*\\n\\n';\nsummary += '*Title:* ' + (fb(ai.title, 'Untitled')) + '\\n';\nsummary += '*Status:* ' + status + '\\n';\nsummary += '*Slug:* ' + (fb(ai.slug, 'N/A')) + '\\n';\nsummary += '*Word Count:* ~' + (fb(ai.estimatedWordCount, 'N/A')) + '\\n';\nsummary += '*Reading Time:* ' + (fb(ai.readingTime, 'N/A')) + '\\n';\nsummary += '*SEO Score:* ' + (fb(ai.seoScore, 'N/A')) + '\\n';\nif (ai.metaDescription) summary += '*Meta:* ' + ai.metaDescription + '\\n';\nvar tagList = (fb(ai.tags, [])).join(', ');\nif (tagList) summary += '*Tags:* ' + tagList + '\\n';\nif (wpResp.URL) summary += '*URL:* ' + wpResp.URL + '\\n';\nif (wpResp.ID) summary += '*Post ID:* ' + wpResp.ID + '\\n';\n\nreturn { summary: summary };"
+      }
+    }
+  ]
+}

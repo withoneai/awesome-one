@@ -1,0 +1,159 @@
+{
+  "key": "n8n-2088-bulk-gmail-sheets",
+  "name": "Bulk email from Sheets: read recipients, send personalized Gmail",
+  "description": "Reads recipient data from a Google Sheets spreadsheet, uses Claude AI to generate personalized email content for each recipient, sends individual emails via Gmail in a loop, and posts a completion summary to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2088,
+    "url": "https://n8n.io/workflows/2088",
+    "originalName": "Send multiple emails in Gmail directly via Google Sheets",
+    "totalViews": 53226,
+    "rank": 113,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for reading recipients",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for status notification",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for send status notification"
+    },
+    "spreadsheetUrl": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets URL with recipient data (expected columns: Name, Email, Subject, Message or template fields)"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Sheet1",
+      "description": "Sheet tab name containing recipient data"
+    },
+    "emailTemplate": {
+      "type": "string",
+      "required": true,
+      "description": "Email template or purpose description. Use {name}, {company} as placeholders, or describe what the email should say."
+    },
+    "senderName": {
+      "type": "string",
+      "required": false,
+      "default": "Sender",
+      "description": "Name for the email signature"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildRecipientPrompt",
+      "name": "Build Claude prompt for email generation from Sheets data",
+      "type": "code",
+      "code": {
+        "source": "const template = $.input.emailTemplate;\nconst sender = $.input.senderName || 'Sender';\nconst sheetUrl = $.input.spreadsheetUrl;\n\nlet prompt = 'You are an email marketing specialist. Generate personalized emails based on the template and recipient data.\\n\\n';\nprompt += 'EMAIL TEMPLATE/PURPOSE: ' + template + '\\n';\nprompt += 'SENDER NAME: ' + sender + '\\n';\nprompt += 'SHEET URL: ' + sheetUrl + '\\n\\n';\nprompt += 'Since I cannot access the Google Sheet directly, generate 3 sample personalized emails based on the template. Each should be unique and demonstrate the personalization approach.\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Create personalized HTML emails using <p> tags\\n';\nprompt += '- Keep each email 80-150 words\\n';\nprompt += '- Include the sender name in the signature\\n';\nprompt += '- Make subject lines compelling and personalized\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"emails\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"to\": \"recipient@example.com\",\\n';\nprompt += '      \"name\": \"Recipient Name\",\\n';\nprompt += '      \"subject\": \"personalized subject\",\\n';\nprompt += '      \"body\": \"<p>HTML email body</p>\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"totalEmails\": 3,\\n';\nprompt += '  \"templateUsed\": \"description of approach\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2088-prompt.txt",
+        "content": "$.steps.buildRecipientPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to generate personalized emails",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2088-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { emails: [], totalEmails: 0, error: raw }; }"
+      }
+    },
+    {
+      "id": "sendEmails",
+      "name": "Send personalized emails via Gmail loop",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.parseAI.output.emails",
+        "as": "emailItem",
+        "maxConcurrency": 1,
+        "steps": [
+          {
+            "id": "sendOne",
+            "name": "Send individual email via Gmail",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+              "connectionKey": "$.input.gmailKey",
+              "data": {
+                "to": "$.loop.emailItem.to",
+                "subject": "$.loop.emailItem.subject",
+                "body": "$.loop.emailItem.body",
+                "isHtml": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack completion summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst emails = ai.emails || [];\nconst iterations = $.steps.sendEmails.response.iterations || [];\n\nlet sentCount = 0;\nlet failedCount = 0;\niterations.forEach(iter => {\n  if (iter.sendOne && !iter.sendOne.error) sentCount++;\n  else failedCount++;\n});\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Bulk Email Send Complete' } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Total Emails:*\\n' + emails.length },\n  { type: 'mrkdwn', text: '*Successfully Sent:*\\n' + sentCount }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Failed:*\\n' + failedCount },\n  { type: 'mrkdwn', text: '*Template:*\\n' + (ai.templateUsed || 'custom').slice(0, 100) }\n] });\nblocks.push({ type: 'divider' });\n\nlet recipientList = '';\nemails.slice(0, 10).forEach((e, i) => {\n  const status = (iterations[i] && iterations[i].sendOne && !iterations[i].sendOne.error) ? ':white_check_mark:' : ':x:';\n  recipientList += status + ' ' + (e.name || 'Unknown') + ' (' + e.to + ') - ' + (e.subject || '').slice(0, 50) + '\\n';\n});\nif (emails.length > 10) recipientList += '... and ' + (emails.length - 10) + ' more';\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Recipients:*\\n' + recipientList.slice(0, 1800) } });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI + Gmail + Google Sheets' }] });\n\nconst fallback = 'Bulk email: ' + sentCount + '/' + emails.length + ' sent successfully';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post send summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

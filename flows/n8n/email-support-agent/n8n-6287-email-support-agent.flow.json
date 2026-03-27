@@ -1,0 +1,223 @@
+{
+  "key": "n8n-6287-email-support-agent",
+  "name": "Email support agent with AI-powered Gmail replies",
+  "description": "Fetches new support emails from Gmail, reads FAQ/knowledge data from Google Sheets, uses Claude AI to draft contextual reply suggestions, and posts the draft replies to Slack for review before sending. Adapted from n8n's email support agent with Gemini/GPT fallback workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 6287,
+    "url": "https://n8n.io/workflows/6287",
+    "originalName": "Email support agent w/ Gemini & GPT fallback using Gmail + Google Sheets",
+    "totalViews": 28878,
+    "rank": 215,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for reading support emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for FAQ/knowledge base",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for draft review",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for reviewing draft replies"
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": false,
+      "default": "newer_than:1d is:unread label:support",
+      "description": "Gmail search query for support emails"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Maximum number of support emails to process"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID with FAQ/knowledge base"
+    },
+    "faqRange": {
+      "type": "string",
+      "required": false,
+      "default": "FAQ!A1:B100",
+      "description": "Sheet range with columns: Question, Answer"
+    },
+    "companyName": {
+      "type": "string",
+      "required": false,
+      "default": "Support Team",
+      "description": "Company name for email signatures"
+    },
+    "supportTone": {
+      "type": "string",
+      "required": false,
+      "default": "professional, friendly, and helpful",
+      "description": "Tone for support replies"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchEmails",
+      "name": "Fetch support emails from Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "data": {},
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "maxResults": "$.input.maxEmails",
+          "q": "$.input.searchQuery"
+        }
+      }
+    },
+    {
+      "id": "extractIds",
+      "name": "Extract message IDs",
+      "type": "code",
+      "code": {
+        "source": "const messages = $.steps.fetchEmails.response.messages || [];\nreturn { messageIds: messages.map(m => m.id).filter(Boolean).slice(0, 10) };"
+      }
+    },
+    {
+      "id": "fetchEmailDetails",
+      "name": "Fetch full email content for each support message",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractIds.output.messageIds",
+        "as": "msgId",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "getOne",
+            "name": "Get individual email",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GJ3ocvMGOS8::D__3BgQSSzWtDUoOqLuX2A",
+              "connectionKey": "$.input.gmailKey",
+              "data": {},
+              "pathVars": {
+                "userId": "me",
+                "id": "$.loop.msgId"
+              },
+              "queryParams": {
+                "format": "full"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "readFaq",
+      "name": "Read FAQ knowledge base from Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GJ30lYkSqLk::IOnDiKqfQ_2FtFCahohidA",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {},
+        "pathVars": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.faqRange"
+        }
+      }
+    },
+    {
+      "id": "compileData",
+      "name": "Compile emails and FAQ for AI processing",
+      "type": "code",
+      "code": {
+        "source": "const ids = $.steps.extractIds.output.messageIds || [];\nconst iterations = $.steps.fetchEmailDetails.response.iterations || [];\nconst faqResp = $.steps.readFaq.response || {};\nconst faqValues = faqResp.values || [];\n\nlet faqText = '';\nfaqValues.slice(1).forEach((row, i) => {\n  if (row[0] && row[1]) {\n    faqText += 'Q: ' + row[0] + '\\nA: ' + row[1] + '\\n\\n';\n  }\n});\n\nlet emails = [];\nids.forEach((id, i) => {\n  let subject = 'Unknown';\n  let from = 'Unknown';\n  let body = '';\n  if (iterations[i] && iterations[i].getOne && iterations[i].getOne.response) {\n    const msg = iterations[i].getOne.response;\n    body = msg.snippet || '';\n    const headers = msg.payload && msg.payload.headers ? msg.payload.headers : [];\n    headers.forEach(h => {\n      if (h.name === 'Subject') subject = h.value || 'No Subject';\n      if (h.name === 'From') from = h.value || 'Unknown';\n    });\n  }\n  emails.push({ id, subject, from, body: body.slice(0, 500) });\n});\n\nlet emailText = '';\nemails.forEach((e, i) => {\n  emailText += '--- EMAIL ' + (i + 1) + ' ---\\n';\n  emailText += 'ID: ' + e.id + '\\n';\n  emailText += 'From: ' + e.from + '\\n';\n  emailText += 'Subject: ' + e.subject + '\\n';\n  emailText += 'Body: ' + e.body + '\\n\\n';\n});\n\nreturn { emailText, faqText: faqText.slice(0, 10000), emails, emailCount: emails.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for support replies",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileData.output;\nconst company = $.input.companyName;\nconst tone = $.input.supportTone;\nlet prompt = 'You are a ' + tone + ' customer support agent for ' + company + '. Draft reply suggestions for each support email using the FAQ knowledge base.\\n\\n';\nprompt += 'FAQ KNOWLEDGE BASE:\\n' + d.faqText + '\\n';\nprompt += 'SUPPORT EMAILS (' + d.emailCount + '):\\n' + d.emailText + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Draft a reply for each email\\n';\nprompt += '- Use the FAQ when relevant\\n';\nprompt += '- Be ' + tone + '\\n';\nprompt += '- Flag emails that need human escalation\\n';\nprompt += '- Keep replies concise but thorough\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"replies\": [{\\n';\nprompt += '    \"emailId\": \"original email ID\",\\n';\nprompt += '    \"from\": \"sender\",\\n';\nprompt += '    \"subject\": \"original subject\",\\n';\nprompt += '    \"replySubject\": \"Re: subject\",\\n';\nprompt += '    \"replyBody\": \"draft reply text\",\\n';\nprompt += '    \"category\": \"billing|technical|general|feedback\",\\n';\nprompt += '    \"needsEscalation\": false,\\n';\nprompt += '    \"escalationReason\": \"\"\\n';\nprompt += '  }],\\n';\nprompt += '  \"summary\": { \"total\": 0, \"escalated\": 0, \"autoReply\": 0 }\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-6287-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiSupport",
+      "name": "Run Claude AI support reply generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-6287-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiSupport.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { replies: [], summary: { total: 0, escalated: 0, autoReply: 0 } }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit support review dashboard",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst replies = ai.replies || [];\nconst summary = ai.summary || {};\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Support Agent - Draft Replies', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + replies.length + ' replies* drafted | *' + (summary.escalated || 0) + '* need escalation' } });\nblocks.push({ type: 'divider' });\n\nreplies.forEach((r, i) => {\n  const icon = r.needsEscalation ? ':warning:' : ':envelope:';\n  let text = icon + ' *' + (r.subject || 'No Subject') + '* from ' + (r.from || 'Unknown') + '\\n';\n  text += '_Category:_ ' + (r.category || 'general');\n  if (r.needsEscalation) text += ' | :rotating_light: *ESCALATION: ' + (r.escalationReason || 'Needs human review') + '*';\n  text += '\\n_Draft:_ ' + (r.replyBody || '').slice(0, 300);\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text } });\n  if (i < replies.length - 1) blocks.push({ type: 'divider' });\n});\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Review drafts above and approve for sending | Powered by Gmail + Claude AI' }] });\n\nconst fallback = 'Support Agent: ' + replies.length + ' draft replies ready for review';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post draft replies to Slack for review",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

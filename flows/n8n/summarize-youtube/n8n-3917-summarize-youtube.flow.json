@@ -1,0 +1,136 @@
+{
+  "key": "n8n-3917-summarize-youtube",
+  "name": "YouTube video summarizer",
+  "description": "Takes a YouTube URL, scrapes the page content with Firecrawl to extract transcript and metadata, uses Claude AI to generate a comprehensive summary with key takeaways, and posts the summary to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2736,
+    "url": "https://n8n.io/workflows/2736",
+    "originalName": "Summarize YouTube videos from transcript",
+    "totalViews": 83815,
+    "rank": 66,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for web scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the summary"
+    },
+    "youtubeUrl": {
+      "type": "string",
+      "required": true,
+      "description": "YouTube video URL to summarize (e.g. 'https://www.youtube.com/watch?v=...')"
+    },
+    "summaryStyle": {
+      "type": "string",
+      "required": false,
+      "default": "detailed",
+      "description": "Summary style: 'brief' (key points only), 'detailed' (full summary), 'executive' (business-focused)"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeVideo",
+      "name": "Scrape YouTube video page with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.youtubeUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "extractContent",
+      "name": "Extract video content and metadata",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.scrapeVideo.response || {};\nconst data = response.data || response;\nconst markdown = (data.markdown || data.content || data.text || '').slice(0, 10000);\nconst title = data.title || data.metadata?.title || '';\nconst url = $.input.youtubeUrl;\n\nconst videoId = url.match(/[?&]v=([^&]+)/) ? url.match(/[?&]v=([^&]+)/)[1] : url.split('/').pop();\n\nreturn { markdown, title, url, videoId, contentLength: markdown.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude summarization prompt",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.extractContent.output;\nconst style = $.input.summaryStyle || 'detailed';\n\nlet styleInstructions = '';\nif (style === 'brief') {\n  styleInstructions = 'Create a brief summary with 5-8 bullet points of key takeaways. Keep it under 200 words.';\n} else if (style === 'executive') {\n  styleInstructions = 'Create an executive summary focused on actionable insights, business implications, and strategic takeaways. 200-300 words.';\n} else {\n  styleInstructions = 'Create a detailed summary covering all major topics discussed, with key quotes and examples. 300-500 words.';\n}\n\nlet prompt = 'You are a content summarization expert. Summarize the following YouTube video content.\\n\\n';\nprompt += 'VIDEO TITLE: ' + data.title + '\\n';\nprompt += 'VIDEO URL: ' + data.url + '\\n\\n';\nprompt += 'SCRAPED CONTENT:\\n' + data.markdown + '\\n\\n';\nprompt += 'SUMMARY STYLE: ' + style + '\\n';\nprompt += styleInstructions + '\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"videoTitle\": \"title of the video\",\\n';\nprompt += '  \"channel\": \"channel name if found\",\\n';\nprompt += '  \"summary\": \"the main summary text\",\\n';\nprompt += '  \"keyTakeaways\": [\"takeaway1\", \"takeaway2\", \"takeaway3\"],\\n';\nprompt += '  \"topics\": [\"topic1\", \"topic2\"],\\n';\nprompt += '  \"quotes\": [\"notable quote 1\"],\\n';\nprompt += '  \"sentiment\": \"positive|neutral|negative|mixed\",\\n';\nprompt += '  \"targetAudience\": \"who would benefit from this video\",\\n';\nprompt += '  \"actionItems\": [\"action1\", \"action2\"]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3917-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI video summarization",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3917-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { videoTitle: $.steps.extractContent.output.title || 'Unknown', channel: '', summary: raw, keyTakeaways: [], topics: [], quotes: [], sentiment: 'unknown', targetAudience: '', actionItems: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit video summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst url = $.input.youtubeUrl;\nconst videoId = $.steps.extractContent.output.videoId;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'YouTube Video Summary', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*<' + url + '|' + (ai.videoTitle || 'Video') + '>*' } });\n\nconst fields = [];\nif (ai.channel) fields.push({ type: 'mrkdwn', text: '*Channel:*\\n' + ai.channel });\nif (ai.sentiment) fields.push({ type: 'mrkdwn', text: '*Tone:*\\n' + ai.sentiment });\nif (ai.targetAudience) fields.push({ type: 'mrkdwn', text: '*For:*\\n' + ai.targetAudience });\nif (fields.length > 0) blocks.push({ type: 'section', fields: fields.slice(0, 4) });\n\nblocks.push({ type: 'divider' });\n\nconst summaryText = (ai.summary || 'No summary generated.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:*\\n' + summaryText } });\n\nif (ai.keyTakeaways && ai.keyTakeaways.length > 0) {\n  blocks.push({ type: 'divider' });\n  let ktText = '*Key Takeaways:*\\n';\n  ai.keyTakeaways.slice(0, 7).forEach((kt, i) => { ktText += (i + 1) + '. ' + kt + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ktText.slice(0, 1800) } });\n}\n\nif (ai.actionItems && ai.actionItems.length > 0) {\n  let aiText = '*Action Items:*\\n';\n  ai.actionItems.slice(0, 5).forEach((a, i) => { aiText += '- ' + a + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: aiText.slice(0, 1800) } });\n}\n\nif (ai.quotes && ai.quotes.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Notable Quote:*\\n> ' + ai.quotes[0].slice(0, 500) } });\n}\n\nif (ai.topics && ai.topics.length > 0) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: '*Topics:* ' + ai.topics.slice(0, 6).join(' | ') }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Firecrawl + Claude AI' }] });\n\nconst fallbackText = 'YouTube Summary: ' + (ai.videoTitle || 'Video') + ' - ' + (ai.summary || '').slice(0, 80);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post video summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

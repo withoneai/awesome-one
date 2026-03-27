@@ -1,0 +1,187 @@
+{
+  "key": "n8n-2978-reddit-biz-opportunities",
+  "name": "Reddit Business Opportunity Analyzer",
+  "description": "Search Reddit-like discussions via Exa, use Claude AI to identify viable business opportunities, save results to Google Sheets, and send a summary email via Gmail.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2978,
+    "url": "https://n8n.io/workflows/2978",
+    "originalName": "Analyze Reddit posts with AI to identify business opportunities",
+    "totalViews": 32911,
+    "rank": 187,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": true,
+      "description": "Search query for Reddit discussions (e.g. 'frustrated with project management tools', 'looking for better CRM')"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID to save opportunities"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Opportunities",
+      "description": "Sheet tab name"
+    },
+    "recipientEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to send the opportunity summary"
+    },
+    "industry": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Target industry focus (e.g. 'SaaS', 'e-commerce', 'health tech')"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchDiscussions",
+      "name": "Search Reddit-like discussions via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.searchQuery",
+          "numResults": 15,
+          "type": "auto",
+          "includeDomains": [
+            "reddit.com",
+            "indiehackers.com",
+            "news.ycombinator.com"
+          ],
+          "contents": {
+            "text": {
+              "maxCharacters": 800
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileDiscussions",
+      "name": "Compile discussion data",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar results = fb(fb($.steps.searchDiscussions.response, {}).results, []);\nvar industry = fb($.input.industry, '');\n\nvar discussionData = '';\nresults.forEach(function(r, i) {\n  discussionData += '--- Discussion ' + (i + 1) + ' ---\\n';\n  discussionData += 'Title: ' + (fb(r.title, 'Untitled')) + '\\n';\n  discussionData += 'URL: ' + (fb(r.url, '')) + '\\n';\n  discussionData += 'Content: ' + (fb(r.text, '')).slice(0, 600) + '\\n\\n';\n});\n\nreturn { discussionData: discussionData, resultCount: results.length, industry: industry };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build opportunity analysis prompt",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileDiscussions.output;\nvar query = $.input.searchQuery;\n\nvar prompt = 'You are a business analyst specializing in identifying market opportunities from online discussions. Analyze the following Reddit and forum posts to find viable business opportunities.\\n\\n';\nprompt += 'SEARCH QUERY: ' + query + '\\n';\nif (data.industry) prompt += 'INDUSTRY FOCUS: ' + data.industry + '\\n';\nprompt += '\\nDISCUSSIONS (' + data.resultCount + '):\\n\\n';\nprompt += data.discussionData + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Identify pain points and unmet needs\\n';\nprompt += '- Assess market size potential for each opportunity\\n';\nprompt += '- Rate feasibility and competition level\\n';\nprompt += '- Suggest product or service ideas\\n';\nprompt += '- Identify recurring themes across discussions\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"summary\": \"overview of the opportunity landscape\",\\n';\nprompt += '  \"opportunities\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"title\": \"opportunity name\",\\n';\nprompt += '      \"painPoint\": \"the problem people are experiencing\",\\n';\nprompt += '      \"proposedSolution\": \"product or service idea\",\\n';\nprompt += '      \"marketSize\": \"small/medium/large\",\\n';\nprompt += '      \"competition\": \"low/medium/high\",\\n';\nprompt += '      \"feasibility\": \"easy/moderate/hard\",\\n';\nprompt += '      \"score\": 1,\\n';\nprompt += '      \"evidence\": \"supporting discussion quotes or references\",\\n';\nprompt += '      \"nextSteps\": [\"validation step 1\"]\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"themes\": [\"recurring theme 1\"],\\n';\nprompt += '  \"topOpportunity\": \"the single best opportunity identified\"\\n';\nprompt += '}';\n\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/reddit-biz-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Analyze opportunities with Claude",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/reddit-biz-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse Claude response",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiAnalysis.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, opportunities: [], themes: [] }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build spreadsheet rows from opportunities",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseResponse.output;\nvar opportunities = fb(ai.opportunities, []);\nvar today = new Date().toISOString().split('T')[0];\nvar query = $.input.searchQuery;\n\nvar rows = [];\nopportunities.forEach(function(opp) {\n  rows.push([\n    today,\n    query,\n    fb(opp.title, ''),\n    fb(opp.painPoint, ''),\n    fb(opp.proposedSolution, ''),\n    fb(opp.marketSize, ''),\n    fb(opp.competition, ''),\n    fb(opp.feasibility, ''),\n    String(fb(opp.score, 0)),\n    (fb(opp.nextSteps, [])).join('; ')\n  ]);\n});\n\nreturn { rows: rows, opportunityCount: opportunities.length };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save opportunities to Google Sheets",
+      "type": "action",
+      "onError": {
+        "strategy": "continue"
+      },
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "pathVars": {
+          "spreadsheetId": "$.input.spreadsheetId"
+        },
+        "data": {
+          "range": "$.input.sheetName",
+          "values": "$.steps.buildSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildEmailBody",
+      "name": "Build email summary",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseResponse.output;\nvar today = new Date().toISOString().split('T')[0];\nvar query = $.input.searchQuery;\n\nvar html = '<h2>Business Opportunity Report \u2014 ' + today + '</h2>';\nhtml += '<p><strong>Search:</strong> ' + query + '</p>';\nhtml += '<p>' + (fb(ai.summary, '')) + '</p>';\n\nif (ai.topOpportunity) {\n  html += '<p><strong>Top Opportunity:</strong> ' + ai.topOpportunity + '</p>';\n}\n\nhtml += '<h3>Opportunities Found:</h3><ol>';\nvar opportunities = fb(ai.opportunities, []);\nopportunities.forEach(function(opp) {\n  html += '<li>';\n  html += '<strong>' + (fb(opp.title, 'Opportunity')) + '</strong> (Score: ' + (fb(opp.score, '?')) + '/10)<br>';\n  html += '<em>Pain Point:</em> ' + (fb(opp.painPoint, '')) + '<br>';\n  html += '<em>Solution:</em> ' + (fb(opp.proposedSolution, '')) + '<br>';\n  html += '<em>Market:</em> ' + (fb(opp.marketSize, '?')) + ' | <em>Competition:</em> ' + (fb(opp.competition, '?')) + ' | <em>Feasibility:</em> ' + (fb(opp.feasibility, '?')) + '<br>';\n  html += '</li>';\n});\nhtml += '</ol>';\n\nvar themes = fb(ai.themes, []);\nif (themes.length > 0) {\n  html += '<h3>Recurring Themes:</h3><ul>';\n  themes.forEach(function(t) { html += '<li>' + t + '</li>'; });\n  html += '</ul>';\n}\n\nhtml += '<p><em>Data also saved to Google Sheets.</em></p>';\n\nvar subject = 'Business Opportunities: ' + query + ' (' + today + ')';\nreturn { html: html, subject: subject };"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send opportunity summary via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.recipientEmail",
+          "subject": "$.steps.buildEmailBody.output.subject",
+          "html": "$.steps.buildEmailBody.output.html"
+        }
+      }
+    }
+  ]
+}

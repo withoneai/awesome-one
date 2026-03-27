@@ -1,0 +1,111 @@
+{
+  "key": "n8n-5170-working-dates",
+  "name": "Date and time calculator with Claude formatting",
+  "description": "Takes a date/time query (calculations, formatting, timezone conversions), uses Claude AI to compute and format the results with clear explanations, and posts the output to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1744,
+    "url": "https://n8n.io/workflows/1744",
+    "originalName": "Working with dates and times",
+    "totalViews": 85056,
+    "rank": 64,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the date/time results"
+    },
+    "dateQuery": {
+      "type": "string",
+      "required": true,
+      "description": "Date/time query (e.g. 'What date is 45 business days from today?', 'Convert 3pm EST to all US timezones', 'How many days between Jan 15 and March 30?')"
+    },
+    "timezone": {
+      "type": "string",
+      "required": false,
+      "default": "UTC",
+      "description": "Default timezone for calculations (e.g. 'America/New_York', 'Europe/London', 'UTC')"
+    }
+  },
+  "steps": [
+    {
+      "id": "getCurrentTime",
+      "name": "Get current date and time for reference",
+      "type": "bash",
+      "bash": {
+        "command": "date -u '+%Y-%m-%dT%H:%M:%SZ' && echo '---' && date '+%Y-%m-%dT%H:%M:%S%z' && echo '---' && date '+%A, %B %d, %Y %I:%M %p %Z'",
+        "timeout": 5000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude date/time calculation prompt",
+      "type": "code",
+      "code": {
+        "source": "const query = $.input.dateQuery;\nconst tz = $.input.timezone || 'UTC';\nconst currentTime = $.steps.getCurrentTime.output || '';\n\nlet prompt = 'You are a date and time calculation expert. Answer the following date/time query with precision and clarity.\\n\\n';\nprompt += 'CURRENT DATE/TIME REFERENCE:\\n' + currentTime + '\\n\\n';\nprompt += 'DEFAULT TIMEZONE: ' + tz + '\\n\\n';\nprompt += 'QUERY: ' + query + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Perform the requested date/time calculation or conversion\\n';\nprompt += '- Show the result in multiple useful formats\\n';\nprompt += '- Explain the calculation step by step\\n';\nprompt += '- Include relevant context (weekday names, relative descriptions)\\n';\nprompt += '- Account for leap years, DST, and timezone differences when relevant\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"query\": \"the original query\",\\n';\nprompt += '  \"result\": \"primary answer in plain language\",\\n';\nprompt += '  \"formats\": {\\n';\nprompt += '    \"iso\": \"YYYY-MM-DDTHH:MM:SSZ\",\\n';\nprompt += '    \"human\": \"Wednesday, March 25, 2026 3:00 PM UTC\",\\n';\nprompt += '    \"relative\": \"45 days from now\",\\n';\nprompt += '    \"unix\": 0\\n';\nprompt += '  },\\n';\nprompt += '  \"explanation\": \"step-by-step calculation explanation\",\\n';\nprompt += '  \"additionalInfo\": [\"helpful related fact 1\", \"fact 2\"],\\n';\nprompt += '  \"timezoneConversions\": [{ \"timezone\": \"name\", \"time\": \"formatted time\" }]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5170-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI date/time calculation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5170-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { query: $.input.dateQuery, result: raw, formats: {}, explanation: '', additionalInfo: [], timezoneConversions: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit date/time response",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Date/Time Calculator', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Query:* ' + (ai.query || $.input.dateQuery) } });\nblocks.push({ type: 'divider' });\n\nconst resultText = (ai.result || 'No result computed.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Result:*\\n' + resultText } });\n\nconst f = ai.formats || {};\nif (f.iso || f.human || f.relative) {\n  const fields = [];\n  if (f.iso) fields.push({ type: 'mrkdwn', text: '*ISO:*\\n`' + f.iso + '`' });\n  if (f.human) fields.push({ type: 'mrkdwn', text: '*Human:*\\n' + f.human });\n  if (f.relative) fields.push({ type: 'mrkdwn', text: '*Relative:*\\n' + f.relative });\n  if (f.unix) fields.push({ type: 'mrkdwn', text: '*Unix:*\\n`' + f.unix + '`' });\n  blocks.push({ type: 'section', fields: fields.slice(0, 4) });\n}\n\nif (ai.explanation) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Explanation:*\\n' + ai.explanation.slice(0, 1800) } });\n}\n\nif (ai.timezoneConversions && ai.timezoneConversions.length > 0) {\n  blocks.push({ type: 'divider' });\n  let tzText = '*Timezone Conversions:*\\n';\n  ai.timezoneConversions.slice(0, 6).forEach(tz => {\n    tzText += '- *' + tz.timezone + ':* ' + tz.time + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: tzText.slice(0, 1800) } });\n}\n\nif (ai.additionalInfo && ai.additionalInfo.length > 0) {\n  let infoText = ai.additionalInfo.slice(0, 3).join(' | ');\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: infoText.slice(0, 1800) }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI' }] });\n\nconst fallbackText = 'Date/Time: ' + (ai.query || '').slice(0, 40) + ' = ' + (ai.result || '').slice(0, 100);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post date/time results to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

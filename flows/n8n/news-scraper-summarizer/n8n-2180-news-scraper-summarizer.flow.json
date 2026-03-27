@@ -1,0 +1,198 @@
+{
+  "key": "n8n-2180-news-scraper-summarizer",
+  "name": "Scrape and summarize news site posts with AI",
+  "description": "Scrapes a news site with Firecrawl, uses Claude AI to extract and summarize articles, and saves structured results to a Notion database. Adapted from n8n's scrape-and-summarize news workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2180,
+    "url": "https://n8n.io/workflows/2180",
+    "originalName": "Scrape and summarize posts of a news site without RSS feed using AI and save them to a NocoDB",
+    "totalViews": 30320,
+    "rank": 203,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "notionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Notion connection key for saving articles",
+      "connection": {
+        "platform": "notion"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for digest notification",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for news digest"
+    },
+    "newsUrl": {
+      "type": "string",
+      "required": true,
+      "description": "URL of the news site to scrape (e.g. 'https://techcrunch.com')"
+    },
+    "notionParentPageId": {
+      "type": "string",
+      "required": true,
+      "description": "Notion parent page ID where article summaries will be saved"
+    },
+    "maxArticles": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Maximum number of articles to summarize"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeNews",
+      "name": "Scrape news site with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.newsUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "extractContent",
+      "name": "Extract scraped content",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.scrapeNews.response || {};\nconst data = response.data || response;\nconst markdown = (data.markdown || data.content || data.text || '').slice(0, 15000);\nconst title = data.title || data.metadata?.title || '';\nreturn { markdown, title, url: $.input.newsUrl, contentLength: markdown.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for article extraction and summarization",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.extractContent.output;\nconst max = $.input.maxArticles || 10;\nlet prompt = 'You are a news analyst. Extract and summarize individual articles from the following scraped news site content.\\n\\n';\nprompt += 'SOURCE: ' + d.url + '\\n';\nprompt += 'SITE TITLE: ' + d.title + '\\n\\n';\nprompt += 'SCRAPED CONTENT:\\n' + d.markdown + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Identify up to ' + max + ' distinct articles/posts\\n';\nprompt += '- For each, extract: title, summary (2-3 sentences), category, key topics\\n';\nprompt += '- Sort by relevance/importance\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"articles\": [{\\n';\nprompt += '    \"title\": \"article title\",\\n';\nprompt += '    \"summary\": \"2-3 sentence summary\",\\n';\nprompt += '    \"category\": \"tech|business|science|politics|other\",\\n';\nprompt += '    \"topics\": [\"topic1\", \"topic2\"],\\n';\nprompt += '    \"importance\": \"high|medium|low\"\\n';\nprompt += '  }],\\n';\nprompt += '  \"siteSummary\": \"overall site digest in 2-3 sentences\",\\n';\nprompt += '  \"totalArticles\": 0\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2180-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiSummarize",
+      "name": "Run Claude AI article summarization",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2180-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiSummarize.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { articles: [], siteSummary: raw, totalArticles: 0 }; }"
+      }
+    },
+    {
+      "id": "buildNotionContent",
+      "name": "Build Notion page content from summaries",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst articles = ai.articles || [];\nconst today = new Date().toISOString().slice(0, 10);\nlet content = 'News Digest - ' + today + '\\n\\n';\ncontent += 'Source: ' + $.input.newsUrl + '\\n';\ncontent += 'Summary: ' + (ai.siteSummary || '') + '\\n\\n';\narticles.forEach((a, i) => {\n  content += '## ' + (i + 1) + '. ' + (a.title || 'Untitled') + '\\n';\n  content += 'Category: ' + (a.category || 'other') + ' | Importance: ' + (a.importance || 'medium') + '\\n';\n  content += (a.summary || '') + '\\n';\n  content += 'Topics: ' + (a.topics || []).join(', ') + '\\n\\n';\n});\nreturn { title: 'News Digest - ' + $.input.newsUrl + ' - ' + today, content: content.slice(0, 1900), articleCount: articles.length };"
+      }
+    },
+    {
+      "id": "saveToNotion",
+      "name": "Save news digest to Notion",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5EnlW1AEk::mEAQjNttT1GjVqNeMTvDiw",
+        "connectionKey": "$.input.notionKey",
+        "data": {
+          "parent": {
+            "page_id": "$.input.notionParentPageId"
+          },
+          "properties": {
+            "title": {
+              "title": [
+                {
+                  "text": {
+                    "content": "$.steps.buildNotionContent.output.title"
+                  }
+                }
+              ]
+            }
+          },
+          "children": [
+            {
+              "object": "block",
+              "type": "paragraph",
+              "paragraph": {
+                "rich_text": [
+                  {
+                    "text": {
+                      "content": "$.steps.buildNotionContent.output.content"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit news digest",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst articles = ai.articles || [];\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'News Digest', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Source:* <' + $.input.newsUrl + '|' + $.input.newsUrl + '>\\n*' + articles.length + ' articles* summarized' } });\n\nif (ai.siteSummary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.siteSummary.slice(0, 500) } });\n}\n\nblocks.push({ type: 'divider' });\narticles.slice(0, 5).forEach(a => {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + (a.title || 'Untitled') + '* (' + (a.importance || 'medium') + ')\\n' + (a.summary || '').slice(0, 200) } });\n});\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Saved to Notion | Powered by Firecrawl + Claude AI' }] });\n\nconst fallback = 'News Digest: ' + articles.length + ' articles from ' + $.input.newsUrl;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post news digest to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

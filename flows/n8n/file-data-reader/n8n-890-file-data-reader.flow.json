@@ -1,0 +1,122 @@
+{
+  "key": "n8n-890-file-data-reader",
+  "name": "File Data Reader & Analyzer",
+  "description": "Fetches a file from a URL, uses Claude AI to extract and transform the data into structured insights, and posts a formatted summary to Slack with Block Kit formatting. Adapted from n8n's Excel spreadsheet reader workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 890,
+    "url": "https://n8n.io/workflows/890",
+    "originalName": "Read in an Excel spreadsheet file",
+    "totalViews": 51405,
+    "rank": 118,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "fileUrl": {
+      "type": "string",
+      "required": true,
+      "description": "URL of the file to fetch and analyze (CSV, JSON, or text)"
+    },
+    "analysisGoal": {
+      "type": "string",
+      "required": false,
+      "default": "Summarize the data, identify key patterns, and highlight notable values",
+      "description": "What to analyze or extract from the file data"
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting results",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the analysis"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchFile",
+      "name": "Fetch the file from the provided URL",
+      "type": "bash",
+      "bash": {
+        "command": "curl -sL -m 30 \"$FILE_URL\" | head -c 50000",
+        "timeout": 60000,
+        "parseJson": false,
+        "env": {
+          "FILE_URL": "$.input.fileUrl"
+        }
+      }
+    },
+    {
+      "id": "prepareData",
+      "name": "Prepare file data for analysis",
+      "type": "code",
+      "code": {
+        "source": "const raw = $.steps.fetchFile.output || '';\nconst lines = raw.split('\\n');\nconst lineCount = lines.length;\nconst charCount = raw.length;\nconst preview = lines.slice(0, 5).join('\\n');\nconst truncated = raw.slice(0, 40000);\n\nreturn { rawData: truncated, lineCount, charCount, preview, fileUrl: $.input.fileUrl };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI analysis prompt",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.prepareData.output;\nconst goal = $.input.analysisGoal || 'Summarize the data, identify key patterns, and highlight notable values';\n\nlet prompt = 'You are a data analyst. Analyze the following file data fetched from: ' + d.fileUrl + '\\n\\n';\nprompt += 'ANALYSIS GOAL: ' + goal + '\\n\\n';\nprompt += 'FILE STATS: ' + d.lineCount + ' lines, ' + d.charCount + ' characters\\n';\nprompt += 'PREVIEW (first 5 lines):\\n' + d.preview + '\\n\\n';\nprompt += 'FULL DATA:\\n' + d.rawData + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Identify the data format (CSV, JSON, TSV, etc.)\\n';\nprompt += '- Extract key fields/columns and summarize what the data contains\\n';\nprompt += '- Identify patterns, outliers, or notable values\\n';\nprompt += '- Provide actionable insights based on the analysis goal\\n';\nprompt += '- Use Slack mrkdwn formatting: *bold* (NOT **bold**), _italic_, numbered lists\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"dataFormat\": \"CSV|JSON|TSV|text\",\\n';\nprompt += '  \"recordCount\": 0,\\n';\nprompt += '  \"fields\": [\"field1\", \"field2\"],\\n';\nprompt += '  \"summary\": \"overview of the data\",\\n';\nprompt += '  \"keyFindings\": [\"finding 1\", \"finding 2\"],\\n';\nprompt += '  \"insights\": \"actionable insights based on the analysis goal\",\\n';\nprompt += '  \"sampleRecords\": \"formatted sample of 3-5 representative records\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-890-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-890-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, dataFormat: 'unknown', recordCount: 0, fields: [], keyFindings: [], insights: '', sampleRecords: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst d = $.steps.prepareData.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'File Data Analysis', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Source:* ' + d.fileUrl + '\\n*Format:* ' + (ai.dataFormat || 'unknown') + ' | *Records:* ' + (ai.recordCount || d.lineCount) + ' | *Fields:* ' + (ai.fields || []).join(', ') } });\nblocks.push({ type: 'divider' });\n\nif (ai.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary*\\n' + ai.summary.slice(0, 2900) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.keyFindings && ai.keyFindings.length > 0) {\n  let findingsText = '*Key Findings*\\n';\n  ai.keyFindings.forEach((f, i) => { findingsText += (i + 1) + '. ' + f + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: findingsText.slice(0, 2900) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.insights) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Insights*\\n' + ai.insights.slice(0, 2900) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.sampleRecords) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Sample Records*\\n' + ai.sampleRecords.slice(0, 2900) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Analyzed with Claude AI | One CLI' }] });\n\nconst fallback = 'File Analysis: ' + (ai.dataFormat || '') + ' with ' + (ai.recordCount || d.lineCount) + ' records - ' + (ai.summary || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post analysis to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,170 @@
+{
+  "key": "n8n-8642-generate-viral-videos",
+  "name": "Viral Video Script Generator",
+  "description": "Generate viral short-form video scripts using Claude AI with trend analysis. Produces attention-grabbing scripts optimized for virality, complete with hooks, CTAs, and trending format suggestions, then tracks everything in Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 8642,
+    "url": "https://n8n.io/workflows/8642",
+    "originalName": "Generate AI viral videos with VEO 3 and upload to TikTok",
+    "totalViews": 218803,
+    "rank": 18,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic or trend to create viral video scripts about (e.g. 'AI tools for students', 'morning routines')"
+    },
+    "scriptCount": {
+      "type": "number",
+      "required": false,
+      "default": 3,
+      "description": "Number of viral scripts to generate (1-5)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post results"
+    }
+  },
+  "steps": [
+    {
+      "id": "trendResearch",
+      "name": "Research trending content in the topic via Exa",
+      "type": "action",
+      "onError": {
+        "strategy": "continue"
+      },
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "{{$.input.topic}} viral video tiktok trending 2025",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 300
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileTrends",
+      "name": "Compile trend research data",
+      "type": "code",
+      "code": {
+        "source": "const results = ($.steps.trendResearch.response && $.steps.trendResearch.response.results) ? $.steps.trendResearch.response.results : [];\nlet trendData = '';\nresults.slice(0, 8).forEach((r, i) => {\n  trendData += (i + 1) + '. ' + (r.title || r.url) + '\\n';\n  trendData += '   ' + (r.text || '').slice(0, 200) + '\\n\\n';\n});\nreturn { trendData, trendCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for viral script generation",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic;\nconst count = $.input.scriptCount || 3;\nconst trends = $.steps.compileTrends.output.trendData;\n\nconst prompt = `You are an expert viral video content creator and social media strategist. Generate ${count} viral short-form video scripts for the topic: \"${topic}\".\n\nTRENDING CONTENT RESEARCH:\n${trends || 'No trend data available \u2014 use your expertise.'}\n\nEach script should follow proven viral formats (storytime, POV, hot take, tutorial, before/after, etc.).\n\nReturn ONLY valid JSON with this exact structure:\n{\n  \"topic\": \"${topic}\",\n  \"scripts\": [\n    {\n      \"number\": 1,\n      \"title\": \"<catchy title for the video>\",\n      \"format\": \"<viral format type: storytime|POV|hot-take|tutorial|before-after|reaction|list|challenge>\",\n      \"hook\": \"<first 3 seconds \u2014 must stop the scroll>\",\n      \"script\": \"<full 30-60 second script with [VISUAL DIRECTIONS] inline>\",\n      \"cta\": \"<call to action at the end>\",\n      \"hashtags\": \"<8-12 relevant hashtags>\",\n      \"estimatedViews\": \"<low: <10K|medium: 10K-100K|high: 100K+>\",\n      \"whyItWorks\": \"<1 sentence explaining the viral mechanics>\"\n    }\n  ],\n  \"trendInsight\": \"<2 sentences on current trends in this space>\"\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-8642-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI to generate viral scripts",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-8642-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { topic: $.input.topic, scripts: [], trendInsight: raw.slice(0, 500) }; }"
+      }
+    },
+    {
+      "id": "prepareSheetData",
+      "name": "Prepare data for Google Sheets tracking",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst scripts = ai.scripts || [];\nconst now = new Date().toISOString().split('T')[0];\n\nconst sheetData = scripts.map(s => ({\n  'Date': now,\n  'Number': s.number || '',\n  'Title': s.title || '',\n  'Format': s.format || '',\n  'Hook': s.hook || '',\n  'Script': (s.script || '').slice(0, 500),\n  'CTA': s.cta || '',\n  'Hashtags': s.hashtags || '',\n  'Est. Views': s.estimatedViews || '',\n  'Why It Works': s.whyItWorks || '',\n  'Status': 'Draft',\n  'Topic': ai.topic || $.input.topic\n}));\n\nreturn { sheetData, scriptCount: scripts.length, trendInsight: ai.trendInsight || '' };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save viral scripts to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "connectionKey": "$.input.sheetsKey",
+          "title": "Viral Scripts - {{$.input.topic}}",
+          "sheetTitle": "Scripts",
+          "data": "$.steps.prepareSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit notification",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst scripts = ai.scripts || [];\nconst topic = ai.topic || $.input.topic;\nconst trendInsight = $.steps.prepareSheetData.output.trendInsight;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':fire: Viral Video Scripts: ' + topic, emoji: true } });\n\nif (trendInsight) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Trend Insight:* ' + trendInsight } });\n}\nblocks.push({ type: 'divider' });\n\nscripts.slice(0, 5).forEach((s, i) => {\n  let text = '*' + (s.number || i + 1) + '. ' + (s.title || 'Untitled') + '* (' + (s.format || 'general') + ')\\n';\n  text += ':hook: *Hook:* ' + (s.hook || '') + '\\n';\n  text += ':chart_with_upwards_trend: *Est. Views:* ' + (s.estimatedViews || 'unknown') + '\\n';\n  text += ':bulb: ' + (s.whyItWorks || '') + '\\n';\n  text += (s.hashtags || '');\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text } });\n  if (i < scripts.length - 1) blocks.push({ type: 'divider' });\n});\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: scripts.length + ' viral scripts generated | Saved to Google Sheets | Powered by Exa + Claude AI' }] });\n\nconst fallback = 'Viral Scripts: ' + scripts.length + ' scripts generated for ' + topic;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Post viral scripts to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

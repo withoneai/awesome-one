@@ -1,0 +1,132 @@
+{
+  "key": "n8n-5035-generate-auto-post-videos",
+  "name": "AI Video Content Planner",
+  "description": "Generate video content ideas and full scripts using Claude AI. Produces concepts with titles, hooks, scripts, and hashtags for social media video content, then saves everything to a Google Sheets tracking spreadsheet.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5035,
+    "url": "https://n8n.io/workflows/5035",
+    "originalName": "Generate & auto-post AI videos to social media with Veo3 and Blotato",
+    "totalViews": 232992,
+    "rank": 15,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "niche": {
+      "type": "string",
+      "required": true,
+      "description": "Content niche or topic area (e.g. 'AI productivity tips', 'cooking hacks', 'fitness motivation')"
+    },
+    "videoCount": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Number of video concepts to generate (1-10)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the content plan"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for video content generation",
+      "type": "code",
+      "code": {
+        "source": "const niche = $.input.niche;\nconst count = $.input.videoCount || 5;\nconst prompt = `You are an expert social media video content strategist. Generate ${count} unique short-form video concepts for the niche: \"${niche}\".\n\nEach video concept should be optimized for TikTok, Instagram Reels, and YouTube Shorts (15-60 seconds).\n\nReturn ONLY valid JSON with this exact structure:\n{\n  \"niche\": \"${niche}\",\n  \"concepts\": [\n    {\n      \"number\": 1,\n      \"title\": \"<catchy video title>\",\n      \"hook\": \"<attention-grabbing first 3 seconds script>\",\n      \"script\": \"<full 30-45 second video script with scene directions in brackets>\",\n      \"hashtags\": \"<5-8 relevant hashtags as a single string>\",\n      \"targetPlatform\": \"<tiktok|reels|shorts|all>\",\n      \"estimatedDuration\": \"<duration in seconds>\",\n      \"viralPotential\": \"<high|medium|low>\"\n    }\n  ],\n  \"contentStrategy\": \"<brief 2-sentence strategy note for this content batch>\"\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5035-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI to generate video concepts",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5035-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { niche: $.input.niche, concepts: [], contentStrategy: raw.slice(0, 500) }; }"
+      }
+    },
+    {
+      "id": "prepareSheetData",
+      "name": "Prepare data for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst concepts = ai.concepts || [];\nconst now = new Date().toISOString().split('T')[0];\n\nconst sheetData = concepts.map(c => ({\n  'Date': now,\n  'Number': c.number || '',\n  'Title': c.title || '',\n  'Hook': c.hook || '',\n  'Script': (c.script || '').slice(0, 500),\n  'Hashtags': c.hashtags || '',\n  'Platform': c.targetPlatform || 'all',\n  'Duration': c.estimatedDuration || '',\n  'Viral Potential': c.viralPotential || '',\n  'Status': 'Draft',\n  'Niche': ai.niche || $.input.niche\n}));\n\nreturn { sheetData, conceptCount: concepts.length, strategy: ai.contentStrategy || '' };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save video concepts to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "connectionKey": "$.input.sheetsKey",
+          "title": "Video Content Plan - {{$.input.niche}}",
+          "sheetTitle": "Concepts",
+          "data": "$.steps.prepareSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit notification",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst concepts = ai.concepts || [];\nconst niche = ai.niche || $.input.niche;\nconst strategy = $.steps.prepareSheetData.output.strategy;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':movie_camera: Video Content Plan: ' + niche, emoji: true } });\n\nif (strategy) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Strategy:* ' + strategy } });\n}\nblocks.push({ type: 'divider' });\n\nconcepts.slice(0, 5).forEach((c, i) => {\n  let text = '*' + (c.number || i + 1) + '. ' + (c.title || 'Untitled') + '*\\n';\n  text += ':zap: *Hook:* ' + (c.hook || '') + '\\n';\n  text += ':dart: *Platform:* ' + (c.targetPlatform || 'all') + ' | :clock1: ' + (c.estimatedDuration || '30s') + ' | :fire: ' + (c.viralPotential || 'medium') + '\\n';\n  text += (c.hashtags || '');\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text } });\n  if (i < concepts.length - 1) blocks.push({ type: 'divider' });\n});\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: concepts.length + ' concepts generated | Saved to Google Sheets | One CLI + Claude AI' }] });\n\nconst fallback = 'Video Content Plan: ' + concepts.length + ' concepts for ' + niche;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Post content plan to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

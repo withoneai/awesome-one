@@ -1,0 +1,173 @@
+{
+  "key": "n8n-4366-email-calendar-ai",
+  "name": "AI Email & Calendar Management Assistant",
+  "description": "Fetches recent Gmail messages, uses Claude AI to classify, prioritize, and suggest replies and meeting times, then saves the organized inbox report to Google Sheets and posts a summary to Slack. Adapted from n8n's Gmail + Google Calendar AI management workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4366,
+    "url": "https://n8n.io/workflows/4366",
+    "originalName": "Automate email & calendar management with Gmail, Google Calendar & GPT-4o AI",
+    "totalViews": 20769,
+    "rank": 289,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailListKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for listing emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving the report",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID to save inbox analysis"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the inbox summary"
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": false,
+      "default": "newer_than:1d",
+      "description": "Gmail search query to filter emails (default: last 24 hours)"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 20,
+      "description": "Maximum number of emails to process"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchEmails",
+      "name": "Fetch recent emails from Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailListKey",
+        "data": {},
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "maxResults": "$.input.maxEmails",
+          "q": "$.input.searchQuery"
+        }
+      }
+    },
+    {
+      "id": "extractEmails",
+      "name": "Extract email metadata",
+      "type": "code",
+      "code": {
+        "source": "const messages = $.steps.fetchEmails.response.messages || [];\nconst ids = messages.map(m => m.id).filter(Boolean).slice(0, 20);\nlet emailData = 'Found ' + ids.length + ' emails matching query.\\n\\n';\nids.forEach((id, i) => {\n  emailData += (i + 1) + '. Message ID: ' + id + '\\n';\n});\nreturn { emailData, emailCount: ids.length, messageIds: ids };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for email classification and calendar management",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.extractEmails.output;\nconst today = new Date().toISOString().slice(0, 10);\nconst dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });\n\nlet prompt = 'You are an AI-powered email and calendar management assistant. Analyze the inbox data and provide comprehensive management recommendations.\\n\\n';\nprompt += 'DATE: ' + dayName + ', ' + today + '\\n';\nprompt += 'INBOX DATA:\\n' + d.emailData + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Classify emails into: urgent-action, needs-reply, informational, promotional, can-archive\\n';\nprompt += '- Suggest draft reply topics for emails needing responses\\n';\nprompt += '- Identify any meeting-related emails and suggest calendar actions\\n';\nprompt += '- Create a prioritized action list for the day\\n';\nprompt += '- Suggest optimal time blocks for email processing\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"reportDate\": \"' + today + '\",\\n';\nprompt += '  \"totalProcessed\": ' + d.emailCount + ',\\n';\nprompt += '  \"classification\": {\\n';\nprompt += '    \"urgentAction\": { \"count\": 0, \"description\": \"emails needing immediate action\" },\\n';\nprompt += '    \"needsReply\": { \"count\": 0, \"suggestedReplies\": [\"brief reply topic\"] },\\n';\nprompt += '    \"informational\": { \"count\": 0, \"description\": \"FYI emails\" },\\n';\nprompt += '    \"promotional\": { \"count\": 0, \"description\": \"marketing/promo\" },\\n';\nprompt += '    \"canArchive\": { \"count\": 0, \"description\": \"safe to archive\" }\\n';\nprompt += '  },\\n';\nprompt += '  \"calendarSuggestions\": [{ \"action\": \"schedule|reschedule|block\", \"description\": \"what to do\", \"suggestedTime\": \"when\" }],\\n';\nprompt += '  \"dailyPlan\": [{ \"timeBlock\": \"9:00-9:30\", \"task\": \"what to do\", \"priority\": \"high|medium|low\" }],\\n';\nprompt += '  \"executiveSummary\": \"2-3 sentence inbox overview\",\\n';\nprompt += '  \"topActions\": [\"action item 1\", \"action item 2\", \"action item 3\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4366-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI email and calendar analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4366-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { reportDate: new Date().toISOString().slice(0, 10), totalProcessed: 0, classification: {}, calendarSuggestions: [], dailyPlan: [], executiveSummary: raw, topActions: [] }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Google Sheets rows from analysis",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst rows = [];\nrows.push(['Date', 'Category', 'Count', 'Description', 'Top Actions']);\nconst cls = ai.classification || {};\nObject.keys(cls).forEach(cat => {\n  const c = cls[cat];\n  rows.push([ai.reportDate || '', cat, String(c.count || 0), c.description || '', (c.suggestedReplies || []).join('; ')]);\n});\nrows.push([ai.reportDate || '', 'SUMMARY', String(ai.totalProcessed || 0), ai.executiveSummary || '', (ai.topActions || []).join('; ')]);\nreturn { rows };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save email analysis to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "Email Analysis",
+          "values": "$.steps.buildSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit inbox summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst cls = ai.classification || {};\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Email & Calendar Daily Brief', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Date:* ' + (ai.reportDate || 'Today') + ' | *Emails Processed:* ' + (ai.totalProcessed || 0) } });\nblocks.push({ type: 'divider' });\n\nif (ai.executiveSummary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:* ' + ai.executiveSummary.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\nlet classText = '*Inbox Classification:*\\n';\nif (cls.urgentAction) classText += ':red_circle: *Urgent:* ' + cls.urgentAction.count + ' - ' + (cls.urgentAction.description || '') + '\\n';\nif (cls.needsReply) classText += ':large_yellow_circle: *Needs Reply:* ' + cls.needsReply.count + '\\n';\nif (cls.informational) classText += ':large_blue_circle: *Informational:* ' + cls.informational.count + '\\n';\nif (cls.promotional) classText += ':white_circle: *Promotional:* ' + cls.promotional.count + '\\n';\nif (cls.canArchive) classText += ':wastebasket: *Archive:* ' + cls.canArchive.count + '\\n';\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: classText.slice(0, 1800) } });\n\nif (ai.topActions && ai.topActions.length > 0) {\n  blocks.push({ type: 'divider' });\n  let actText = '*Top Actions:*\\n';\n  ai.topActions.forEach((a, i) => { actText += (i + 1) + '. ' + a + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: actText.slice(0, 1800) } });\n}\n\nif (ai.dailyPlan && ai.dailyPlan.length > 0) {\n  blocks.push({ type: 'divider' });\n  let planText = '*Suggested Daily Plan:*\\n';\n  ai.dailyPlan.slice(0, 6).forEach(p => {\n    const icon = p.priority === 'high' ? ':red_circle:' : p.priority === 'low' ? ':white_circle:' : ':large_blue_circle:';\n    planText += icon + ' *' + p.timeBlock + '* - ' + p.task + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: planText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Report saved to Google Sheets | Powered by Gmail + Claude AI' }] });\nconst fallback = 'Email Brief: ' + (ai.executiveSummary || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post inbox summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

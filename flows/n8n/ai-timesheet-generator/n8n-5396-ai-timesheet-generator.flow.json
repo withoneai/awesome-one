@@ -1,0 +1,201 @@
+{
+  "key": "n8n-5396-ai-timesheet-generator",
+  "name": "AI Timesheet Generator from Gmail and Calendar to Google Sheets",
+  "description": "Collects recent emails from Gmail, uses Claude AI to extract work activities and time estimates, compiles an automated timesheet, and writes structured time entries to Google Sheets with a Slack summary.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5396,
+    "url": "https://n8n.io/workflows/5396",
+    "originalName": "AI Timesheet Generator with Gmail, Calendar & GitHub to Google Sheets",
+    "totalViews": 21994,
+    "rank": 279,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for reading work emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for timesheet notification",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for timesheet"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Timesheet",
+      "description": "Sheet tab name"
+    },
+    "timePeriod": {
+      "type": "string",
+      "required": false,
+      "default": "7d",
+      "description": "Time period to analyze (e.g. 7d for last week)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post timesheet summary"
+    },
+    "hourlyRate": {
+      "type": "number",
+      "required": false,
+      "default": 0,
+      "description": "Optional hourly rate for billing calculation"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchWorkEmails",
+      "name": "Search Gmail for work-related emails",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "q": "newer_than:$.input.timePeriod -category:promotions -category:social",
+          "maxResults": 50
+        }
+      }
+    },
+    {
+      "id": "fetchEmails",
+      "name": "Fetch email details for timesheet analysis",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.searchWorkEmails.response.messages",
+        "as": "msg",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "getEmail",
+            "name": "Get email content",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GJ3ocvMGOS8::D__3BgQSSzWtDUoOqLuX2A",
+              "connectionKey": "$.input.gmailKey",
+              "pathVars": {
+                "userId": "me",
+                "id": "$.loop.msg.id"
+              },
+              "queryParams": {
+                "format": "metadata",
+                "metadataHeaders": "Subject,From,Date"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileEmailData",
+      "name": "Compile email metadata for AI processing",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.fetchEmails.response.iterations || [];\nlet emailSummary = '';\nlet emailCount = 0;\n\niterations.forEach(iter => {\n  const resp = iter.getEmail ? iter.getEmail.response : null;\n  if (!resp) return;\n  const headers = (resp.payload && resp.payload.headers) || [];\n  const subject = (headers.find(h => h.name === 'Subject') || {}).value || '';\n  const from = (headers.find(h => h.name === 'From') || {}).value || '';\n  const date = (headers.find(h => h.name === 'Date') || {}).value || '';\n  emailSummary += date + ' | ' + from + ' | ' + subject + '\\n';\n  emailCount++;\n});\n\nreturn { emailSummary, emailCount };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for timesheet generation",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.compileEmailData.output;\nconst rate = $.input.hourlyRate || 0;\n\nconst prompt = 'You are a professional time tracking assistant. Analyze these email records and generate a timesheet.\\n\\nEMAIL ACTIVITY LOG (' + data.emailCount + ' emails):\\n' + data.emailSummary + '\\n\\nINSTRUCTIONS:\\n- Group related emails into work activities/projects\\n- Estimate time spent on each activity based on email volume and complexity\\n- Categorize each activity (Meeting, Communication, Development, Admin, Research, Review)\\n- Assign reasonable time estimates (0.25h minimum increments)\\n' + (rate > 0 ? '- Calculate billing at $' + rate + '/hour\\n' : '') + '\\nReturn ONLY valid JSON:\\n{\\n  \"timesheetEntries\": [\\n    {\\n      \"date\": \"YYYY-MM-DD\",\\n      \"project\": \"project or client name\",\\n      \"activity\": \"activity description\",\\n      \"category\": \"Meeting/Communication/Development/Admin/Research/Review\",\\n      \"hours\": 0.0,\\n      \"notes\": \"brief notes\"\\n    }\\n  ],\\n  \"totalHours\": 0.0,\\n  \"totalBilling\": 0.0,\\n  \"summary\": \"weekly work summary in 2-3 sentences\",\\n  \"topProjects\": [{ \"name\": \"project\", \"hours\": 0.0 }]\\n}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5396-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Generate timesheet with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5396-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { timesheetEntries: [], totalHours: 0, summary: raw.slice(0, 300) }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build rows for Google Sheets timesheet",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst entries = ai.timesheetEntries || [];\nconst rate = $.input.hourlyRate || 0;\nconst rows = entries.map(e => [\n  e.date || '',\n  e.project || '',\n  e.activity || '',\n  e.category || '',\n  e.hours || 0,\n  rate > 0 ? (e.hours * rate).toFixed(2) : '',\n  e.notes || ''\n]);\nconst slackText = 'Timesheet generated: ' + entries.length + ' entries | ' + (ai.totalHours || 0) + ' total hours' + (rate > 0 ? ' | $' + (ai.totalBilling || (ai.totalHours * rate)).toFixed(2) + ' billing' : '') + '\\n' + (ai.summary || '');\nreturn { rows, slackText };"
+      }
+    },
+    {
+      "id": "writeToSheets",
+      "name": "Write timesheet to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": "$.steps.buildSheetRows.output.rows"
+        }
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Post timesheet summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSheetRows.output.slackText"
+        }
+      }
+    }
+  ]
+}

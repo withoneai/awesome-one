@@ -1,0 +1,189 @@
+{
+  "key": "n8n-3089-email-reply-ai",
+  "name": "Reply to emails with AI using Gmail and Claude",
+  "description": "Lists recent Gmail messages, uses Claude AI to analyze each email and generate context-aware reply drafts matching a specified tone and style, sends the replies via Gmail, and reports activity to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3089,
+    "url": "https://n8n.io/workflows/3089",
+    "originalName": "Reply to Outlook emails with OpenAI",
+    "totalViews": 27604,
+    "rank": 231,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailListKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for listing emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "gmailSendKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending replies",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for email reply notifications"
+    },
+    "replyTone": {
+      "type": "string",
+      "required": false,
+      "default": "professional and helpful",
+      "description": "Tone for AI-generated replies (e.g. 'formal', 'friendly', 'concise')"
+    },
+    "sampleReplies": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Sample email replies to train the AI on your writing style"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Maximum emails to process"
+    },
+    "senderName": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Your name for the email signature"
+    }
+  },
+  "steps": [
+    {
+      "id": "listEmails",
+      "name": "List recent Gmail messages",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailListKey",
+        "data": {
+          "maxResults": "$.input.maxEmails"
+        }
+      }
+    },
+    {
+      "id": "extractEmails",
+      "name": "Extract email content for reply generation",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.listEmails.response || {};\nconst messages = response.data?.messages || response.messages || [];\nlet emailData = '';\nconst emailList = [];\n\nmessages.slice(0, $.input.maxEmails || 5).forEach(function(msg, i) {\n  const headers = msg.payload?.headers || [];\n  let subject = '';\n  let from = '';\n  let to = '';\n  headers.forEach(function(h) {\n    if (h.name === 'Subject') subject = h.value || '';\n    if (h.name === 'From') from = h.value || '';\n    if (h.name === 'To') to = h.value || '';\n  });\n  const snippet = msg.snippet || '';\n  emailData += '=== EMAIL ' + (i + 1) + ' ===\\n';\n  emailData += 'From: ' + from + '\\n';\n  emailData += 'Subject: ' + subject + '\\n';\n  emailData += 'Content: ' + snippet + '\\n\\n';\n  emailList.push({ index: i + 1, from: from, subject: subject, snippet: snippet, to: to });\n});\n\nreturn { emailData: emailData, emailList: emailList, emailCount: emailList.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for reply generation",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.extractEmails.output;\nconst tone = $.input.replyTone || 'professional and helpful';\nconst samples = $.input.sampleReplies || '';\nconst name = $.input.senderName || '';\n\nlet prompt = 'You are an AI email assistant. Generate professional replies to the following emails.\\n\\n';\nprompt += 'REPLY TONE: ' + tone + '\\n';\nif (name) prompt += 'SENDER NAME: ' + name + '\\n';\nif (samples) prompt += 'SAMPLE REPLIES FOR STYLE REFERENCE:\\n' + samples + '\\n\\n';\nprompt += 'EMAILS TO REPLY TO:\\n' + data.emailData + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Generate a thoughtful reply for each email\\n';\nprompt += '- Match the specified tone and style\\n';\nprompt += '- Keep replies concise but complete\\n';\nprompt += '- Address the sender by name when possible\\n';\nprompt += '- Include appropriate greetings and sign-offs\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"replies\": [\\n';\nprompt += '    { \"emailIndex\": 1, \"to\": \"recipient email\", \"subject\": \"Re: original subject\", \"reply\": \"full reply text\", \"confidence\": \"high|medium|low\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"summary\": \"brief summary of actions taken\"\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3089-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiReplies",
+      "name": "Generate email replies with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3089-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiReplies.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { replies: [], summary: raw.slice(0, 300) }; }"
+      }
+    },
+    {
+      "id": "prepareReplies",
+      "name": "Prepare reply data for sending",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst emailList = $.steps.extractEmails.output.emailList;\nconst replies = ai.replies || [];\nconst toSend = [];\n\nreplies.forEach(function(r) {\n  const idx = (r.emailIndex || 1) - 1;\n  const original = emailList[idx] || {};\n  const recipientEmail = (r.to || original.from || '').replace(/.*</, '').replace(/>.*/, '').trim();\n  if (recipientEmail && recipientEmail.indexOf('@') > 0) {\n    toSend.push({\n      to: recipientEmail,\n      subject: r.subject || 'Re: ' + (original.subject || ''),\n      body: r.reply || '',\n      confidence: r.confidence || 'medium'\n    });\n  }\n});\n\nreturn { toSend: toSend, count: toSend.length };"
+      }
+    },
+    {
+      "id": "sendReplies",
+      "name": "Send AI-generated replies via Gmail",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.prepareReplies.output.toSend",
+        "as": "reply",
+        "maxConcurrency": 1,
+        "steps": [
+          {
+            "id": "sendReply",
+            "name": "Send email reply",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+              "connectionKey": "$.input.gmailSendKey",
+              "data": {
+                "to": "$.loop.reply.to",
+                "subject": "$.loop.reply.subject",
+                "body": "$.loop.reply.body"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack notification for sent replies",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst sent = $.steps.prepareReplies.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Email Replies Sent', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Replies Generated:* ' + sent.count + '\\n' + (ai.summary || '') } });\nblocks.push({ type: 'divider' });\n\nconst toSend = sent.toSend || [];\ntoSend.slice(0, 5).forEach(function(r) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*To:* ' + r.to + '\\n*Subject:* ' + r.subject + '\\n*Confidence:* ' + r.confidence } });\n});\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Gmail + Claude AI' }] });\nconst fallbackText = 'Email Replies: ' + sent.count + ' replies sent via AI';\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Post reply notification to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

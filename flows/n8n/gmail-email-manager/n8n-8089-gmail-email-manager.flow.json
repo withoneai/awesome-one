@@ -1,0 +1,134 @@
+{
+  "key": "n8n-8089-gmail-email-manager",
+  "name": "Gmail AI email manager",
+  "description": "Fetches recent emails from Gmail inbox, uses Claude AI to triage and categorize each email (to-respond, FYI, notification, marketing), drafts response suggestions for action-required emails, and posts a structured digest to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4722,
+    "url": "https://n8n.io/workflows/4722",
+    "originalName": "Gmail AI Email Manager",
+    "totalViews": 93653,
+    "rank": 54,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailListKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for listing emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "gmailGetKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for getting email details",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the email digest"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Maximum number of recent emails to process"
+    }
+  },
+  "steps": [
+    {
+      "id": "listEmails",
+      "name": "List recent emails from Gmail inbox",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailListKey",
+        "data": {
+          "maxResults": "$.input.maxEmails",
+          "q": "is:unread"
+        }
+      }
+    },
+    {
+      "id": "compileEmails",
+      "name": "Compile email data for AI analysis",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.listEmails.response || {};\nconst data = response.data || response;\nconst messages = data.messages || data.data || [];\n\nlet emailSummary = '';\nconst emailList = [];\n\nconst items = Array.isArray(messages) ? messages : [messages];\nitems.slice(0, 15).forEach((msg, i) => {\n  const from = msg.from || msg.sender || 'Unknown';\n  const subject = msg.subject || msg.Subject || '(no subject)';\n  const snippet = (msg.snippet || msg.body || msg.text || '').slice(0, 500);\n  const date = msg.date || msg.internalDate || '';\n  const id = msg.id || msg.messageId || '';\n\n  emailSummary += '=== EMAIL ' + (i + 1) + ' ===\\n';\n  emailSummary += 'From: ' + from + '\\n';\n  emailSummary += 'Subject: ' + subject + '\\n';\n  emailSummary += 'Date: ' + date + '\\n';\n  emailSummary += 'Preview: ' + snippet + '\\n\\n';\n  emailList.push({ index: i + 1, from, subject, date, id });\n});\n\nreturn { emailSummary, emailList, totalEmails: items.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude triage prompt",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.compileEmails.output;\n\nlet prompt = 'You are an intelligent email manager assistant. Analyze the following emails and classify each one. For action-required emails, draft a brief response suggestion.\\n\\n';\nprompt += 'EMAILS TO CLASSIFY (' + data.totalEmails + ' total):\\n' + data.emailSummary + '\\n\\n';\nprompt += 'CLASSIFICATION CATEGORIES:\\n';\nprompt += '- TO_RESPOND: Requires direct reply or action\\n';\nprompt += '- FYI: Informational, no action needed\\n';\nprompt += '- NOTIFICATION: System alerts, service updates\\n';\nprompt += '- MARKETING: Promotional content, newsletters\\n';\nprompt += '- MEETING: Calendar-related communications\\n';\nprompt += '- COMMENT: Feedback on documents or tasks\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Classify every email into exactly one category\\n';\nprompt += '- For TO_RESPOND emails, provide a suggested 1-2 sentence response\\n';\nprompt += '- Assess overall inbox urgency (low/medium/high)\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"inboxUrgency\": \"low|medium|high\",\\n';\nprompt += '  \"summary\": \"1-2 sentence overview of inbox state\",\\n';\nprompt += '  \"emails\": [\\n';\nprompt += '    { \"index\": 1, \"category\": \"TO_RESPOND\", \"priority\": \"high|medium|low\", \"reason\": \"why this classification\", \"suggestedResponse\": \"draft response or null\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"stats\": { \"toRespond\": 0, \"fyi\": 0, \"notification\": 0, \"marketing\": 0, \"meeting\": 0, \"comment\": 0 }\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-8089-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI email triage",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-8089-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { inboxUrgency: 'unknown', summary: raw, emails: [], stats: { toRespond: 0, fyi: 0, notification: 0, marketing: 0, meeting: 0, comment: 0 } }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit email digest",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst emailData = $.steps.compileEmails.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Email Inbox Digest', emoji: true } });\n\nconst urgencyEmoji = ai.inboxUrgency === 'high' ? ':red_circle:' : ai.inboxUrgency === 'medium' ? ':large_yellow_circle:' : ':large_green_circle:';\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Urgency:*\\n' + urgencyEmoji + ' ' + (ai.inboxUrgency || 'N/A') },\n  { type: 'mrkdwn', text: '*Total Emails:*\\n' + emailData.totalEmails }\n] });\n\nconst s = ai.stats || {};\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*To Respond:* ' + (s.toRespond || 0) },\n  { type: 'mrkdwn', text: '*FYI:* ' + (s.fyi || 0) },\n  { type: 'mrkdwn', text: '*Notifications:* ' + (s.notification || 0) },\n  { type: 'mrkdwn', text: '*Marketing:* ' + (s.marketing || 0) }\n] });\n\nblocks.push({ type: 'divider' });\nconst summaryText = (ai.summary || 'No summary available.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:*\\n' + summaryText } });\n\nif (ai.emails && ai.emails.length > 0) {\n  const actionEmails = ai.emails.filter(e => e.category === 'TO_RESPOND');\n  if (actionEmails.length > 0) {\n    blocks.push({ type: 'divider' });\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Action Required:*' } });\n    actionEmails.slice(0, 5).forEach(e => {\n      const orig = emailData.emailList[e.index - 1] || {};\n      let txt = '*' + (orig.subject || 'Email ' + e.index) + '*';\n      txt += '\\nFrom: ' + (orig.from || 'unknown');\n      txt += '\\nPriority: ' + (e.priority || 'medium');\n      if (e.suggestedResponse) txt += '\\nSuggested Reply: _' + e.suggestedResponse.slice(0, 200) + '_';\n      blocks.push({ type: 'section', text: { type: 'mrkdwn', text: txt.slice(0, 1800) } });\n    });\n  }\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Gmail + Claude AI' }] });\n\nconst fallbackText = 'Email Digest: ' + emailData.totalEmails + ' emails - Urgency: ' + (ai.inboxUrgency || 'unknown') + ' - ' + (ai.summary || '').slice(0, 80);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post email digest to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

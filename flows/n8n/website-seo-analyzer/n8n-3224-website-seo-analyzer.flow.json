@@ -1,0 +1,125 @@
+{
+  "key": "n8n-3224-website-seo-analyzer",
+  "name": "Website SEO analyzer",
+  "description": "Performs an on-page SEO audit by scraping any website URL with Firecrawl, using Claude to analyze SEO factors (title tags, meta descriptions, headings, content quality, technical issues), and emailing the detailed audit report via Gmail.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3224,
+    "url": "https://n8n.io/workflows/3224",
+    "originalName": "Analyze any website with OpenAI and get on-page SEO audit",
+    "totalViews": 62125,
+    "rank": 97,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping",
+      "default": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending the audit report",
+      "default": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "Website URL to analyze for SEO (e.g. 'https://example.com')"
+    },
+    "recipientEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to receive the SEO audit report"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeUrl",
+      "name": "Scrape the target website with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.url",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": false
+        }
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for SEO audit",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.scrapeUrl.response || {};\nconst data = resp.data || {};\nconst md = data.markdown || '';\nconst metadata = data.metadata || {};\nconst url = $.input.url;\n\nconst prompt = `You are an expert SEO consultant. Perform a comprehensive on-page SEO audit of the following website.\\n\\nWEBSITE URL: ${url}\\n\\nPAGE METADATA:\\n- Title: ${metadata.title || 'Not found'}\\n- Description: ${metadata.description || 'Not found'}\\n- Language: ${metadata.language || 'Not found'}\\n\\nPAGE CONTENT:\\n${md.slice(0, 8000)}\\n\\nANALYZE THE FOLLOWING SEO FACTORS:\\n1. Title tag - length, keyword usage, uniqueness\\n2. Meta description - length, call to action, keyword usage\\n3. Heading structure - H1, H2, H3 hierarchy\\n4. Content quality - length, keyword density, readability\\n5. Internal/external links\\n6. Image optimization (alt tags mentioned in markdown)\\n7. URL structure\\n8. Mobile-friendliness indicators\\n9. Content freshness signals\\n10. Schema/structured data indicators\\n\\nReturn ONLY valid JSON:\\n{\\n  \"overallScore\": 75,\\n  \"grade\": \"B\",\\n  \"titleTag\": { \"score\": 80, \"current\": \"...\", \"recommendation\": \"...\" },\\n  \"metaDescription\": { \"score\": 70, \"current\": \"...\", \"recommendation\": \"...\" },\\n  \"headings\": { \"score\": 65, \"findings\": \"...\", \"recommendation\": \"...\" },\\n  \"contentQuality\": { \"score\": 80, \"wordCount\": 0, \"findings\": \"...\", \"recommendation\": \"...\" },\\n  \"links\": { \"score\": 70, \"findings\": \"...\", \"recommendation\": \"...\" },\\n  \"images\": { \"score\": 60, \"findings\": \"...\", \"recommendation\": \"...\" },\\n  \"technicalSeo\": { \"score\": 75, \"findings\": \"...\", \"recommendation\": \"...\" },\\n  \"topIssues\": [\"<issue1>\", \"<issue2>\", \"<issue3>\"],\\n  \"quickWins\": [\"<win1>\", \"<win2>\", \"<win3>\"],\\n  \"summary\": \"<executive summary>\"\\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3224-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for SEO audit",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3224-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { overallScore: 0, grade: 'N/A', summary: raw, topIssues: [], quickWins: [] }; }"
+      }
+    },
+    {
+      "id": "buildEmailReport",
+      "name": "Build HTML email report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst url = $.input.url;\nconst date = new Date().toISOString().split('T')[0];\n\nconst gradeColor = ai.overallScore >= 80 ? '#28a745' : ai.overallScore >= 60 ? '#ffc107' : '#dc3545';\n\nlet html = '<div style=\"font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto;\">';\nhtml += '<h1 style=\"color: #333;\">SEO Audit Report</h1>';\nhtml += '<p><strong>URL:</strong> <a href=\"' + url + '\">' + url + '</a></p>';\nhtml += '<p><strong>Date:</strong> ' + date + '</p>';\nhtml += '<div style=\"background: ' + gradeColor + '; color: white; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;\">';\nhtml += '<h2 style=\"margin: 0; color: white;\">Overall Score: ' + (ai.overallScore || 'N/A') + '/100 (Grade: ' + (ai.grade || 'N/A') + ')</h2>';\nhtml += '</div>';\n\nhtml += '<h2>Executive Summary</h2><p>' + (ai.summary || '') + '</p>';\n\nconst sections = ['titleTag', 'metaDescription', 'headings', 'contentQuality', 'links', 'images', 'technicalSeo'];\nconst sectionLabels = ['Title Tag', 'Meta Description', 'Headings', 'Content Quality', 'Links', 'Images', 'Technical SEO'];\nsections.forEach((s, i) => {\n  const data = ai[s];\n  if (data) {\n    const scoreColor = (data.score || 0) >= 80 ? '#28a745' : (data.score || 0) >= 60 ? '#ffc107' : '#dc3545';\n    html += '<h3>' + sectionLabels[i] + ' <span style=\"color: ' + scoreColor + ';\">' + (data.score || 'N/A') + '/100</span></h3>';\n    if (data.current) html += '<p><strong>Current:</strong> ' + data.current + '</p>';\n    if (data.findings) html += '<p><strong>Findings:</strong> ' + data.findings + '</p>';\n    if (data.recommendation) html += '<p><strong>Recommendation:</strong> ' + data.recommendation + '</p>';\n  }\n});\n\nif (ai.topIssues && ai.topIssues.length > 0) {\n  html += '<h2 style=\"color: #dc3545;\">Top Issues</h2><ol>';\n  ai.topIssues.forEach(issue => { html += '<li>' + issue + '</li>'; });\n  html += '</ol>';\n}\n\nif (ai.quickWins && ai.quickWins.length > 0) {\n  html += '<h2 style=\"color: #28a745;\">Quick Wins</h2><ol>';\n  ai.quickWins.forEach(win => { html += '<li>' + win + '</li>'; });\n  html += '</ol>';\n}\n\nhtml += '</div>';\n\nreturn { html, date, overallScore: ai.overallScore || 0, grade: ai.grade || 'N/A' };"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Email SEO audit report via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.recipientEmail",
+          "subject": "SEO Audit: {{$.input.url}} - Score {{$.steps.buildEmailReport.output.overallScore}}/100 ({{$.steps.buildEmailReport.output.grade}})",
+          "body": "$.steps.buildEmailReport.output.html",
+          "isHtml": true
+        }
+      }
+    }
+  ]
+}

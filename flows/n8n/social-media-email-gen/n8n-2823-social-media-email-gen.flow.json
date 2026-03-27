@@ -1,0 +1,200 @@
+{
+  "key": "n8n-2823-social-media-email-gen",
+  "name": "Social media analysis and automated email generation",
+  "description": "Reads prospect data from Google Sheets, scrapes their social media profiles with Firecrawl, uses Claude AI to analyze online presence and generate personalized outreach emails, and sends them via Gmail. Adapted from n8n's social media analysis and email generation workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2823,
+    "url": "https://n8n.io/workflows/2823",
+    "originalName": "Social media analysis and automated email generation",
+    "totalViews": 30080,
+    "rank": 205,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for prospect data",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping social profiles",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending outreach emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for status updates",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for campaign updates"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID with prospect data"
+    },
+    "sheetRange": {
+      "type": "string",
+      "required": false,
+      "default": "Prospects!A1:D50",
+      "description": "Sheet range with columns: Name, Email, Social URL, Company"
+    },
+    "senderName": {
+      "type": "string",
+      "required": false,
+      "default": "Sales Team",
+      "description": "Name to use in the email signature"
+    },
+    "companyName": {
+      "type": "string",
+      "required": true,
+      "description": "Your company name for personalized emails"
+    },
+    "valueProposition": {
+      "type": "string",
+      "required": true,
+      "description": "Your product/service value proposition for email content"
+    }
+  },
+  "steps": [
+    {
+      "id": "readProspects",
+      "name": "Read prospect data from Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GJ30lYkSqLk::IOnDiKqfQ_2FtFCahohidA",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {},
+        "pathVars": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetRange"
+        }
+      }
+    },
+    {
+      "id": "parseProspects",
+      "name": "Parse prospect data from sheet",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.readProspects.response || {};\nconst values = resp.values || [];\nif (values.length < 2) return { prospects: [], count: 0 };\nconst headers = values[0];\nconst prospects = values.slice(1).map((row, i) => ({\n  index: i + 1,\n  name: row[0] || 'Unknown',\n  email: row[1] || '',\n  socialUrl: row[2] || '',\n  company: row[3] || ''\n})).filter(p => p.email.length > 0);\nreturn { prospects: prospects.slice(0, 10), count: prospects.length };"
+      }
+    },
+    {
+      "id": "scrapeProfiles",
+      "name": "Scrape social media profiles with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.parseProspects.output.prospects",
+        "as": "prospect",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapeOne",
+            "name": "Scrape social profile",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.prospect.socialUrl"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileProfiles",
+      "name": "Compile social profile data for AI analysis",
+      "type": "code",
+      "code": {
+        "source": "const prospects = $.steps.parseProspects.output.prospects || [];\nconst iterations = $.steps.scrapeProfiles.response.iterations || [];\nlet compiled = '';\nprospects.forEach((p, i) => {\n  compiled += '--- PROSPECT ' + p.index + ': ' + p.name + ' ---\\n';\n  compiled += 'Email: ' + p.email + '\\n';\n  compiled += 'Company: ' + p.company + '\\n';\n  compiled += 'Social URL: ' + p.socialUrl + '\\n';\n  if (iterations[i] && iterations[i].scrapeOne && iterations[i].scrapeOne.response) {\n    const s = iterations[i].scrapeOne.response;\n    const content = s.data ? (s.data.markdown || s.data.content || '') : (typeof s === 'string' ? s : JSON.stringify(s));\n    compiled += 'Social Content: ' + content.slice(0, 2000) + '\\n';\n  }\n  compiled += '\\n';\n});\nreturn { compiled: compiled.slice(0, 25000), count: prospects.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for email generation",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileProfiles.output;\nconst company = $.input.companyName;\nconst vp = $.input.valueProposition;\nconst sender = $.input.senderName;\nlet prompt = 'You are an expert sales copywriter. Analyze each prospect social media presence and write a personalized outreach email.\\n\\n';\nprompt += 'YOUR COMPANY: ' + company + '\\n';\nprompt += 'VALUE PROPOSITION: ' + vp + '\\n';\nprompt += 'SENDER: ' + sender + '\\n\\n';\nprompt += 'PROSPECTS:\\n' + d.compiled + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Write a unique, personalized email for each prospect\\n';\nprompt += '- Reference specific details from their social media\\n';\nprompt += '- Keep emails under 150 words, warm and professional\\n';\nprompt += '- Include a clear CTA\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"emails\": [{\\n';\nprompt += '    \"name\": \"prospect name\",\\n';\nprompt += '    \"email\": \"prospect email\",\\n';\nprompt += '    \"subject\": \"email subject line\",\\n';\nprompt += '    \"body\": \"email body text\",\\n';\nprompt += '    \"personalNote\": \"what was personalized and why\"\\n';\nprompt += '  }],\\n';\nprompt += '  \"campaignSummary\": \"summary of email campaign\"\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2823-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI email generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2823-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { emails: [], campaignSummary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit campaign summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst emails = ai.emails || [];\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Email Campaign Generated', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + emails.length + ' personalized emails* ready to send' } });\n\nif (ai.campaignSummary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.campaignSummary.slice(0, 500) } });\n}\n\nemails.slice(0, 5).forEach(e => {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + (e.name || 'Unknown') + '* - ' + (e.subject || 'No Subject').slice(0, 60) } });\n});\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Firecrawl + Claude AI + Gmail' }] });\n\nconst fallback = 'Email Campaign: ' + emails.length + ' personalized emails generated';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post campaign summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

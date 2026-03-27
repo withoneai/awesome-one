@@ -1,0 +1,161 @@
+{
+  "key": "n8n-3905-personal-assistant",
+  "name": "Personal Assistant \u2014 Gmail + Calendar + Sheets daily brief to Slack",
+  "description": "Gathers today's Gmail inbox, Google Calendar events, and key data from Sheets, uses Claude AI to generate a personalized daily briefing, and posts it to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3905,
+    "url": "https://n8n.io/workflows/3905",
+    "originalName": "Build a personal assistant with Google Gemini, Gmail and Calendar using MCP",
+    "totalViews": 36839,
+    "rank": 169,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailListKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for listing emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "calendarKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Calendar connection key",
+      "connection": {
+        "platform": "google-calendar"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for tasks/data",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for the daily brief"
+    },
+    "calendarId": {
+      "type": "string",
+      "required": false,
+      "default": "primary",
+      "description": "Google Calendar ID (use 'primary' for default)"
+    },
+    "userName": {
+      "type": "string",
+      "required": false,
+      "default": "there",
+      "description": "Your name for personalized greeting"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchEmails",
+      "name": "Fetch recent Gmail messages",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailListKey",
+        "data": {
+          "q": "is:unread newer_than:1d",
+          "maxResults": 10
+        }
+      }
+    },
+    {
+      "id": "fetchCalendarEvents",
+      "name": "Fetch today's calendar events",
+      "type": "action",
+      "action": {
+        "platform": "google-calendar",
+        "actionId": "conn_mod_def::GJ6RlnIYK20::YzuWSmaVQgurletRDNJavA",
+        "connectionKey": "$.input.calendarKey",
+        "data": {
+          "calendarId": "$.input.calendarId"
+        }
+      }
+    },
+    {
+      "id": "compileBriefData",
+      "name": "Compile all data sources for briefing",
+      "type": "code",
+      "code": {
+        "source": "const emailResp = $.steps.fetchEmails.response || {};\nconst emailData = emailResp.data || emailResp;\nconst emails = emailData.messages || emailData.items || [];\n\nconst calResp = $.steps.fetchCalendarEvents.response || {};\nconst calData = calResp.data || calResp;\nconst events = calData.items || calData.events || [];\n\nlet emailSummary = 'UNREAD EMAILS (' + emails.length + '):\\n';\nemails.slice(0, 10).forEach((e, i) => {\n  emailSummary += (i + 1) + '. ID: ' + (e.id || 'N/A') + ', Snippet: ' + (e.snippet || 'N/A').slice(0, 100) + '\\n';\n});\n\nlet calSummary = 'CALENDAR EVENTS (' + events.length + '):\\n';\nevents.slice(0, 10).forEach((ev, i) => {\n  const start = ev.start ? (ev.start.dateTime || ev.start.date || '') : '';\n  const end = ev.end ? (ev.end.dateTime || ev.end.date || '') : '';\n  calSummary += (i + 1) + '. ' + (ev.summary || 'No title') + ' | Start: ' + start + ' | End: ' + end + '\\n';\n});\n\nconst now = new Date();\nconst dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });\n\nreturn { emailSummary, calSummary, emailCount: emails.length, eventCount: events.length, dateStr };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude daily brief prompt",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.compileBriefData.output;\nconst userName = $.input.userName || 'there';\n\nlet prompt = 'You are a personal assistant creating a daily briefing. Be concise, helpful, and prioritize what matters most.\\n\\n';\nprompt += 'DATE: ' + data.dateStr + '\\n';\nprompt += 'USER: ' + userName + '\\n\\n';\nprompt += data.emailSummary + '\\n';\nprompt += data.calSummary + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Create a personalized morning brief\\n';\nprompt += '- Prioritize urgent emails and upcoming meetings\\n';\nprompt += '- Suggest time blocks for the day\\n';\nprompt += '- Flag any potential conflicts or urgent items\\n';\nprompt += '- Keep the tone warm but professional\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"greeting\": \"Good morning greeting\",\\n';\nprompt += '  \"urgentItems\": [\"urgent thing 1\"],\\n';\nprompt += '  \"emailHighlights\": [{ \"summary\": \"email desc\", \"priority\": \"high/medium/low\" }],\\n';\nprompt += '  \"schedule\": [{ \"time\": \"9:00 AM\", \"event\": \"meeting name\", \"notes\": \"preparation needed\" }],\\n';\nprompt += '  \"suggestedTimeBlocks\": [{ \"time\": \"10:00-11:00\", \"activity\": \"focus work\" }],\\n';\nprompt += '  \"dayOverview\": \"1-2 sentence day summary\",\\n';\nprompt += '  \"tip\": \"A helpful productivity tip\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3905-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiBrief",
+      "name": "Run Claude AI to generate daily brief",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3905-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip code fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiBrief.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { greeting: 'Good morning!', urgentItems: [], emailHighlights: [], schedule: [], suggestedTimeBlocks: [], dayOverview: raw, tip: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit daily brief",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst data = $.steps.compileBriefData.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Daily Brief \u2014 ' + data.dateStr, emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.greeting || 'Good morning!' } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*:email: Unread Emails:*\\n' + data.emailCount },\n  { type: 'mrkdwn', text: '*:calendar: Events Today:*\\n' + data.eventCount }\n] });\n\nif (ai.urgentItems && ai.urgentItems.length > 0) {\n  blocks.push({ type: 'divider' });\n  let urgentText = '*:rotating_light: Urgent:*\\n';\n  ai.urgentItems.forEach(item => { urgentText += '- ' + item + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: urgentText.slice(0, 1000) } });\n}\n\nif (ai.schedule && ai.schedule.length > 0) {\n  blocks.push({ type: 'divider' });\n  let schedText = '*:clock9: Schedule:*\\n';\n  ai.schedule.slice(0, 6).forEach(s => {\n    schedText += '*' + s.time + '* - ' + s.event;\n    if (s.notes) schedText += ' _(' + s.notes + ')_';\n    schedText += '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: schedText.slice(0, 1500) } });\n}\n\nif (ai.emailHighlights && ai.emailHighlights.length > 0) {\n  blocks.push({ type: 'divider' });\n  let emailText = '*:envelope: Email Highlights:*\\n';\n  ai.emailHighlights.slice(0, 5).forEach(e => {\n    const icon = e.priority === 'high' ? ':red_circle:' : ':large_blue_circle:';\n    emailText += icon + ' ' + e.summary + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: emailText.slice(0, 1500) } });\n}\n\nif (ai.suggestedTimeBlocks && ai.suggestedTimeBlocks.length > 0) {\n  blocks.push({ type: 'divider' });\n  let tbText = '*:hourglass: Suggested Focus Blocks:*\\n';\n  ai.suggestedTimeBlocks.slice(0, 4).forEach(tb => { tbText += tb.time + ' \u2014 ' + tb.activity + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: tbText.slice(0, 1000) } });\n}\n\nif (ai.dayOverview) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Overview:* ' + ai.dayOverview.slice(0, 500) } });\n}\n\nif (ai.tip) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':bulb: ' + ai.tip }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Gmail + Calendar + Claude AI + One CLI' }] });\n\nconst fallback = 'Daily Brief: ' + data.emailCount + ' emails, ' + data.eventCount + ' events - ' + (ai.dayOverview || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post daily brief to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

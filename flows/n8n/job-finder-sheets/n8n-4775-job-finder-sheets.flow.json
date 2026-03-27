@@ -1,0 +1,149 @@
+{
+  "key": "n8n-4775-job-finder-sheets",
+  "name": "Job listing finder with Exa search and Google Sheets",
+  "description": "Searches for job listings matching specified criteria using Exa, uses Claude AI to parse and score each listing against the user's preferences, and saves organized results to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4775,
+    "url": "https://n8n.io/workflows/4775",
+    "originalName": "LinkedIn job finder automation using Bright Data API & Google Sheets",
+    "totalViews": 24648,
+    "rank": 256,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for searching job listings",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving job results",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "jobQuery": {
+      "type": "string",
+      "required": true,
+      "description": "Job search query (e.g. 'Senior Software Engineer remote React')"
+    },
+    "location": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Preferred job location (e.g. 'San Francisco', 'Remote')"
+    },
+    "salaryRange": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Target salary range (e.g. '$150K-$200K')"
+    },
+    "mustHaveSkills": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Required skills (e.g. 'React, TypeScript, Node.js')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build Exa search query for job listings",
+      "type": "code",
+      "code": {
+        "source": "var query = $.input.jobQuery + ' job listing hiring';\nif ($.input.location) query += ' ' + $.input.location;\nreturn { query: query };"
+      }
+    },
+    {
+      "id": "searchJobs",
+      "name": "Search for job listings with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery.output.query",
+          "numResults": 10,
+          "type": "auto",
+          "useAutoprompt": true,
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "compileListings",
+      "name": "Compile job listing data",
+      "type": "code",
+      "code": {
+        "source": "var results = $.steps.searchJobs.response.results || [];\nvar listingsText = '';\nresults.forEach(function(r, i) {\n  listingsText += 'LISTING ' + (i + 1) + ':\\n';\n  listingsText += 'Title: ' + (r.title || '') + '\\n';\n  listingsText += 'URL: ' + (r.url || '') + '\\n';\n  listingsText += 'Date: ' + (r.publishedDate || '') + '\\n';\n  listingsText += 'Content:\\n' + (r.text || '').slice(0, 1500) + '\\n\\n';\n});\nreturn { listingsText: listingsText, listingCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for job listing analysis",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileListings.output;\nvar prompt = 'You are a job search analyst. Parse and score the following job listings against the candidate\\'s preferences.\\n\\n';\nprompt += 'SEARCH QUERY: ' + $.input.jobQuery + '\\n';\nif ($.input.location) prompt += 'PREFERRED LOCATION: ' + $.input.location + '\\n';\nif ($.input.salaryRange) prompt += 'TARGET SALARY: ' + $.input.salaryRange + '\\n';\nif ($.input.mustHaveSkills) prompt += 'REQUIRED SKILLS: ' + $.input.mustHaveSkills + '\\n';\nprompt += '\\nJOB LISTINGS (' + data.listingCount + '):\\n' + data.listingsText + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Parse each listing into structured data\\n';\nprompt += '- Score each job 1-100 on fit with candidate preferences\\n';\nprompt += '- Extract: company, title, location, salary (if mentioned), skills required\\n';\nprompt += '- Flag remote-friendly positions\\n';\nprompt += '- Rank from best to worst fit\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"jobs\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"rank\": 1,\\n';\nprompt += '      \"company\": \"...\",\\n';\nprompt += '      \"title\": \"...\",\\n';\nprompt += '      \"location\": \"...\",\\n';\nprompt += '      \"salary\": \"...\",\\n';\nprompt += '      \"remote\": true,\\n';\nprompt += '      \"skillsRequired\": [\"skill1\"],\\n';\nprompt += '      \"skillsMatch\": \"High|Medium|Low\",\\n';\nprompt += '      \"fitScore\": 85,\\n';\nprompt += '      \"url\": \"...\",\\n';\nprompt += '      \"highlights\": \"Why this job stands out\",\\n';\nprompt += '      \"concerns\": \"Any potential issues\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"totalJobs\": 0,\\n';\nprompt += '  \"topRecommendation\": \"Brief recommendation\"\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4775-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalyze",
+      "name": "Run Claude AI to analyze job listings",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4775-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalyze.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { jobs: [], totalJobs: 0, topRecommendation: raw }; }"
+      }
+    },
+    {
+      "id": "formatSheetData",
+      "name": "Format job listings for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar jobs = ai.jobs || [];\nvar date = new Date().toISOString().split('T')[0];\nvar sheetData = jobs.map(function(j) {\n  return {\n    'Rank': j.rank || '',\n    'Company': j.company || '',\n    'Job Title': j.title || '',\n    'Location': j.location || '',\n    'Salary': j.salary || '',\n    'Remote': j.remote ? 'Yes' : 'No',\n    'Skills Match': j.skillsMatch || '',\n    'Fit Score': j.fitScore || '',\n    'Skills Required': (j.skillsRequired || []).join(', '),\n    'Highlights': (j.highlights || '').slice(0, 200),\n    'Concerns': (j.concerns || '').slice(0, 200),\n    'URL': j.url || '',\n    'Date Found': date\n  };\n});\nreturn { sheetData: sheetData, jobCount: jobs.length, date: date };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save job listings to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "title": "Job Search - {{$.input.jobQuery}} - {{$.steps.formatSheetData.output.date}}",
+          "sheetTitle": "Job Listings",
+          "data": "$.steps.formatSheetData.output.sheetData"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,170 @@
+{
+  "key": "n8n-1980-llm-comparison",
+  "name": "AI Model Comparison \u2014 Exa Research + Claude Analysis to Slack",
+  "description": "Researches open-source and proprietary LLM options via Exa, uses Claude AI to compare models across key dimensions (performance, cost, speed, use cases), and posts a structured comparison to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1980,
+    "url": "https://n8n.io/workflows/1980",
+    "originalName": "Use an open-source LLM (via HuggingFace)",
+    "totalViews": 42866,
+    "rank": 150,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the comparison"
+    },
+    "useCase": {
+      "type": "string",
+      "required": true,
+      "description": "The use case to compare LLMs for (e.g. 'code generation', 'customer support chatbot', 'document summarization')"
+    },
+    "requirements": {
+      "type": "string",
+      "required": false,
+      "default": "Balance of quality, speed, and cost",
+      "description": "Specific requirements (e.g. 'must be open-source', 'low latency required', 'budget under $100/mo')"
+    }
+  },
+  "steps": [
+    {
+      "id": "researchModels",
+      "name": "Research LLM options via Exa",
+      "type": "parallel",
+      "parallel": {
+        "steps": [
+          {
+            "id": "searchBenchmarks",
+            "name": "Search for LLM benchmarks and comparisons",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "exa",
+              "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+              "connectionKey": "$.input.exaKey",
+              "data": {
+                "query": "{{$.input.useCase}} LLM benchmark comparison 2025 2026",
+                "numResults": 10,
+                "type": "auto",
+                "contents": {
+                  "text": {
+                    "maxCharacters": 500
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "searchOpenSource",
+            "name": "Search for open-source LLM options",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "exa",
+              "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+              "connectionKey": "$.input.exaKey",
+              "data": {
+                "query": "best open source LLM {{$.input.useCase}} huggingface llama mistral",
+                "numResults": 10,
+                "type": "auto",
+                "contents": {
+                  "text": {
+                    "maxCharacters": 500
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile research from both searches",
+      "type": "code",
+      "code": {
+        "source": "var benchResults = ($.steps.researchModels.response.searchBenchmarks && $.steps.researchModels.response.searchBenchmarks.response) ? $.steps.researchModels.response.searchBenchmarks.response.results || [] : [];\nvar osResults = ($.steps.researchModels.response.searchOpenSource && $.steps.researchModels.response.searchOpenSource.response) ? $.steps.researchModels.response.searchOpenSource.response.results || [] : [];\nvar benchContext = '';\nbenchResults.slice(0, 8).forEach(function(r, i) {\n  benchContext += (i + 1) + '. ' + (r.title || '') + '\\n   ' + r.url + '\\n   ' + (r.text || '').slice(0, 400) + '\\n\\n';\n});\nvar osContext = '';\nosResults.slice(0, 8).forEach(function(r, i) {\n  osContext += (i + 1) + '. ' + (r.title || '') + '\\n   ' + r.url + '\\n   ' + (r.text || '').slice(0, 400) + '\\n\\n';\n});\nvar totalSources = benchResults.length + osResults.length;\nreturn { benchContext: benchContext, osContext: osContext, totalSources: totalSources };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for model comparison",
+      "type": "code",
+      "code": {
+        "source": "var ctx = $.steps.compileResearch.output;\nvar prompt = 'You are an AI/ML expert. Compare LLM options for the following use case, using the research data provided.\\n\\nUSE CASE: ' + $.input.useCase + '\\nREQUIREMENTS: ' + ($.input.requirements || 'Balance of quality, speed, and cost') + '\\n\\nBENCHMARK & COMPARISON DATA:\\n' + ctx.benchContext + '\\nOPEN-SOURCE LLM DATA:\\n' + ctx.osContext + '\\n\\nCompare at least 5 models (mix of open-source and proprietary). For each model, evaluate:\\n- Performance quality for this use case\\n- Speed/latency\\n- Cost\\n- Ease of deployment\\n- Community/ecosystem\\n\\nReturn ONLY valid JSON:\\n{\\n  \"recommendation\": \"Top pick and why\",\\n  \"models\": [\\n    {\\n      \"name\": \"...\",\\n      \"type\": \"open-source|proprietary\",\\n      \"scores\": { \"quality\": 0, \"speed\": 0, \"cost\": 0, \"deployment\": 0 },\\n      \"pros\": [\"pro1\"],\\n      \"cons\": [\"con1\"],\\n      \"bestFor\": \"...\"\\n    }\\n  ],\\n  \"comparisonNotes\": \"...\"\\n}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/one-llm-comparison-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiCompare",
+      "name": "Run Claude AI for model comparison",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/one-llm-comparison-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse AI response and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiCompare.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit comparison message",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':robot_face: LLM Comparison: ' + $.input.useCase.slice(0, 80), emoji: true } });\nif (ai.recommendation) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':trophy: *Recommendation:* ' + ai.recommendation } });\n}\nblocks.push({ type: 'divider' });\nvar models = ai.models || [];\nmodels.forEach(function(m, i) {\n  var scores = m.scores || {};\n  var scoreBar = function(val) {\n    var filled = Math.round((val || 0) / 10);\n    var empty = 10 - filled;\n    var bar = '';\n    for (var j = 0; j < filled; j++) bar += '=';\n    for (var k = 0; k < empty; k++) bar += '-';\n    return '[' + bar + '] ' + (val || 0) + '/100';\n  };\n  var typeEmoji = m.type === 'open-source' ? ':unlock:' : ':lock:';\n  var modelText = typeEmoji + ' *' + (i + 1) + '. ' + m.name + '* (' + (m.type || 'unknown') + ')\\n';\n  modelText += '  Quality: ' + scoreBar(scores.quality) + '\\n';\n  modelText += '  Speed:   ' + scoreBar(scores.speed) + '\\n';\n  modelText += '  Cost:    ' + scoreBar(scores.cost) + '\\n';\n  modelText += '  Deploy:  ' + scoreBar(scores.deployment) + '\\n';\n  if (m.bestFor) modelText += '  _Best for: ' + m.bestFor + '_\\n';\n  if (m.pros && m.pros.length > 0) modelText += '  :thumbsup: ' + m.pros.join(', ') + '\\n';\n  if (m.cons && m.cons.length > 0) modelText += '  :thumbsdown: ' + m.cons.join(', ');\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: modelText } });\n});\nif (ai.comparisonNotes) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Notes:* ' + ai.comparisonNotes } });\n}\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':mag: ' + $.steps.compileResearch.output.totalSources + ' sources researched via Exa + Claude AI' }] });\nvar fallback = 'LLM Comparison for ' + $.input.useCase + ': ' + models.length + ' models compared';\nif (ai.text) fallback = ai.text.slice(0, 500);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post comparison to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

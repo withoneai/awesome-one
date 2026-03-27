@@ -1,0 +1,135 @@
+{
+  "key": "n8n-2397-it-ops-slackbot",
+  "name": "IT Ops Slack Bot \u2014 Exa Knowledge Base + Claude Answers",
+  "description": "Takes an IT question, searches a knowledge base using Exa for relevant documentation and solutions, uses Claude AI to synthesize an expert answer, and posts the response to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2397,
+    "url": "https://n8n.io/workflows/2397",
+    "originalName": "IT ops AI SlackBot workflow - chat with your knowledge base",
+    "totalViews": 40792,
+    "rank": 154,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for knowledge base search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "IT question to answer (e.g. 'How do I reset Active Directory passwords?')"
+    },
+    "knowledgeDomain": {
+      "type": "string",
+      "required": false,
+      "default": "IT operations, system administration, troubleshooting, networking, security",
+      "description": "Domain to focus the knowledge base search"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchKnowledgeBase",
+      "name": "Search knowledge base with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": true
+          }
+        }
+      }
+    },
+    {
+      "id": "parseSearchResults",
+      "name": "Parse Exa search results into context",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.searchKnowledgeBase.response || {};\nconst data = resp.data || resp;\nconst results = data.results || [];\n\nlet context = '';\nconst sources = [];\n\nresults.slice(0, 5).forEach((r, i) => {\n  const title = r.title || 'Untitled';\n  const url = r.url || '';\n  const text = (r.text || '').slice(0, 2000);\n  context += '=== SOURCE ' + (i + 1) + ' ===\\n';\n  context += 'Title: ' + title + '\\n';\n  context += 'URL: ' + url + '\\n';\n  context += 'Content: ' + text + '\\n\\n';\n  sources.push({ title, url });\n});\n\nreturn { context, sources, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for IT answer",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst domain = $.input.knowledgeDomain || 'IT operations';\nconst searchData = $.steps.parseSearchResults.output;\n\nlet prompt = 'You are a senior IT operations specialist with deep expertise in ' + domain + '. Answer the following IT question using the knowledge base sources provided.\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n\\n';\nprompt += 'KNOWLEDGE BASE SOURCES:\\n' + searchData.context + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Provide a clear, actionable answer\\n';\nprompt += '- Include step-by-step instructions where applicable\\n';\nprompt += '- Reference sources when citing specific information\\n';\nprompt += '- If the sources are insufficient, say so and provide general best practices\\n';\nprompt += '- Include any warnings or caveats for the recommended approach\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"Clear answer text with markdown formatting\",\\n';\nprompt += '  \"steps\": [\"Step 1 description\", \"Step 2 description\"],\\n';\nprompt += '  \"warnings\": [\"any important warnings\"],\\n';\nprompt += '  \"confidence\": \"high/medium/low\",\\n';\nprompt += '  \"category\": \"networking/security/hardware/software/other\",\\n';\nprompt += '  \"relatedTopics\": [\"related topic for further reading\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2397-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnswer",
+      "name": "Run Claude AI to generate IT answer",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2397-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip code fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnswer.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, steps: [], warnings: [], confidence: 'medium', category: 'other', relatedTopics: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit answer message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst sources = $.steps.parseSearchResults.output.sources;\nconst question = $.input.question;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'IT Support Answer', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Category:*\\n' + (ai.category || 'General') },\n  { type: 'mrkdwn', text: '*Confidence:*\\n' + (ai.confidence || 'N/A') }\n] });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No answer generated.').slice(0, 2500);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Answer:*\\n' + answerText } });\n\nif (ai.steps && ai.steps.length > 0) {\n  blocks.push({ type: 'divider' });\n  let stepsText = '*Steps:*\\n';\n  ai.steps.forEach((s, i) => { stepsText += (i + 1) + '. ' + s + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: stepsText.slice(0, 1800) } });\n}\n\nif (ai.warnings && ai.warnings.length > 0) {\n  let warnText = '*:warning: Warnings:*\\n';\n  ai.warnings.forEach(w => { warnText += '- ' + w + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: warnText.slice(0, 1000) } });\n}\n\nif (sources && sources.length > 0) {\n  blocks.push({ type: 'divider' });\n  let srcText = '*Sources:*\\n';\n  sources.slice(0, 3).forEach((s, i) => {\n    srcText += (i + 1) + '. <' + s.url + '|' + s.title + '>\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText.slice(0, 1000) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa Search + Claude AI + One CLI' }] });\n\nconst fallback = 'IT Answer [' + (ai.category || '') + ']: ' + (ai.answer || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post IT answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

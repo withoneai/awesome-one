@@ -1,0 +1,201 @@
+{
+  "key": "n8n-2613-search-console-to-sheets",
+  "name": "Export search console results to Google Sheets with AI analysis",
+  "description": "Scrapes a website with Firecrawl to identify SEO content, uses Claude AI to analyze search performance patterns and generate SEO recommendations, saves structured reports to Google Sheets, and notifies Slack with key findings.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2613,
+    "url": "https://n8n.io/workflows/2613",
+    "originalName": "Export search console results to Google Sheets",
+    "totalViews": 26364,
+    "rank": 240,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for website scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "googleSheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for SEO reports",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "websiteUrl": {
+      "type": "string",
+      "required": true,
+      "description": "Website domain to analyze (e.g. 'https://example.com')"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for SEO report delivery"
+    },
+    "focusKeywords": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Comma-separated target keywords to focus on"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeWebsite",
+      "name": "Scrape website for SEO analysis with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.websiteUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": false
+        }
+      }
+    },
+    {
+      "id": "extractContent",
+      "name": "Extract website content for SEO analysis",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.scrapeWebsite.response || {};\nconst data = response.data || response;\nconst markdown = (data.markdown || data.content || data.text || '').slice(0, 10000);\nconst title = data.title || data.metadata?.title || '';\nconst description = data.metadata?.description || '';\nconst url = $.input.websiteUrl;\n\nreturn { markdown: markdown, title: title, description: description, url: url, focusKeywords: $.input.focusKeywords || '' };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for SEO analysis",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.extractContent.output;\n\nlet prompt = 'You are an SEO analyst and search console expert. Analyze the following website content and provide a comprehensive SEO performance report.\\n\\n';\nprompt += 'WEBSITE: ' + data.url + '\\n';\nprompt += 'TITLE: ' + data.title + '\\n';\nprompt += 'META DESCRIPTION: ' + data.description + '\\n';\nif (data.focusKeywords) prompt += 'TARGET KEYWORDS: ' + data.focusKeywords + '\\n';\nprompt += '\\nCONTENT:\\n' + data.markdown + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Analyze page structure (H1, H2, H3 usage)\\n';\nprompt += '- Evaluate title tag and meta description effectiveness\\n';\nprompt += '- Identify target keywords and their density\\n';\nprompt += '- Assess content quality and relevance\\n';\nprompt += '- Provide estimated search rankings for key terms\\n';\nprompt += '- List actionable improvements\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"domain\": \"\",\\n';\nprompt += '  \"seoScore\": 0,\\n';\nprompt += '  \"titleAnalysis\": { \"title\": \"\", \"length\": 0, \"isOptimal\": true, \"suggestion\": \"\" },\\n';\nprompt += '  \"metaDescription\": { \"description\": \"\", \"length\": 0, \"isOptimal\": true, \"suggestion\": \"\" },\\n';\nprompt += '  \"headingStructure\": { \"h1Count\": 0, \"h2Count\": 0, \"h3Count\": 0, \"isProper\": true, \"issues\": [] },\\n';\nprompt += '  \"keywords\": [{ \"keyword\": \"\", \"density\": \"\", \"position\": \"title|h1|h2|body\", \"estimatedRanking\": \"\" }],\\n';\nprompt += '  \"contentQuality\": { \"wordCount\": 0, \"readability\": \"high|medium|low\", \"uniqueness\": \"high|medium|low\" },\\n';\nprompt += '  \"recommendations\": [{ \"priority\": \"high|medium|low\", \"area\": \"\", \"action\": \"\", \"impact\": \"\" }],\\n';\nprompt += '  \"summary\": \"2-3 sentence SEO summary\"\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2613-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude SEO analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2613-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { domain: $.input.websiteUrl, seoScore: 0, titleAnalysis: {}, metaDescription: {}, headingStructure: {}, keywords: [], contentQuality: {}, recommendations: [], summary: raw.slice(0, 300) }; }"
+      }
+    },
+    {
+      "id": "buildSheetData",
+      "name": "Build spreadsheet data for SEO report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\n\nconst overviewRows = [[\n  ai.domain || '',\n  String(ai.seoScore || 0),\n  ai.titleAnalysis?.title || '',\n  String(ai.titleAnalysis?.length || 0),\n  ai.metaDescription?.description || '',\n  String(ai.contentQuality?.wordCount || 0),\n  ai.contentQuality?.readability || '',\n  ai.summary || ''\n]];\n\nconst keywordRows = [];\n(ai.keywords || []).forEach(function(k) {\n  keywordRows.push([k.keyword || '', k.density || '', k.position || '', k.estimatedRanking || '']);\n});\n\nconst recRows = [];\n(ai.recommendations || []).forEach(function(r) {\n  recRows.push([r.priority || '', r.area || '', r.action || '', r.impact || '']);\n});\n\nreturn { overviewRows: overviewRows, keywordRows: keywordRows, recRows: recRows };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save SEO report to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.googleSheetsKey",
+        "data": {
+          "title": "SEO Analysis Report",
+          "sheets": [
+            {
+              "title": "Overview",
+              "headers": [
+                "Domain",
+                "SEO Score",
+                "Title",
+                "Title Length",
+                "Meta Description",
+                "Word Count",
+                "Readability",
+                "Summary"
+              ],
+              "rows": "$.steps.buildSheetData.output.overviewRows"
+            },
+            {
+              "title": "Keywords",
+              "headers": [
+                "Keyword",
+                "Density",
+                "Position",
+                "Est. Ranking"
+              ],
+              "rows": "$.steps.buildSheetData.output.keywordRows"
+            },
+            {
+              "title": "Recommendations",
+              "headers": [
+                "Priority",
+                "Area",
+                "Action",
+                "Impact"
+              ],
+              "rows": "$.steps.buildSheetData.output.recRows"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack SEO report notification",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'SEO Analysis Report', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Domain:* <' + (ai.domain || $.input.websiteUrl) + '|' + (ai.domain || $.input.websiteUrl) + '>' } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*SEO Score:*\\n' + (ai.seoScore || 'N/A') + '/100' },\n  { type: 'mrkdwn', text: '*Readability:*\\n' + (ai.contentQuality?.readability || 'N/A') }\n] });\nblocks.push({ type: 'divider' });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:*\\n' + (ai.summary || '').slice(0, 1500) } });\n\nconst recs = ai.recommendations || [];\nif (recs.length > 0) {\n  let recText = '*Top Recommendations:*\\n';\n  recs.slice(0, 5).forEach(function(r, i) {\n    let icon = ':white_circle:';\n    if (r.priority === 'high') icon = ':red_circle:';\n    else if (r.priority === 'medium') icon = ':large_yellow_circle:';\n    recText += icon + ' ' + (r.action || '') + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: recText.slice(0, 1800) } });\n}\n\nconst keywords = ai.keywords || [];\nif (keywords.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Top Keywords:* ' + keywords.slice(0, 5).map(function(k) { return k.keyword; }).join(', ') } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Full report in Google Sheets | Powered by Firecrawl + Claude AI' }] });\nconst fallbackText = 'SEO Report for ' + (ai.domain || $.input.websiteUrl) + ': Score ' + (ai.seoScore || '?') + '/100';\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post SEO report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,133 @@
+{
+  "key": "n8n-1951-scrape-summarize-webpages",
+  "name": "Scrape and summarize webpages with AI",
+  "description": "Scrapes a webpage using Firecrawl to extract its content, then uses Claude to generate a structured summary with key takeaways, and delivers the result to Slack with rich Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1951,
+    "url": "https://n8n.io/workflows/1951",
+    "originalName": "Scrape and summarize webpages with AI",
+    "totalViews": 380034,
+    "rank": 6,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for web scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting results",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "URL of the webpage to scrape and summarize"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the summary"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapePage",
+      "name": "Scrape the webpage with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.url",
+          "formats": [
+            {
+              "type": "markdown"
+            },
+            {
+              "type": "links"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "extractContent",
+      "name": "Extract and prepare content from scrape results",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.scrapePage.response.data || $.steps.scrapePage.response || {};\nconst markdown = data.markdown || data.content || '';\nconst links = data.links || [];\nconst metadata = data.metadata || {};\nconst title = metadata.title || data.title || $.input.url;\nconst description = metadata.description || '';\nconst wordCount = markdown.split(/\\s+/).length;\n\n// Truncate content to a reasonable size for the prompt\nconst content = markdown.slice(0, 12000);\n\nreturn { content, title, description, wordCount, linkCount: links.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI summarization prompt",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are a content analyst. Summarize the following webpage content into a structured, easy-to-read summary.\n\nPAGE TITLE: ${$.steps.extractContent.output.title}\nPAGE URL: ${$.input.url}\nWORD COUNT: ${$.steps.extractContent.output.wordCount}\nDESCRIPTION: ${$.steps.extractContent.output.description}\n\nPAGE CONTENT:\n${$.steps.extractContent.output.content}\n\nINSTRUCTIONS:\n- Create a comprehensive yet concise summary\n- Identify key takeaways and main arguments\n- Note any data points, statistics, or notable quotes\n- Use Slack mrkdwn formatting: *bold* (NOT **bold**), _italic_, > for quotes, numbered lists\n- Slack mrkdwn rules: No markdown tables. No # headings.\n\nReturn ONLY valid JSON:\n{\n  \"summary\": \"<2-4 paragraph summary using Slack mrkdwn>\",\n  \"keyTakeaways\": [\"<takeaway 1>\", \"<takeaway 2>\", \"<takeaway 3>\"],\n  \"mainTopics\": [\"<topic 1>\", \"<topic 2>\"],\n  \"notableQuotes\": [\"<quote if any>\"],\n  \"sentiment\": \"positive|neutral|negative|mixed\",\n  \"readingTimeMinutes\": <estimated reading time of original>\n}`;\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1951-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI summarization",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1951-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, keyTakeaways: [], mainTopics: [], notableQuotes: [], sentiment: 'neutral', readingTimeMinutes: 0 }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst title = $.steps.extractContent.output.title;\nconst url = $.input.url;\nconst wordCount = $.steps.extractContent.output.wordCount;\n\nconst sentimentEmoji = ai.sentiment === 'positive' ? ':slightly_smiling_face:' : ai.sentiment === 'negative' ? ':slightly_frowning_face:' : ai.sentiment === 'mixed' ? ':thinking_face:' : ':neutral_face:';\n\nconst blocks = [];\n\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Webpage Summary' } });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + title + '*\\n<' + url + '|View original>' } });\nblocks.push({ type: 'divider' });\n\nconst summaryText = (ai.summary || 'No summary generated.').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary*\\n' + summaryText } });\nblocks.push({ type: 'divider' });\n\nif (ai.keyTakeaways && ai.keyTakeaways.length > 0) {\n  let takeaways = '*Key Takeaways:*\\n';\n  ai.keyTakeaways.forEach((t, i) => { takeaways += (i+1) + '. ' + t + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: takeaways } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.notableQuotes && ai.notableQuotes.length > 0) {\n  let quotes = '*Notable Quotes:*\\n';\n  ai.notableQuotes.forEach(q => { quotes += '> ' + q + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: quotes } });\n  blocks.push({ type: 'divider' });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: sentimentEmoji + ' Sentiment: *' + (ai.sentiment || 'neutral') + '* | Words: *' + wordCount + '* | Est. reading time: *' + (ai.readingTimeMinutes || '?') + ' min*' }] });\n\nconst fallback = 'Summary of: ' + title + ' (' + url + ')';\n\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

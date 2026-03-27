@@ -1,0 +1,194 @@
+{
+  "key": "n8n-5657-website-seo-keyword-extractor",
+  "name": "Website Content Scraper and SEO Keyword Extractor",
+  "description": "Scrapes a website URL with Firecrawl, extracts structured content and SEO keywords using Claude AI, researches keyword competition via Exa, and logs all results to a Google Sheet.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5657,
+    "url": "https://n8n.io/workflows/5657",
+    "originalName": "Website content scraper & SEO keyword extractor with GPT-5-mini and Airtable",
+    "totalViews": 22907,
+    "rank": 268,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for web scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for keyword research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "targetUrl": {
+      "type": "string",
+      "required": true,
+      "description": "Website URL to scrape and analyze for SEO keywords"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID to store keyword data"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "SEO Keywords",
+      "description": "Sheet tab name"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for completion notification"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeWebsite",
+      "name": "Scrape website content with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.targetUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            },
+            {
+              "type": "links"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "buildKeywordPrompt",
+      "name": "Build Claude prompt for keyword extraction",
+      "type": "code",
+      "code": {
+        "source": "const md = ($.steps.scrapeWebsite.response.data || {}).markdown || '';\nconst url = $.input.targetUrl;\n\nconst prompt = 'You are an expert SEO analyst. Analyze this webpage content and extract all relevant SEO keywords.\\n\\nURL: ' + url + '\\n\\nCONTENT:\\n' + md.slice(0, 5000) + '\\n\\nExtract keywords and return ONLY valid JSON:\\n{\\n  \"pageTitle\": \"inferred page title\",\\n  \"metaDescription\": \"suggested meta description (under 160 chars)\",\\n  \"primaryKeyword\": \"main target keyword\",\\n  \"secondaryKeywords\": [\"kw1\", \"kw2\", \"kw3\"],\\n  \"longTailKeywords\": [\"long tail 1\", \"long tail 2\"],\\n  \"topicCluster\": \"main topic category\",\\n  \"contentType\": \"blog/product/landing/service/etc\",\\n  \"wordCount\": 0,\\n  \"readabilityScore\": \"easy/medium/hard\",\\n  \"keywordDensity\": [{ \"keyword\": \"word\", \"count\": 0, \"density\": \"0.0%\" }],\\n  \"missingKeywords\": [\"keywords the page should include but doesnt\"],\\n  \"recommendations\": [\"seo improvement suggestion 1\"]\\n}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5657-prompt.txt",
+        "content": "$.steps.buildKeywordPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExtract",
+      "name": "Extract keywords with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5657-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExtract.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { primaryKeyword: raw.slice(0, 100), secondaryKeywords: [], recommendations: [] }; }"
+      }
+    },
+    {
+      "id": "buildExaQuery",
+      "name": "Build Exa query for keyword competition research",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst query = (ai.primaryKeyword || '') + ' ' + (ai.secondaryKeywords || []).slice(0, 2).join(' ');\nreturn { query };"
+      }
+    },
+    {
+      "id": "researchCompetition",
+      "name": "Research keyword competition via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildExaQuery.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 200
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build rows for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst competitors = ($.steps.researchCompetition.response.results || []).map(r => r.url).join(', ');\nconst date = new Date().toISOString().split('T')[0];\n\nconst rows = [];\nrows.push([date, $.input.targetUrl, ai.primaryKeyword || '', 'primary', ai.topicCluster || '', ai.contentType || '', competitors]);\n(ai.secondaryKeywords || []).forEach(kw => {\n  rows.push([date, $.input.targetUrl, kw, 'secondary', ai.topicCluster || '', ai.contentType || '', '']);\n});\n(ai.longTailKeywords || []).forEach(kw => {\n  rows.push([date, $.input.targetUrl, kw, 'long-tail', ai.topicCluster || '', ai.contentType || '', '']);\n});\n\nreturn { rows, keywordCount: rows.length, summary: 'Extracted ' + rows.length + ' keywords from ' + $.input.targetUrl + '. Primary: ' + (ai.primaryKeyword || 'N/A') };"
+      }
+    },
+    {
+      "id": "writeToSheets",
+      "name": "Append keyword data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": "$.steps.buildSheetRows.output.rows"
+        }
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Notify Slack of extraction completion",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSheetRows.output.summary"
+        }
+      }
+    }
+  ]
+}

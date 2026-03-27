@@ -1,0 +1,131 @@
+{
+  "key": "n8n-196-website-security-audit",
+  "name": "AI-powered website security audit",
+  "description": "Scrapes a target website using Firecrawl, Claude AI analyzes security headers, SSL configuration, potential vulnerabilities, and common security issues, then emails the detailed security audit report via Gmail. Adapted from n8n's WebSecScan security auditor workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 196,
+    "url": "https://n8n.io/workflows/196",
+    "originalName": "WebSecScan: AI-powered website security auditor",
+    "totalViews": 31335,
+    "rank": 196,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for website scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending the audit report",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "targetUrl": {
+      "type": "string",
+      "required": true,
+      "description": "URL of the website to audit (e.g., https://example.com)"
+    },
+    "recipientEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to send the security audit report to"
+    },
+    "senderName": {
+      "type": "string",
+      "required": false,
+      "default": "Security Audit Bot",
+      "description": "Sender name for the audit email"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeTarget",
+      "name": "Scrape target website with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.targetUrl"
+        }
+      }
+    },
+    {
+      "id": "compileSiteData",
+      "name": "Compile scraped website data for analysis",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.scrapeTarget.response || {};\nconst content = (typeof response === 'string') ? response : JSON.stringify(response);\n\nreturn {\n  siteContent: content.slice(0, 20000),\n  url: $.input.targetUrl,\n  scrapedAt: new Date().toISOString()\n};"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for security analysis",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileSiteData.output;\nconst url = $.input.targetUrl;\n\nlet prompt = 'You are an expert web security auditor. Perform a comprehensive security analysis of the following website.\\n\\n';\nprompt += 'TARGET WEBSITE: ' + url + '\\n';\nprompt += 'SCAN DATE: ' + d.scrapedAt + '\\n\\n';\nprompt += 'SCRAPED WEBSITE DATA:\\n' + d.siteContent + '\\n\\n';\nprompt += 'SECURITY ANALYSIS REQUIREMENTS:\\n';\nprompt += '1. HTTP Security Headers: Check for Content-Security-Policy, X-Frame-Options, X-Content-Type-Options, Strict-Transport-Security, Referrer-Policy, Permissions-Policy\\n';\nprompt += '2. SSL/TLS: Evaluate HTTPS implementation\\n';\nprompt += '3. Input Validation: Look for forms without CSRF protection, potential XSS vectors\\n';\nprompt += '4. Information Disclosure: Server version headers, debug info, directory listing\\n';\nprompt += '5. Third-Party Dependencies: Identify external scripts, CDNs, known vulnerable libraries\\n';\nprompt += '6. Cookie Security: HttpOnly, Secure, SameSite flags\\n';\nprompt += '7. Content Security: Mixed content issues, inline scripts\\n\\n';\nprompt += 'SEVERITY LEVELS: critical, high, medium, low, informational\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"url\": \"' + url + '\",\\n';\nprompt += '  \"scanDate\": \"' + d.scrapedAt + '\",\\n';\nprompt += '  \"overallRisk\": \"critical|high|medium|low\",\\n';\nprompt += '  \"overallScore\": 0,\\n';\nprompt += '  \"findings\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"category\": \"Security Headers|SSL|Input Validation|Info Disclosure|Dependencies|Cookies|Content\",\\n';\nprompt += '      \"severity\": \"critical|high|medium|low|informational\",\\n';\nprompt += '      \"title\": \"finding title\",\\n';\nprompt += '      \"description\": \"detailed description\",\\n';\nprompt += '      \"recommendation\": \"how to fix\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"criticalCount\": 0,\\n';\nprompt += '  \"highCount\": 0,\\n';\nprompt += '  \"mediumCount\": 0,\\n';\nprompt += '  \"lowCount\": 0,\\n';\nprompt += '  \"executiveSummary\": \"brief overall assessment\",\\n';\nprompt += '  \"topRecommendations\": [\"rec 1\", \"rec 2\", \"rec 3\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-196-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAudit",
+      "name": "Run Claude AI security analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-196-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAudit.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { url: $.input.targetUrl, overallRisk: 'unknown', overallScore: 0, findings: [], executiveSummary: raw, topRecommendations: [] }; }"
+      }
+    },
+    {
+      "id": "buildEmailReport",
+      "name": "Build HTML email security audit report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst url = $.input.targetUrl;\n\nconst riskColors = { critical: '#DC2626', high: '#EA580C', medium: '#D97706', low: '#2563EB' };\nconst riskColor = riskColors[ai.overallRisk] || '#6B7280';\n\nlet html = '<div style=\"font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto;\">';\nhtml += '<div style=\"background: #1F2937; color: white; padding: 24px; border-radius: 8px 8px 0 0;\">';\nhtml += '<h1 style=\"margin:0;\">Website Security Audit Report</h1>';\nhtml += '<p style=\"margin:8px 0 0;\">' + url + '</p>';\nhtml += '<p style=\"margin:4px 0 0; opacity:0.8;\">Scan date: ' + (ai.scanDate || new Date().toISOString()) + '</p>';\nhtml += '</div>';\n\nhtml += '<div style=\"background: ' + riskColor + '; color: white; padding: 16px; text-align: center;\">';\nhtml += '<h2 style=\"margin:0;\">Overall Risk: ' + (ai.overallRisk || 'Unknown').toUpperCase() + ' | Score: ' + (ai.overallScore || 0) + '/100</h2>';\nhtml += '</div>';\n\nhtml += '<div style=\"padding: 24px; background: #F9FAFB;\">';\nhtml += '<h3>Executive Summary</h3>';\nhtml += '<p>' + (ai.executiveSummary || 'No summary available') + '</p>';\n\nhtml += '<h3>Findings Summary</h3>';\nhtml += '<p>Critical: ' + (ai.criticalCount || 0) + ' | High: ' + (ai.highCount || 0) + ' | Medium: ' + (ai.mediumCount || 0) + ' | Low: ' + (ai.lowCount || 0) + '</p>';\n\nconst findings = ai.findings || [];\nfindings.forEach((f, i) => {\n  const sevColor = riskColors[f.severity] || '#6B7280';\n  html += '<div style=\"border-left: 4px solid ' + sevColor + '; padding: 12px; margin: 12px 0; background: white;\">';\n  html += '<strong>[' + (f.severity || 'info').toUpperCase() + '] ' + (f.title || 'Finding ' + (i + 1)) + '</strong>';\n  html += '<p style=\"margin: 4px 0;\">' + (f.description || '') + '</p>';\n  html += '<p style=\"margin: 4px 0; color: #059669;\"><em>Recommendation: ' + (f.recommendation || 'N/A') + '</em></p>';\n  html += '</div>';\n});\n\nhtml += '<h3>Top Recommendations</h3><ol>';\n(ai.topRecommendations || []).forEach(r => {\n  html += '<li>' + r + '</li>';\n});\nhtml += '</ol>';\n\nhtml += '<hr><p style=\"color: #9CA3AF; font-size: 12px;\">Generated by One CLI | Firecrawl + Claude AI</p>';\nhtml += '</div></div>';\n\nconst subject = 'Security Audit Report: ' + url + ' [' + (ai.overallRisk || 'Unknown').toUpperCase() + ' Risk]';\nreturn { html, subject };"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send security audit report via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.recipientEmail",
+          "subject": "$.steps.buildEmailReport.output.subject",
+          "body": "$.steps.buildEmailReport.output.html",
+          "isHtml": true
+        }
+      }
+    }
+  ]
+}

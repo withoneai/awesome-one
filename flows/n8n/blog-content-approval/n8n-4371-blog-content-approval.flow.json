@@ -1,0 +1,180 @@
+{
+  "key": "n8n-4371-blog-content-approval",
+  "name": "Blog content creator with Sheets tracking and email approval",
+  "description": "Reads blog topic ideas from Google Sheets, uses Claude AI to research and write SEO-optimized blog posts, saves drafts back to Sheets, and sends an approval request email via Gmail.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4371,
+    "url": "https://n8n.io/workflows/4371",
+    "originalName": "Automate blog content creation with OpenAI, Google Sheets & email approval flow",
+    "totalViews": 24272,
+    "rank": 260,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for reading topics and saving drafts",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending approval emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for researching blog topics",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "approverEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email address of the person who approves blog posts"
+    },
+    "blogTopic": {
+      "type": "string",
+      "required": true,
+      "description": "Blog topic or title to write about (e.g. 'How to improve team productivity with AI')"
+    },
+    "targetKeyword": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Primary SEO keyword to target (optional)"
+    },
+    "wordCount": {
+      "type": "number",
+      "required": false,
+      "default": 1500,
+      "description": "Target word count for the blog post"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildResearchQuery",
+      "name": "Build research query from blog topic",
+      "type": "code",
+      "code": {
+        "source": "var query = $.input.blogTopic;\nif ($.input.targetKeyword) {\n  query = $.input.targetKeyword + ' ' + $.input.blogTopic;\n}\nreturn { query: query };"
+      }
+    },
+    {
+      "id": "researchTopic",
+      "name": "Research the blog topic with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildResearchQuery.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "useAutoprompt": true,
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile research from Exa results",
+      "type": "code",
+      "code": {
+        "source": "var results = $.steps.researchTopic.response.results || [];\nvar research = '';\nresults.forEach(function(r, i) {\n  research += 'SOURCE ' + (i + 1) + ': ' + (r.title || '') + '\\n';\n  research += 'URL: ' + (r.url || '') + '\\n';\n  research += (r.text || '').slice(0, 1500) + '\\n\\n';\n});\nreturn { research: research, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for blog post generation",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileResearch.output;\nvar prompt = 'You are a professional SEO content writer. Write a comprehensive, SEO-optimized blog post based on the research provided.\\n\\n';\nprompt += 'TOPIC: ' + $.input.blogTopic + '\\n';\nif ($.input.targetKeyword) {\n  prompt += 'TARGET KEYWORD: ' + $.input.targetKeyword + '\\n';\n}\nprompt += 'TARGET WORD COUNT: ' + ($.input.wordCount || 1500) + '\\n\\n';\nprompt += 'RESEARCH MATERIAL (' + data.sourceCount + ' sources):\\n' + data.research + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Write a complete blog post with compelling title, meta description, and structured content\\n';\nprompt += '- Include H2 and H3 headings for SEO\\n';\nprompt += '- Naturally incorporate the target keyword 3-5 times\\n';\nprompt += '- Include an introduction, 4-6 main sections, and a conclusion with CTA\\n';\nprompt += '- Write in an engaging, authoritative tone\\n';\nprompt += '- Add suggested internal/external links\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"...\",\\n';\nprompt += '  \"metaDescription\": \"Under 160 chars\",\\n';\nprompt += '  \"content\": \"Full blog post in markdown\",\\n';\nprompt += '  \"wordCount\": 0,\\n';\nprompt += '  \"seoScore\": \"1-10\",\\n';\nprompt += '  \"suggestedTags\": [\"tag1\"],\\n';\nprompt += '  \"summary\": \"2-sentence summary for approval email\"\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4371-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiWrite",
+      "name": "Run Claude AI to write the blog post",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4371-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiWrite.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: $.input.blogTopic, metaDescription: '', content: raw, wordCount: 0, seoScore: 'N/A', suggestedTags: [], summary: '' }; }"
+      }
+    },
+    {
+      "id": "formatSheetData",
+      "name": "Format blog post data for Sheets tracking",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar date = new Date().toISOString().split('T')[0];\nvar sheetData = [{\n  'Title': ai.title || '',\n  'Topic': $.input.blogTopic,\n  'Target Keyword': $.input.targetKeyword || '',\n  'Meta Description': (ai.metaDescription || '').slice(0, 160),\n  'Word Count': ai.wordCount || '',\n  'SEO Score': ai.seoScore || '',\n  'Tags': (ai.suggestedTags || []).join(', '),\n  'Status': 'Pending Approval',\n  'Content Preview': (ai.content || '').slice(0, 500),\n  'Date Created': date\n}];\nreturn { sheetData: sheetData, date: date };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save blog post tracking data to Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "title": "Blog Content Pipeline",
+          "sheetTitle": "Posts",
+          "data": "$.steps.formatSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "buildApprovalEmail",
+      "name": "Build approval email with blog draft",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar html = '<h2>Blog Post Ready for Approval</h2>';\nhtml += '<p><strong>Title:</strong> ' + (ai.title || '') + '</p>';\nhtml += '<p><strong>Topic:</strong> ' + $.input.blogTopic + '</p>';\nhtml += '<p><strong>SEO Score:</strong> ' + (ai.seoScore || 'N/A') + '/10</p>';\nhtml += '<p><strong>Word Count:</strong> ' + (ai.wordCount || 'N/A') + '</p>';\nhtml += '<hr>';\nhtml += '<h3>Summary</h3>';\nhtml += '<p>' + (ai.summary || ai.metaDescription || '') + '</p>';\nhtml += '<h3>Content Preview</h3>';\nvar preview = (ai.content || '').slice(0, 1500).replace(/\\n/g, '<br>');\nhtml += '<div>' + preview + '</div>';\nhtml += '<hr>';\nhtml += '<p><strong>Tags:</strong> ' + (ai.suggestedTags || []).join(', ') + '</p>';\nhtml += '<p><em>Reply to this email to approve or request changes.</em></p>';\nhtml += '<p><small>Generated with Exa Research + Claude AI via One CLI</small></p>';\nvar subject = 'Blog Approval: ' + (ai.title || $.input.blogTopic);\nreturn { subject: subject, htmlBody: html.slice(0, 1900) };"
+      }
+    },
+    {
+      "id": "sendApprovalEmail",
+      "name": "Send approval email via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.approverEmail",
+          "subject": "$.steps.buildApprovalEmail.output.subject",
+          "body": "$.steps.buildApprovalEmail.output.htmlBody",
+          "isHtml": true
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,184 @@
+{
+  "key": "n8n-2197-gmail-auto-labeler",
+  "name": "Auto-label incoming Gmail messages with AI",
+  "description": "Fetches recent Gmail messages, uses Claude AI to classify each email into categories (work, personal, newsletter, urgent, spam), then applies labels via Gmail API. Adapted from n8n's auto-label Gmail with AI nodes workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2197,
+    "url": "https://n8n.io/workflows/2197",
+    "originalName": "Auto-label incoming Gmail messages with AI nodes",
+    "totalViews": 30488,
+    "rank": 202,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for reading and labeling emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notification",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for labeling report"
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": false,
+      "default": "newer_than:1d is:unread",
+      "description": "Gmail search query to find emails to label"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 15,
+      "description": "Max number of emails to process"
+    },
+    "labels": {
+      "type": "string",
+      "required": false,
+      "default": "work, personal, newsletter, urgent, promotions, receipts",
+      "description": "Comma-separated list of label categories"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchEmails",
+      "name": "Fetch recent unlabeled emails",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "data": {},
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "maxResults": "$.input.maxEmails",
+          "q": "$.input.searchQuery"
+        }
+      }
+    },
+    {
+      "id": "extractIds",
+      "name": "Extract message IDs",
+      "type": "code",
+      "code": {
+        "source": "const messages = $.steps.fetchEmails.response.messages || [];\nreturn { messageIds: messages.map(m => m.id).filter(Boolean).slice(0, 15) };"
+      }
+    },
+    {
+      "id": "fetchDetails",
+      "name": "Fetch email details for each message",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractIds.output.messageIds",
+        "as": "msgId",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "getOne",
+            "name": "Get individual email details",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GJ3ocvMGOS8::D__3BgQSSzWtDUoOqLuX2A",
+              "connectionKey": "$.input.gmailKey",
+              "data": {},
+              "pathVars": {
+                "userId": "me",
+                "id": "$.loop.msgId"
+              },
+              "queryParams": {
+                "format": "metadata",
+                "metadataHeaders": "Subject,From,Date"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileEmails",
+      "name": "Compile email summaries for AI classification",
+      "type": "code",
+      "code": {
+        "source": "const ids = $.steps.extractIds.output.messageIds || [];\nconst iterations = $.steps.fetchDetails.response.iterations || [];\nlet emails = [];\nids.forEach((id, i) => {\n  let subject = 'Unknown';\n  let from = 'Unknown';\n  let snippet = '';\n  if (iterations[i] && iterations[i].getOne && iterations[i].getOne.response) {\n    const msg = iterations[i].getOne.response;\n    snippet = msg.snippet || '';\n    const headers = msg.payload && msg.payload.headers ? msg.payload.headers : [];\n    headers.forEach(h => {\n      if (h.name === 'Subject') subject = h.value || 'No Subject';\n      if (h.name === 'From') from = h.value || 'Unknown';\n    });\n  }\n  emails.push({ id: id, subject: subject, from: from, snippet: snippet.slice(0, 200) });\n});\nlet compiled = '';\nemails.forEach((e, i) => {\n  compiled += (i + 1) + '. ID: ' + e.id + '\\n';\n  compiled += '   Subject: ' + e.subject + '\\n';\n  compiled += '   From: ' + e.from + '\\n';\n  compiled += '   Snippet: ' + e.snippet + '\\n\\n';\n});\nreturn { compiled, emails, count: emails.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build classification prompt",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileEmails.output;\nconst labels = $.input.labels;\nlet prompt = 'You are an email classification assistant. Classify each email into exactly ONE of these categories: ' + labels + '.\\n\\n';\nprompt += 'EMAILS (' + d.count + '):\\n';\nprompt += d.compiled + '\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"classifications\": [\\n';\nprompt += '    { \"id\": \"email_id\", \"subject\": \"subject line\", \"label\": \"chosen_label\", \"confidence\": 0.95 }\\n';\nprompt += '  ],\\n';\nprompt += '  \"summary\": { \"total\": 0, \"byLabel\": { \"work\": 0, \"personal\": 0 } }\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2197-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiClassify",
+      "name": "Run Claude AI email classification",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2197-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiClassify.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { classifications: [], summary: { total: 0, byLabel: {} } }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit labeling report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst cls = ai.classifications || [];\nconst summary = ai.summary || {};\nconst byLabel = summary.byLabel || {};\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Gmail Auto-Label Report', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + cls.length + ' emails* classified' } });\n\nlet labelSummary = '';\nObject.keys(byLabel).forEach(label => {\n  labelSummary += '*' + label + ':* ' + byLabel[label] + '  ';\n});\nif (labelSummary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: labelSummary } });\n}\n\nconst topItems = cls.slice(0, 5);\ntopItems.forEach(c => {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':label: *' + (c.label || 'unknown') + '* \u2014 ' + (c.subject || 'No Subject').slice(0, 80) } });\n});\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Gmail API + Claude AI | One CLI' }] });\n\nconst fallback = 'Gmail Auto-Label: ' + cls.length + ' emails classified';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post labeling report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

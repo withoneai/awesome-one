@@ -1,0 +1,125 @@
+{
+  "key": "n8n-515-download-file-google-drive",
+  "name": "Download and Process a File from Google Drive",
+  "description": "Downloads a file from Google Drive by file ID, analyzes its content with Claude AI, and posts a structured summary to Slack. Useful for automated document review workflows.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 515,
+    "url": "https://n8n.io/workflows/515",
+    "originalName": "Download a file from Google Drive",
+    "totalViews": 22538,
+    "rank": 271,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "fileId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive file ID to download"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for file summary notification"
+    }
+  },
+  "steps": [
+    {
+      "id": "downloadFile",
+      "name": "Download file from Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {
+          "fileId": "$.input.fileId",
+          "operation": "get"
+        }
+      }
+    },
+    {
+      "id": "extractFileInfo",
+      "name": "Extract file metadata and content info",
+      "type": "code",
+      "code": {
+        "source": "const file = $.steps.downloadFile.response || {};\nconst name = file.name || file.title || 'Unknown';\nconst mimeType = file.mimeType || 'unknown';\nconst size = file.size || 0;\nconst modifiedTime = file.modifiedTime || file.modifiedDate || '';\nconst content = file.content || file.body || '';\n\nreturn {\n  name,\n  mimeType,\n  size,\n  modifiedTime,\n  contentPreview: typeof content === 'string' ? content.slice(0, 4000) : JSON.stringify(content).slice(0, 4000),\n  hasContent: content.length > 0\n};"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for file analysis",
+      "type": "code",
+      "code": {
+        "source": "const info = $.steps.extractFileInfo.output;\nconst prompt = 'You are a document analysis specialist. Analyze this file and provide a structured summary.\\n\\nFILE INFO:\\nName: ' + info.name + '\\nType: ' + info.mimeType + '\\nSize: ' + info.size + ' bytes\\nLast Modified: ' + info.modifiedTime + '\\n\\nCONTENT PREVIEW:\\n' + info.contentPreview + '\\n\\nReturn ONLY valid JSON:\\n{\\n  \"fileType\": \"document type\",\\n  \"summary\": \"2-3 sentence summary of file contents\",\\n  \"keyPoints\": [\"point 1\", \"point 2\"],\\n  \"topics\": [\"topic1\", \"topic2\"],\\n  \"actionItems\": [\"any action items found\"],\\n  \"wordCount\": 0,\\n  \"language\": \"detected language\"\\n}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-515-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Analyze file with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-515-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, keyPoints: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackMessage",
+      "name": "Build Slack notification with file summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst info = $.steps.extractFileInfo.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Google Drive File Summary', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*File:*\\n' + info.name },\n  { type: 'mrkdwn', text: '*Type:*\\n' + (ai.fileType || info.mimeType) }\n] });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:*\\n' + (ai.summary || 'No summary available') } });\nif (ai.keyPoints && ai.keyPoints.length > 0) {\n  let kpText = '*Key Points:*\\n';\n  ai.keyPoints.forEach(kp => { kpText += '- ' + kp + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kpText } });\n}\nif (ai.actionItems && ai.actionItems.length > 0) {\n  let aiText = '*Action Items:*\\n';\n  ai.actionItems.forEach(item => { aiText += '- ' + item + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: aiText } });\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'File: ' + info.name + ' | Modified: ' + info.modifiedTime }] });\nconst fallback = 'File summary: ' + info.name + ' - ' + (ai.summary || '').slice(0, 150);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post file summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackMessage.output.fallback",
+          "blocks": "$.steps.buildSlackMessage.output.blocks"
+        }
+      }
+    }
+  ]
+}

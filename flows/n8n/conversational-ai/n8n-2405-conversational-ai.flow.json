@@ -1,0 +1,135 @@
+{
+  "key": "n8n-2405-conversational-ai",
+  "name": "Conversational AI \u2014 Question + Exa Research + Claude Answer to Slack",
+  "description": "Takes a conversational question, enriches it with Exa web search for real-time context, uses Claude AI to generate a well-researched conversational response, and posts it to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2405,
+    "url": "https://n8n.io/workflows/2405",
+    "originalName": "AI voice chat using webhook, Memory Manager, OpenAI, Google Gemini & ElevenLabs",
+    "totalViews": 40171,
+    "rank": 156,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the response"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Conversational question or topic to discuss"
+    },
+    "conversationStyle": {
+      "type": "string",
+      "required": false,
+      "default": "friendly and informative",
+      "description": "Conversation style (e.g. casual, academic, witty)"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchContext",
+      "name": "Search for relevant context with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": true
+          }
+        }
+      }
+    },
+    {
+      "id": "parseSearchResults",
+      "name": "Parse Exa results into conversation context",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.searchContext.response || {};\nconst data = resp.data || resp;\nconst results = data.results || [];\n\nlet context = '';\nconst sources = [];\n\nresults.slice(0, 5).forEach((r, i) => {\n  const title = r.title || 'Untitled';\n  const url = r.url || '';\n  const text = (r.text || '').slice(0, 1500);\n  context += 'Source ' + (i + 1) + ': ' + title + '\\n' + text + '\\n\\n';\n  sources.push({ title, url });\n});\n\nreturn { context, sources, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude conversational prompt",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst style = $.input.conversationStyle || 'friendly and informative';\nconst searchData = $.steps.parseSearchResults.output;\n\nlet prompt = 'You are an engaging conversational AI with a ' + style + ' personality. Answer the question using the research context provided.\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n\\n';\nprompt += 'RESEARCH CONTEXT:\\n' + searchData.context + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Respond in a natural, conversational tone\\n';\nprompt += '- Include interesting facts and insights from the research\\n';\nprompt += '- Ask a follow-up question to keep the conversation going\\n';\nprompt += '- Keep the response engaging and easy to understand\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"response\": \"Your conversational response\",\\n';\nprompt += '  \"keyInsights\": [\"interesting fact 1\", \"interesting fact 2\"],\\n';\nprompt += '  \"followUpQuestion\": \"An engaging follow-up question\",\\n';\nprompt += '  \"topic\": \"Main topic category\",\\n';\nprompt += '  \"mood\": \"informative/playful/thoughtful/exciting\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2405-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiResponse",
+      "name": "Run Claude AI to generate conversational response",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2405-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip code fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiResponse.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { response: raw, keyInsights: [], followUpQuestion: '', topic: 'General', mood: 'informative' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit conversational message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst sources = $.steps.parseSearchResults.output.sources;\nconst question = $.input.question;\n\nconst moodEmoji = { informative: ':brain:', playful: ':tada:', thoughtful: ':thought_balloon:', exciting: ':zap:' };\nconst emoji = moodEmoji[ai.mood] || ':speech_balloon:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: emoji + ' Conversational AI', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*You asked:* ' + question } });\nblocks.push({ type: 'divider' });\n\nconst responseText = (ai.response || 'No response generated.').slice(0, 2500);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: responseText } });\n\nif (ai.keyInsights && ai.keyInsights.length > 0) {\n  blocks.push({ type: 'divider' });\n  let insightsText = '*:bulb: Key Insights:*\\n';\n  ai.keyInsights.slice(0, 4).forEach((ins, i) => { insightsText += (i + 1) + '. ' + ins + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: insightsText.slice(0, 1500) } });\n}\n\nif (ai.followUpQuestion) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*:thinking_face: Want to go deeper?*\\n' + ai.followUpQuestion } });\n}\n\nif (sources && sources.length > 0) {\n  let srcText = '';\n  sources.slice(0, 3).forEach(s => { srcText += '<' + s.url + '|' + s.title + '> '; });\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':link: ' + srcText.trim() }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa Search + Claude AI + One CLI' }] });\n\nconst fallback = (ai.response || '').slice(0, 150);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post conversational response to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

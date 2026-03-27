@@ -1,0 +1,166 @@
+{
+  "key": "n8n-2094-ai-api-data-fetcher",
+  "name": "AI-Powered API Data Fetcher and Analyzer",
+  "description": "Takes a natural language query, uses Claude AI to determine what data to fetch, researches relevant APIs via Exa, scrapes the best data source with Firecrawl, analyzes the results with AI, and posts a structured summary to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2094,
+    "url": "https://n8n.io/workflows/2094",
+    "originalName": "Allow your AI to call an API to fetch data",
+    "totalViews": 23187,
+    "rank": 267,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for API discovery",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for data scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "query": {
+      "type": "string",
+      "required": true,
+      "description": "Natural language query describing what data to fetch (e.g. 'Get the latest Bitcoin price and 24h change')"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post results"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildSearchQuery",
+      "name": "Build Exa query to find relevant data sources",
+      "type": "code",
+      "code": {
+        "source": "const query = $.input.query || '';\nconst searchQuery = query + ' API data real-time';\nreturn { searchQuery };"
+      }
+    },
+    {
+      "id": "findDataSources",
+      "name": "Search for relevant data sources via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildSearchQuery.output.searchQuery",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "pickBestSource",
+      "name": "Select the best data source URL to scrape",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.findDataSources.response.results || [];\nlet bestUrl = '';\nlet sourceInfo = [];\nresults.forEach((r, i) => {\n  sourceInfo.push({ rank: i + 1, title: r.title || '', url: r.url, snippet: (r.text || '').slice(0, 150) });\n  if (!bestUrl && r.url) bestUrl = r.url;\n});\nreturn { bestUrl, sourceInfo, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "scrapeSource",
+      "name": "Scrape the best data source with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.steps.pickBestSource.output.bestUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "buildAnalysisPrompt",
+      "name": "Build Claude prompt for data analysis",
+      "type": "code",
+      "code": {
+        "source": "const md = ($.steps.scrapeSource.response.data || {}).markdown || '';\nconst query = $.input.query;\nconst sources = $.steps.pickBestSource.output.sourceInfo || [];\nlet sourcesText = '';\nsources.forEach(s => { sourcesText += s.rank + '. ' + s.title + ' (' + s.url + ')\\n'; });\n\nconst prompt = 'You are a data extraction specialist. A user asked: \"' + query + '\"\\n\\nI found these data sources:\\n' + sourcesText + '\\n\\nScraped content from the best source:\\n' + md.slice(0, 4000) + '\\n\\nExtract the specific data the user asked for. Return ONLY valid JSON:\\n{\\n  \"query\": \"original query\",\\n  \"answer\": \"direct answer to the query\",\\n  \"dataPoints\": [{ \"label\": \"metric name\", \"value\": \"metric value\", \"unit\": \"if applicable\" }],\\n  \"source\": \"source URL\",\\n  \"confidence\": \"high/medium/low\",\\n  \"additionalContext\": \"any helpful extra info\",\\n  \"lastUpdated\": \"when the data was last updated if known\"\\n}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2094-prompt.txt",
+        "content": "$.steps.buildAnalysisPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Analyze data with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2094-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, dataPoints: [], confidence: 'low' }; }"
+      }
+    },
+    {
+      "id": "buildSlackMessage",
+      "name": "Build Slack message with extracted data",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'API Data Fetch Results', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Query:* ' + (ai.query || $.input.query) } });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Answer:*\\n' + (ai.answer || 'No answer generated') } });\n\nif (ai.dataPoints && ai.dataPoints.length > 0) {\n  let dpText = '*Data Points:*\\n';\n  ai.dataPoints.forEach(dp => {\n    dpText += '- *' + dp.label + ':* ' + dp.value + (dp.unit ? ' ' + dp.unit : '') + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: dpText } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Source: ' + (ai.source || 'N/A') + ' | Confidence: ' + (ai.confidence || 'N/A') }] });\n\nconst fallback = 'Data fetch: ' + (ai.answer || '').slice(0, 200);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post results to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackMessage.output.fallback",
+          "blocks": "$.steps.buildSlackMessage.output.blocks"
+        }
+      }
+    }
+  ]
+}

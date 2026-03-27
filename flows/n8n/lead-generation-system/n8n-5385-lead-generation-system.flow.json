@@ -1,0 +1,188 @@
+{
+  "key": "n8n-5385-lead-generation-system",
+  "name": "Lead generation system: find businesses, scrape emails, qualify leads",
+  "description": "Uses Exa to find businesses by type and location, Firecrawl to scrape their websites for contact information, Claude AI to extract and qualify leads with grades, and saves qualified leads to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5385,
+    "url": "https://n8n.io/workflows/5385",
+    "originalName": "Lead generation system: Google Maps to email scraper with Google Sheets export",
+    "totalViews": 105911,
+    "rank": 47,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for business search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for website scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "businessType": {
+      "type": "string",
+      "required": true,
+      "description": "Type of business to search for (e.g. 'dentists', 'restaurants', 'plumbers')"
+    },
+    "location": {
+      "type": "string",
+      "required": true,
+      "description": "City or area to search (e.g. 'Calgary, AB', 'Austin, TX')"
+    },
+    "maxResults": {
+      "type": "string",
+      "required": false,
+      "default": "10",
+      "description": "Maximum number of businesses to scrape (1-20)"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchBusinesses",
+      "name": "Find businesses via Exa search",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "{{$.input.businessType}} in {{$.input.location}} website contact email",
+          "numResults": 20,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 300
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "selectUrls",
+      "name": "Filter and deduplicate business URLs",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchBusinesses.response.results || [];\nconst maxResults = parseInt($.input.maxResults || '10', 10);\n\nconst seen = new Set();\nconst skipDomains = ['yelp.com', 'yellowpages.com', 'facebook.com', 'linkedin.com', 'instagram.com', 'twitter.com', 'maps.google.com', 'tripadvisor.com', 'bbb.org', 'mapquest.com', 'google.com'];\n\nconst businesses = results.filter(r => {\n  try {\n    const hostname = new URL(r.url).hostname.replace('www.', '');\n    if (seen.has(hostname)) return false;\n    if (skipDomains.some(d => hostname.includes(d))) return false;\n    seen.add(hostname);\n    return true;\n  } catch(e) { return false; }\n}).slice(0, maxResults);\n\nconst urls = businesses.map(b => b.url);\nconst businessInfo = businesses.map((b, i) => ({ index: i + 1, title: b.title || '', url: b.url, snippet: (b.text || '').slice(0, 200) }));\n\nreturn { urls, businessInfo, totalFound: results.length, selectedCount: urls.length };"
+      }
+    },
+    {
+      "id": "scrapeWebsites",
+      "name": "Scrape business websites for contact info",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.selectUrls.output.urls",
+        "as": "url",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapeSite",
+            "name": "Scrape business website",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.url",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileScrapedData",
+      "name": "Compile all scraped data for AI analysis",
+      "type": "code",
+      "code": {
+        "source": "const businessInfo = $.steps.selectUrls.output.businessInfo;\nconst iterations = $.steps.scrapeWebsites.response.iterations || [];\nconst urls = $.steps.selectUrls.output.urls;\n\nlet scrapedData = '';\niterations.forEach((iter, i) => {\n  const url = urls[i] || 'Unknown';\n  const info = businessInfo[i] || {};\n  const resp = (iter.scrapeSite && iter.scrapeSite.response && iter.scrapeSite.response.data) ? iter.scrapeSite.response.data : {};\n  const md = resp.markdown || '';\n\n  scrapedData += '=== BUSINESS ' + (i + 1) + ' ===\\n';\n  scrapedData += 'URL: ' + url + '\\n';\n  scrapedData += 'Title: ' + (info.title || '') + '\\n';\n  scrapedData += 'Search snippet: ' + (info.snippet || '') + '\\n';\n  scrapedData += 'Page content:\\n' + md.slice(0, 2500) + '\\n\\n';\n});\n\nreturn { scrapedData, scrapedCount: iterations.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for lead extraction and qualification",
+      "type": "code",
+      "code": {
+        "source": "const businessType = $.input.businessType;\nconst location = $.input.location;\nconst data = $.steps.compileScrapedData.output;\n\nlet prompt = 'You are a B2B lead generation specialist. Extract business contact information and qualify leads from the scraped website data below.\\n\\n';\nprompt += 'BUSINESS TYPE: ' + businessType + '\\n';\nprompt += 'LOCATION: ' + location + '\\n\\n';\nprompt += 'SCRAPED WEBSITE DATA:\\n\\n';\nprompt += data.scrapedData + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract ALL email addresses found on each page\\n';\nprompt += '- Filter out image file extensions (.png, .jpg, .gif, .jpeg, .webp, .svg) from email-like strings\\n';\nprompt += '- Classify each email: owner/decision-maker, general inquiry, or support\\n';\nprompt += '- Extract phone numbers, physical addresses, and contact names if visible\\n';\nprompt += '- Rate lead quality: A (decision-maker email found), B (general business email), C (no email, only phone/address)\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"leads\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"businessName\": \"name\",\\n';\nprompt += '      \"website\": \"URL\",\\n';\nprompt += '      \"emails\": [{ \"address\": \"email@example.com\", \"type\": \"owner/general/support\", \"confidence\": \"high/medium/low\" }],\\n';\nprompt += '      \"phone\": \"phone or null\",\\n';\nprompt += '      \"address\": \"physical address or null\",\\n';\nprompt += '      \"contactNames\": [\"name if found\"],\\n';\nprompt += '      \"leadGrade\": \"A/B/C\",\\n';\nprompt += '      \"notes\": \"brief context about the business\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"summary\": { \"total\": 0, \"withEmail\": 0, \"gradeA\": 0, \"gradeB\": 0, \"gradeC\": 0 }\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5385-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI to extract and qualify leads",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5385-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { leads: [], summary: { total: 0, withEmail: 0 }, text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetData",
+      "name": "Build Google Sheets data from leads",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst leads = ai.leads || [];\nconst date = new Date().toISOString().split('T')[0];\n\nconst sheetData = leads.map((lead, i) => {\n  const primaryEmail = (lead.emails && lead.emails.length) ? lead.emails[0].address : '';\n  const allEmails = (lead.emails || []).map(e => e.address).join(', ');\n  const emailTypes = (lead.emails || []).map(e => e.address + ' (' + e.type + ')').join(', ');\n\n  return {\n    '#': i + 1,\n    'Business Name': lead.businessName || '',\n    'Website': lead.website || '',\n    'Primary Email': primaryEmail,\n    'All Emails': allEmails,\n    'Email Details': emailTypes,\n    'Phone': lead.phone || '',\n    'Address': lead.address || '',\n    'Contact Names': (lead.contactNames || []).join(', '),\n    'Lead Grade': lead.leadGrade || 'C',\n    'Notes': lead.notes || '',\n    'Date Scraped': date\n  };\n});\n\nreturn { sheetData, leadCount: leads.length, summary: ai.summary || {} };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save leads to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "connectionKey": "$.input.sheetsKey",
+          "title": "Lead Gen - {{$.input.businessType}} in {{$.input.location}} - {{$.steps.buildSheetData.output.leadCount}} leads",
+          "sheetTitle": "Leads",
+          "data": "$.steps.buildSheetData.output.sheetData"
+        }
+      }
+    }
+  ]
+}

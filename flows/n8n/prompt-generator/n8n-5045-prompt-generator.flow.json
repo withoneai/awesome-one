@@ -1,0 +1,113 @@
+{
+  "key": "n8n-5045-prompt-generator",
+  "name": "AI prompt generator: create optimized prompts for any task",
+  "description": "Takes a rough task description, uses Claude AI to generate an optimized, structured prompt with clear instructions, examples, and output format. Posts the generated prompt to Slack with Block Kit formatting for easy copy-paste.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5045,
+    "url": "https://n8n.io/workflows/5045",
+    "originalName": "Ai prompt generator workflow",
+    "totalViews": 52115,
+    "rank": 117,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the generated prompt",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the prompt"
+    },
+    "taskDescription": {
+      "type": "string",
+      "required": true,
+      "description": "Rough description of the task you need a prompt for (e.g. 'Write product descriptions for an e-commerce site', 'Analyze customer reviews for sentiment')"
+    },
+    "targetModel": {
+      "type": "string",
+      "required": false,
+      "default": "Claude",
+      "description": "Target AI model: Claude, GPT-4, Gemini, general"
+    },
+    "outputFormat": {
+      "type": "string",
+      "required": false,
+      "default": "structured",
+      "description": "Desired output format: structured (JSON), narrative (text), code, mixed"
+    },
+    "additionalRequirements": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Additional requirements or constraints for the prompt (e.g. 'must be under 500 tokens', 'include few-shot examples')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildMetaPrompt",
+      "name": "Build meta-prompt for prompt generation",
+      "type": "code",
+      "code": {
+        "source": "const task = $.input.taskDescription;\nconst model = $.input.targetModel || 'Claude';\nconst format = $.input.outputFormat || 'structured';\nconst extra = $.input.additionalRequirements || '';\n\nlet prompt = 'You are a prompt engineering expert. Create an optimized, production-ready prompt for the following task.\\n\\n';\nprompt += 'TASK DESCRIPTION: ' + task + '\\n';\nprompt += 'TARGET MODEL: ' + model + '\\n';\nprompt += 'OUTPUT FORMAT: ' + format + '\\n';\nif (extra) prompt += 'ADDITIONAL REQUIREMENTS: ' + extra + '\\n';\nprompt += '\\nINSTRUCTIONS:\\n';\nprompt += '1. Create a clear, structured prompt with:\\n';\nprompt += '   - System role definition\\n';\nprompt += '   - Clear task instructions\\n';\nprompt += '   - Input/output format specification\\n';\nprompt += '   - 1-2 few-shot examples if helpful\\n';\nprompt += '   - Edge case handling\\n';\nprompt += '   - Quality constraints\\n';\nprompt += '2. Optimize for the target model\\n';\nprompt += '3. Suggest relevant follow-up questions to refine the task\\n';\nprompt += '4. Rate the prompt complexity\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"generatedPrompt\": \"the full optimized prompt text\",\\n';\nprompt += '  \"promptTitle\": \"short title for the prompt\",\\n';\nprompt += '  \"systemRole\": \"the system/role definition used\",\\n';\nprompt += '  \"techniques\": [\"chain-of-thought\", \"few-shot\"],\\n';\nprompt += '  \"estimatedTokens\": 500,\\n';\nprompt += '  \"complexity\": \"simple|moderate|complex\",\\n';\nprompt += '  \"refinementQuestions\": [\"question to improve the prompt\"],\\n';\nprompt += '  \"tips\": [\"model-specific tip 1\", \"tip 2\"],\\n';\nprompt += '  \"alternativeApproach\": \"brief description of an alternative prompting strategy\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5045-prompt.txt",
+        "content": "$.steps.buildMetaPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to generate the optimized prompt",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5045-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { generatedPrompt: raw, promptTitle: 'Generated Prompt', systemRole: '', techniques: [], estimatedTokens: 0, complexity: 'unknown', refinementQuestions: [], tips: [], alternativeApproach: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message with generated prompt",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst task = $.input.taskDescription;\nconst model = $.input.targetModel || 'Claude';\n\nconst complexEmoji = ai.complexity === 'simple' ? ':large_green_circle:' : ai.complexity === 'complex' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'AI Prompt Generator' } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Task:*\\n' + task.slice(0, 200) },\n  { type: 'mrkdwn', text: '*Target Model:*\\n' + model }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Complexity:*\\n' + complexEmoji + ' ' + (ai.complexity || 'unknown') },\n  { type: 'mrkdwn', text: '*Est. Tokens:*\\n~' + (ai.estimatedTokens || 'unknown') }\n] });\nblocks.push({ type: 'divider' });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*:page_facing_up: ' + (ai.promptTitle || 'Generated Prompt') + '*' } });\n\nconst promptText = (ai.generatedPrompt || 'No prompt generated.').slice(0, 2800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '```' + promptText + '```' } });\nblocks.push({ type: 'divider' });\n\nif (ai.techniques && ai.techniques.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Techniques Used:* ' + ai.techniques.join(', ') } });\n}\n\nif (ai.tips && ai.tips.length > 0) {\n  let tipText = '*Model-Specific Tips:*\\n';\n  ai.tips.forEach((t, i) => { tipText += (i + 1) + '. ' + t + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: tipText.slice(0, 1800) } });\n}\n\nif (ai.refinementQuestions && ai.refinementQuestions.length > 0) {\n  let qText = '*Refinement Questions:*\\n';\n  ai.refinementQuestions.forEach((q, i) => { qText += (i + 1) + '. ' + q + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: qText.slice(0, 1800) } });\n}\n\nif (ai.alternativeApproach) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Alternative Approach:* ' + ai.alternativeApproach.slice(0, 500) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI | Prompt Engineering Agent' }] });\n\nconst fallback = 'Generated prompt for: ' + task.slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post generated prompt to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

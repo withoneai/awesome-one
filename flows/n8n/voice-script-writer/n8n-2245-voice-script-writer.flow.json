@@ -1,0 +1,113 @@
+{
+  "key": "n8n-2245-voice-script-writer",
+  "name": "Voice Script Writer \u2014 Claude generates speech-optimized scripts to Slack",
+  "description": "Takes a topic or brief, uses Claude AI to write scripts optimized for text-to-speech delivery (natural pacing, pronunciation guides, SSML-friendly), and posts the finished script to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2245,
+    "url": "https://n8n.io/workflows/2245",
+    "originalName": "Generate Text-to-Speech Using Elevenlabs via API",
+    "totalViews": 40495,
+    "rank": 155,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the script"
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic or brief for the voice script (e.g. 'Product launch announcement for a new AI tool')"
+    },
+    "scriptType": {
+      "type": "string",
+      "required": false,
+      "default": "narration",
+      "description": "Script type: narration, podcast-intro, explainer, advertisement, announcement"
+    },
+    "duration": {
+      "type": "string",
+      "required": false,
+      "default": "60 seconds",
+      "description": "Target duration for the voice script (e.g. '30 seconds', '2 minutes')"
+    },
+    "voiceStyle": {
+      "type": "string",
+      "required": false,
+      "default": "warm and conversational",
+      "description": "Desired voice delivery style (e.g. energetic, calm, authoritative)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for voice script generation",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic;\nconst scriptType = $.input.scriptType || 'narration';\nconst duration = $.input.duration || '60 seconds';\nconst voiceStyle = $.input.voiceStyle || 'warm and conversational';\n\nlet prompt = 'You are an expert voice script writer specializing in text-to-speech content. Write a script optimized for spoken delivery.\\n\\n';\nprompt += 'TOPIC: ' + topic + '\\n';\nprompt += 'SCRIPT TYPE: ' + scriptType + '\\n';\nprompt += 'TARGET DURATION: ' + duration + '\\n';\nprompt += 'VOICE STYLE: ' + voiceStyle + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Write for the ear, not the eye \u2014 use short sentences and natural rhythm\\n';\nprompt += '- Include pause markers [PAUSE] where the speaker should breathe\\n';\nprompt += '- Avoid abbreviations, spell out numbers\\n';\nprompt += '- Use emphasis markers *word* for words to stress\\n';\nprompt += '- Include pronunciation guides for unusual words in (parentheses)\\n';\nprompt += '- Estimate word count and speaking time at ~150 words per minute\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"Script title\",\\n';\nprompt += '  \"script\": \"The full voice script with pause markers and emphasis\",\\n';\nprompt += '  \"wordCount\": 150,\\n';\nprompt += '  \"estimatedDuration\": \"60 seconds\",\\n';\nprompt += '  \"scriptType\": \"narration\",\\n';\nprompt += '  \"voiceDirection\": \"Notes for voice talent on delivery\",\\n';\nprompt += '  \"keyPhrases\": [\"important phrases to emphasize\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2245-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to write voice script",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2245-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip code fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'Voice Script', script: raw, wordCount: 0, estimatedDuration: 'unknown', scriptType: 'narration', voiceDirection: '', keyPhrases: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message with voice script",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Voice Script Ready', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + (ai.title || 'Voice Script') + '*' } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Type:*\\n' + (ai.scriptType || 'narration') },\n  { type: 'mrkdwn', text: '*Duration:*\\n' + (ai.estimatedDuration || 'N/A') }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Word Count:*\\n' + (ai.wordCount || 0) },\n  { type: 'mrkdwn', text: '*Key Phrases:*\\n' + (ai.keyPhrases || []).slice(0, 3).join(', ') }\n] });\nblocks.push({ type: 'divider' });\n\nif (ai.voiceDirection) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*:studio_microphone: Voice Direction:*\\n' + ai.voiceDirection.slice(0, 500) } });\n  blocks.push({ type: 'divider' });\n}\n\nconst scriptText = (ai.script || 'No script generated.').slice(0, 2800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Script:*\\n```' + scriptText + '```' } });\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI + One CLI | Optimized for TTS delivery' }] });\n\nconst fallback = 'Voice Script: ' + (ai.title || 'Script') + ' (' + (ai.estimatedDuration || '') + ') - ' + (ai.wordCount || 0) + ' words';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post voice script to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}
