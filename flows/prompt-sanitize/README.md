@@ -7,7 +7,7 @@ Inspired by [LLM Guard](https://github.com/protectai/llm-guard) by [Protect AI](
 ## Setup
 
 ```bash
-npm i -g @anthropic-ai/one
+npm i -g @withone/cli
 ```
 
 No platform connections required. This flow runs entirely locally using code steps.
