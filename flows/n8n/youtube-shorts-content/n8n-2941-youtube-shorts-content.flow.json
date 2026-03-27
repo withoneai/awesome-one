@@ -1,0 +1,188 @@
+{
+  "key": "n8n-2941-youtube-shorts-content",
+  "name": "Short-Form Video Content Generator",
+  "description": "Researches trending topics via Exa, uses Claude AI to generate engaging short-form video scripts with hooks and CTAs, and saves the content plan to Google Sheets with a summary posted to Slack. Adapted from n8n's YouTube Shorts automation tool.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2941,
+    "url": "https://n8n.io/workflows/2941",
+    "originalName": "YouTube shorts automation tool",
+    "totalViews": 20634,
+    "rank": 291,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for trending topic research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving content plan",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for the content plan"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for the summary"
+    },
+    "niche": {
+      "type": "string",
+      "required": true,
+      "description": "Content niche or topic area (e.g. 'tech tutorials', 'fitness tips', 'cooking hacks')"
+    },
+    "numberOfScripts": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Number of short-form video scripts to generate (default: 5)"
+    },
+    "targetPlatform": {
+      "type": "string",
+      "required": false,
+      "default": "YouTube Shorts",
+      "description": "Target platform: YouTube Shorts, TikTok, Instagram Reels"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build Exa search query for trending topics",
+      "type": "code",
+      "code": {
+        "source": "const niche = $.input.niche;\nconst query = 'trending viral short-form video ideas for ' + niche + ' 2024 2025';\nreturn { query };"
+      }
+    },
+    {
+      "id": "searchTrends",
+      "name": "Search trending topics via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery.output.query",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileTrends",
+      "name": "Compile trending topic research",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchTrends.response.results || [];\nlet compiled = '';\nresults.forEach((r, i) => {\n  compiled += (i + 1) + '. ' + (r.title || 'Untitled') + '\\n';\n  compiled += '   URL: ' + (r.url || '') + '\\n';\n  compiled += '   ' + (r.text || '').slice(0, 1000) + '\\n\\n';\n});\nreturn { compiled, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for video script generation",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileTrends.output;\nconst niche = $.input.niche;\nconst count = $.input.numberOfScripts || 5;\nconst platform = $.input.targetPlatform || 'YouTube Shorts';\n\nlet prompt = 'You are an expert short-form video content strategist. Create ' + count + ' high-performing video scripts for ' + platform + '.\\n\\n';\nprompt += 'NICHE: ' + niche + '\\n';\nprompt += 'TARGET PLATFORM: ' + platform + '\\n';\nprompt += 'SCRIPTS NEEDED: ' + count + '\\n\\n';\nprompt += 'TRENDING RESEARCH (' + d.sourceCount + ' sources):\\n';\nprompt += d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Each script should be 30-60 seconds when spoken\\n';\nprompt += '- Include a strong hook in the first 3 seconds\\n';\nprompt += '- Include visual direction notes\\n';\nprompt += '- End with a clear CTA\\n';\nprompt += '- Optimize for engagement (saves, shares, comments)\\n';\nprompt += '- Vary the content angles across scripts\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"scripts\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"title\": \"video title\",\\n';\nprompt += '      \"hook\": \"attention-grabbing first 3 seconds\",\\n';\nprompt += '      \"script\": \"full narration script\",\\n';\nprompt += '      \"visualNotes\": \"what to show on screen\",\\n';\nprompt += '      \"cta\": \"call to action\",\\n';\nprompt += '      \"hashtags\": [\"tag1\", \"tag2\"],\\n';\nprompt += '      \"estimatedDuration\": \"30s|45s|60s\",\\n';\nprompt += '      \"viralPotential\": \"high|medium|low\",\\n';\nprompt += '      \"contentAngle\": \"educational|entertaining|inspiring|controversial\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"contentStrategy\": \"overall strategy note for the batch\",\\n';\nprompt += '  \"postingSchedule\": \"recommended posting frequency and times\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2941-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI script generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2941-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { scripts: [], contentStrategy: raw, postingSchedule: '' }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Sheets rows from generated scripts",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = new Date().toISOString().slice(0, 10);\nconst rows = [];\nrows.push(['Date', 'Title', 'Hook', 'Script', 'Visual Notes', 'CTA', 'Hashtags', 'Duration', 'Viral Potential', 'Angle']);\n(ai.scripts || []).forEach(s => {\n  rows.push([today, s.title || '', s.hook || '', s.script || '', s.visualNotes || '', s.cta || '', (s.hashtags || []).join(', '), s.estimatedDuration || '', s.viralPotential || '', s.contentAngle || '']);\n});\nreturn { rows };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save scripts to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "Video Scripts",
+          "values": "$.steps.buildSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack summary of generated scripts",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst scripts = ai.scripts || [];\nconst platform = $.input.targetPlatform || 'YouTube Shorts';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: platform + ' Content Plan', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Niche:* ' + $.input.niche + ' | *Scripts Generated:* ' + scripts.length } });\nif (ai.contentStrategy) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Strategy:* ' + ai.contentStrategy.slice(0, 500) } });\n}\nblocks.push({ type: 'divider' });\n\nscripts.slice(0, 5).forEach((s, i) => {\n  const viralIcon = s.viralPotential === 'high' ? ':fire:' : s.viralPotential === 'medium' ? ':chart_with_upwards_trend:' : ':seedling:';\n  let text = viralIcon + ' *' + (i + 1) + '. ' + (s.title || 'Untitled') + '* (' + (s.estimatedDuration || '?') + ')\\n';\n  text += '_Hook:_ ' + (s.hook || '') + '\\n';\n  text += '_Angle:_ ' + (s.contentAngle || '') + ' | _CTA:_ ' + (s.cta || '') + '\\n';\n  if (s.hashtags && s.hashtags.length > 0) text += s.hashtags.map(h => '#' + h).join(' ') + '\\n';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 1800) } });\n});\n\nif (ai.postingSchedule) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Posting Schedule:* ' + ai.postingSchedule } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Scripts saved to Google Sheets | Powered by Exa + Claude AI' }] });\nconst fallback = platform + ' Plan: ' + scripts.length + ' scripts for ' + $.input.niche;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post content plan to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "key": "n8n-2722-email-summary-agent",
+  "name": "AI Email Summary Agent",
+  "description": "Fetches recent Gmail inbox emails, uses Claude AI to summarize all messages into a structured daily digest with categories, action items, and priority rankings, then posts the summary to Slack using Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2722,
+    "url": "https://n8n.io/workflows/2722",
+    "originalName": "Email summary agent",
+    "totalViews": 82595,
+    "rank": 67,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for reading emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the digest",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the email summary (e.g. '#daily-digest')"
+    },
+    "hoursBack": {
+      "type": "number",
+      "required": false,
+      "default": 24,
+      "description": "Number of hours to look back for emails (default: 24)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildDateFilter",
+      "name": "Calculate date filter for recent emails",
+      "type": "code",
+      "code": {
+        "source": "const hours = $.input.hoursBack || 24;\nconst since = new Date(Date.now() - hours * 60 * 60 * 1000);\nconst y = since.getFullYear();\nconst m = String(since.getMonth() + 1).padStart(2, '0');\nconst d = String(since.getDate()).padStart(2, '0');\nconst afterDate = y + '/' + m + '/' + d;\nconst today = new Date();\nconst todayStr = today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });\nreturn { afterDate, todayStr, hoursBack: hours };"
+      }
+    },
+    {
+      "id": "fetchEmails",
+      "name": "Fetch recent Gmail inbox emails",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "maxResults": 50,
+          "q": "in:inbox",
+          "labelIds": [
+            "INBOX"
+          ]
+        }
+      }
+    },
+    {
+      "id": "compileEmails",
+      "name": "Compile email data for summarization",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.fetchEmails.response;\nconst messages = response.messages || response.data || [];\nlet emailList = [];\n\nif (Array.isArray(messages)) {\n  messages.slice(0, 40).forEach((msg, i) => {\n    const headers = msg.payload && msg.payload.headers ? msg.payload.headers : [];\n    const getHeader = (name) => { const h = headers.find(h => h.name && h.name.toLowerCase() === name.toLowerCase()); return h ? h.value : ''; };\n    emailList.push({\n      index: i + 1,\n      from: getHeader('From') || msg.from || 'Unknown',\n      to: getHeader('To') || msg.to || '',\n      subject: getHeader('Subject') || msg.subject || '(no subject)',\n      snippet: msg.snippet || msg.body || '',\n      date: getHeader('Date') || msg.date || ''\n    });\n  });\n}\n\nlet compiled = '';\nemailList.forEach(e => {\n  compiled += 'Email #' + e.index + ':\\n';\n  compiled += '  From: ' + e.from + '\\n';\n  compiled += '  Subject: ' + e.subject + '\\n';\n  compiled += '  Date: ' + e.date + '\\n';\n  compiled += '  Preview: ' + e.snippet.slice(0, 300) + '\\n\\n';\n});\n\nreturn { compiled, emailCount: emailList.length, emails: emailList };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for email summarization",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.compileEmails.output;\nconst today = $.steps.buildDateFilter.output.todayStr;\n\nlet prompt = 'You are an executive email assistant. Analyze the following ' + data.emailCount + ' emails and create a comprehensive daily digest.\\n\\n';\nprompt += 'DATE: ' + today + '\\n';\nprompt += 'EMAILS:\\n' + data.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Group emails by category (e.g., Action Required, FYI/Updates, Meetings, External)\\n';\nprompt += '- For each email, extract: sender, subject, key point (1 sentence), and any action needed\\n';\nprompt += '- Identify the top 3-5 most important/urgent items\\n';\nprompt += '- List all action items with owners\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"digestDate\": \"' + today + '\",\\n';\nprompt += '  \"totalEmails\": ' + data.emailCount + ',\\n';\nprompt += '  \"topPriority\": [\"urgent item 1\", \"urgent item 2\"],\\n';\nprompt += '  \"categories\": [\\n';\nprompt += '    { \"name\": \"Action Required\", \"emails\": [{ \"from\": \"sender\", \"subject\": \"subj\", \"summary\": \"one line\", \"action\": \"what to do\" }] }\\n';\nprompt += '  ],\\n';\nprompt += '  \"actionItems\": [{ \"owner\": \"who\", \"task\": \"what\", \"urgency\": \"high/medium/low\" }],\\n';\nprompt += '  \"overallSummary\": \"2-3 sentence overview of today inbox\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2722-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI to summarize emails",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2722-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude AI output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { digestDate: '', totalEmails: 0, topPriority: [], categories: [], actionItems: [], overallSummary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit email digest",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst emailCount = $.steps.compileEmails.output.emailCount;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Daily Email Digest', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Date:*\\n' + (ai.digestDate || new Date().toLocaleDateString()) },\n  { type: 'mrkdwn', text: '*Emails Processed:*\\n' + emailCount }\n] });\nblocks.push({ type: 'divider' });\n\nconst summary = (ai.overallSummary || 'No summary available.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Overview:*\\n' + summary } });\n\nif (ai.topPriority && ai.topPriority.length > 0) {\n  blocks.push({ type: 'divider' });\n  let priorityText = '*Top Priority Items:*\\n';\n  ai.topPriority.forEach((item, i) => { priorityText += (i + 1) + '. ' + item + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: priorityText.slice(0, 1800) } });\n}\n\nif (ai.categories && ai.categories.length > 0) {\n  blocks.push({ type: 'divider' });\n  ai.categories.slice(0, 5).forEach(cat => {\n    let catText = '*' + cat.name + ':*\\n';\n    (cat.emails || []).slice(0, 5).forEach(e => {\n      catText += '  - *' + (e.subject || 'No subject') + '* from ' + (e.from || 'Unknown') + '\\n';\n      if (e.summary) catText += '    ' + e.summary + '\\n';\n      if (e.action) catText += '    _Action: ' + e.action + '_\\n';\n    });\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: catText.slice(0, 1800) } });\n  });\n}\n\nif (ai.actionItems && ai.actionItems.length > 0) {\n  blocks.push({ type: 'divider' });\n  let actionText = '*Action Items:*\\n';\n  ai.actionItems.slice(0, 10).forEach((a, i) => {\n    const urgency = a.urgency ? ' [' + a.urgency.toUpperCase() + ']' : '';\n    actionText += (i + 1) + '. ' + a.task + urgency + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: actionText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Gmail + Claude AI | One CLI' }] });\n\nconst fallbackText = 'Daily Email Digest: ' + emailCount + ' emails processed - ' + (ai.overallSummary || '').slice(0, 100);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post email digest to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

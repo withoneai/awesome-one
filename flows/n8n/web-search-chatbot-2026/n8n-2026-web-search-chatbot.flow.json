@@ -1,0 +1,127 @@
+{
+  "key": "n8n-2026-web-search-chatbot",
+  "name": "Web search chatbot with Exa and Claude",
+  "description": "Takes a user question, searches the web with Exa for current information, feeds the results to Claude AI for an informed answer, and posts the response to Slack with source links.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1959,
+    "url": "https://n8n.io/workflows/1959",
+    "originalName": "AI chatbot that can search the web",
+    "totalViews": 90524,
+    "rank": 58,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the answer"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The question or topic to search and answer"
+    }
+  },
+  "steps": [
+    {
+      "id": "exaSearch",
+      "name": "Search the web with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 6,
+          "type": "neural",
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "compileResults",
+      "name": "Compile search results for AI",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.exaSearch.response || {};\nconst data = response.data || response;\nconst results = data.results || [];\n\nlet context = '';\nconst sources = [];\n\nresults.slice(0, 8).forEach((r, i) => {\n  const title = r.title || 'Result ' + (i + 1);\n  const url = r.url || '';\n  const text = (r.text || r.snippet || '').slice(0, 1500);\n  context += 'SOURCE ' + (i + 1) + ': ' + title + '\\n';\n  context += 'URL: ' + url + '\\n';\n  context += text + '\\n\\n';\n  sources.push({ title, url });\n});\n\nreturn { context, sources, resultCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build chatbot prompt with web context",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst ctx = $.steps.compileResults.output;\n\nlet prompt = 'You are a helpful AI chatbot with web search capabilities. Answer the user\\'s question using the web search results provided. Be conversational, accurate, and cite your sources.\\n\\n';\nprompt += 'USER QUESTION: ' + question + '\\n\\n';\nprompt += 'WEB SEARCH RESULTS:\\n' + ctx.context + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Answer conversationally but accurately\\n';\nprompt += '- Reference source numbers when citing information\\n';\nprompt += '- If the search results don\\'t fully answer the question, acknowledge gaps\\n';\nprompt += '- Keep the answer concise (150-300 words)\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"your conversational answer with [Source N] citations\",\\n';\nprompt += '  \"confidence\": \"high|medium|low\",\\n';\nprompt += '  \"topSources\": [1, 2],\\n';\nprompt += '  \"relatedTopics\": [\"topic1\", \"topic2\"]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2026-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI chatbot response",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2026-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, confidence: 'unknown', topSources: [], relatedTopics: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit chatbot response",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst ctx = $.steps.compileResults.output;\nconst question = $.input.question;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Web Search Answer', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Q:* ' + question } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Sources Found:*\\n' + ctx.resultCount },\n  { type: 'mrkdwn', text: '*Confidence:*\\n' + (ai.confidence || 'N/A') }\n] });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No answer generated.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: answerText } });\n\nif (ctx.sources && ctx.sources.length > 0) {\n  blocks.push({ type: 'divider' });\n  let srcText = '*Sources:*\\n';\n  ctx.sources.slice(0, 5).forEach((s, i) => {\n    srcText += (i + 1) + '. <' + s.url + '|' + (s.title || 'Source') + '>\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText.slice(0, 1800) } });\n}\n\nif (ai.relatedTopics && ai.relatedTopics.length > 0) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: '*Related:* ' + ai.relatedTopics.slice(0, 4).join(' | ') }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa Search + Claude AI' }] });\n\nconst fallbackText = 'Web Search: ' + question.slice(0, 50) + ' - ' + (ai.answer || '').slice(0, 100);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post chatbot answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

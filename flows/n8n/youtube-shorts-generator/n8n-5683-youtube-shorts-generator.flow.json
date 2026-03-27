@@ -1,0 +1,195 @@
+{
+  "key": "n8n-5683-youtube-shorts-generator",
+  "name": "One-Click YouTube Shorts Script and Storyboard Generator",
+  "description": "Takes a topic, researches trending short-form content via Exa, generates a complete YouTube Shorts script with Claude AI including voiceover text, visual storyboard, and music cues, saves to Google Drive, and logs to Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5683,
+    "url": "https://n8n.io/workflows/5683",
+    "originalName": "One-click YouTube shorts generator with Leonardo AI, GPT and ElevenLabs",
+    "totalViews": 21727,
+    "rank": 284,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for trend research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for production log",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic or prompt for the YouTube Short (e.g. '5 AI tools you need to know')"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for production log"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Shorts Log",
+      "description": "Sheet tab name"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for notification"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildExaQuery",
+      "name": "Build Exa query for trending short-form content",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic || '';\nconst query = 'YouTube Shorts viral ' + topic + ' trending ideas hooks';\nreturn { query };"
+      }
+    },
+    {
+      "id": "researchTrends",
+      "name": "Research trending Shorts content via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildExaQuery.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 300
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for Shorts script generation",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic;\nconst results = $.steps.researchTrends.response.results || [];\nlet trends = '';\nresults.forEach((r, i) => { trends += (i + 1) + '. ' + (r.title || r.url) + ': ' + (r.text || '').slice(0, 150) + '\\n'; });\n\nconst prompt = 'You are an expert YouTube Shorts creator specializing in viral short-form content. Create a complete production package for a YouTube Short.\\n\\nTOPIC: ' + topic + '\\n\\nTRENDING RESEARCH:\\n' + trends + '\\n\\nReturn ONLY valid JSON:\\n{\\n  \"title\": \"video title (under 60 chars)\",\\n  \"hook\": \"attention-grabbing first 2 seconds text\",\\n  \"script\": {\\n    \"voiceover\": \"complete voiceover script (30-60 seconds max)\",\\n    \"onScreenText\": [{ \"timestamp\": \"0-3s\", \"text\": \"bold text overlay\" }]\\n  },\\n  \"storyboard\": [\\n    { \"scene\": 1, \"timestamp\": \"0-5s\", \"visualDescription\": \"what appears on screen\", \"imagePrompt\": \"AI image generation prompt for this scene\", \"transition\": \"cut/zoom/slide\" }\\n  ],\\n  \"musicCue\": { \"genre\": \"music genre\", \"mood\": \"upbeat/dramatic/chill\", \"tempo\": \"BPM suggestion\" },\\n  \"thumbnailPrompt\": \"AI image prompt for the thumbnail\",\\n  \"hashtags\": [\"#shorts\", \"#viral\"],\\n  \"description\": \"YouTube description text\",\\n  \"estimatedDuration\": \"30-60s\",\\n  \"viralScore\": \"1-10 estimated viral potential\"\\n}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5683-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Generate Shorts package with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5683-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'YouTube Short', script: { voiceover: raw }, storyboard: [] }; }"
+      }
+    },
+    {
+      "id": "buildDocument",
+      "name": "Build production document for Google Drive",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nlet doc = 'YOUTUBE SHORTS PRODUCTION PACKAGE\\n';\ndoc += '=================================\\n\\n';\ndoc += 'Title: ' + (ai.title || 'Untitled') + '\\n';\ndoc += 'Topic: ' + $.input.topic + '\\n';\ndoc += 'Duration: ' + (ai.estimatedDuration || '30-60s') + '\\n';\ndoc += 'Viral Score: ' + (ai.viralScore || 'N/A') + '/10\\n';\ndoc += 'Date: ' + new Date().toISOString().split('T')[0] + '\\n\\n';\ndoc += 'HOOK: ' + (ai.hook || '') + '\\n\\n';\ndoc += 'VOICEOVER SCRIPT\\n';\ndoc += '----------------\\n';\ndoc += ((ai.script && ai.script.voiceover) || '') + '\\n\\n';\nif (ai.script && ai.script.onScreenText) {\n  doc += 'ON-SCREEN TEXT\\n';\n  ai.script.onScreenText.forEach(t => { doc += '[' + t.timestamp + '] ' + t.text + '\\n'; });\n  doc += '\\n';\n}\ndoc += 'STORYBOARD\\n';\ndoc += '----------\\n';\nif (ai.storyboard) { ai.storyboard.forEach(s => { doc += 'Scene ' + s.scene + ' [' + s.timestamp + ']: ' + s.visualDescription + '\\n  Image Prompt: ' + (s.imagePrompt || '') + '\\n  Transition: ' + (s.transition || '') + '\\n\\n'; }); }\nif (ai.musicCue) { doc += 'MUSIC: ' + ai.musicCue.genre + ' / ' + ai.musicCue.mood + ' / ' + (ai.musicCue.tempo || '') + '\\n\\n'; }\ndoc += 'THUMBNAIL PROMPT: ' + (ai.thumbnailPrompt || '') + '\\n';\ndoc += 'HASHTAGS: ' + (ai.hashtags || []).join(' ') + '\\n';\ndoc += 'DESCRIPTION: ' + (ai.description || '') + '\\n';\nreturn { doc, title: (ai.title || 'YT Short') + ' - Production Package' };"
+      }
+    },
+    {
+      "id": "saveToDrive",
+      "name": "Save production package to Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {
+          "name": "$.steps.buildDocument.output.title",
+          "content": "$.steps.buildDocument.output.doc",
+          "mimeType": "text/plain"
+        }
+      }
+    },
+    {
+      "id": "logToSheets",
+      "name": "Log production to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": [
+            [
+              "$.steps.parseAI.output.title",
+              "$.input.topic",
+              "$.steps.parseAI.output.estimatedDuration",
+              "$.steps.parseAI.output.viralScore",
+              "Draft"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Notify Slack of Shorts production completion",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "YouTube Short ready: $.steps.parseAI.output.title | Viral score: $.steps.parseAI.output.viralScore/10"
+        }
+      }
+    }
+  ]
+}

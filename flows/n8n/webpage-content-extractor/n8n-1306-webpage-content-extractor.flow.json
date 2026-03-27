@@ -1,0 +1,173 @@
+{
+  "key": "n8n-1306-webpage-content-extractor",
+  "name": "Webpage Content Extractor & Analyzer",
+  "description": "Scrapes a webpage via Firecrawl, uses Claude AI to extract structured content and key information, and saves the results to Google Sheets with a summary posted to Slack. Adapted from n8n's static HTML page serving workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1306,
+    "url": "https://n8n.io/workflows/1306",
+    "originalName": "Serve a static HTML page when a link is accessed",
+    "totalViews": 20559,
+    "rank": 292,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for web scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving extracted content",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "URL of the webpage to extract content from"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for storing extracted data"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for the summary"
+    },
+    "extractionFocus": {
+      "type": "string",
+      "required": false,
+      "default": "Extract all key information, headings, data points, and contact details",
+      "description": "What to focus on extracting from the page"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapePage",
+      "name": "Scrape the webpage with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.url",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "prepareContent",
+      "name": "Prepare scraped content for analysis",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.scrapePage.response.data || $.steps.scrapePage.response || {};\nconst markdown = data.markdown || '';\nconst metadata = data.metadata || {};\nreturn { markdown: markdown.slice(0, 25000), title: metadata.title || '', description: metadata.description || '', charCount: markdown.length, url: $.input.url };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for content extraction",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.prepareContent.output;\nconst focus = $.input.extractionFocus || 'Extract all key information';\n\nlet prompt = 'You are a web content extraction specialist. Analyze the following webpage content and extract structured information.\\n\\n';\nprompt += 'URL: ' + d.url + '\\n';\nprompt += 'PAGE TITLE: ' + d.title + '\\n';\nprompt += 'CONTENT LENGTH: ' + d.charCount + ' characters\\n';\nprompt += 'EXTRACTION FOCUS: ' + focus + '\\n\\n';\nprompt += 'PAGE CONTENT:\\n' + d.markdown + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract and organize the key content into structured categories\\n';\nprompt += '- Identify main headings and their content\\n';\nprompt += '- Extract any data tables, lists, or structured data\\n';\nprompt += '- Find contact information, links, dates, prices if present\\n';\nprompt += '- Summarize the page purpose and main message\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"pageTitle\": \"title\",\\n';\nprompt += '  \"pageType\": \"blog|product|landing|documentation|news|other\",\\n';\nprompt += '  \"summary\": \"2-3 sentence summary of the page\",\\n';\nprompt += '  \"mainSections\": [{ \"heading\": \"section heading\", \"content\": \"key content from this section\" }],\\n';\nprompt += '  \"extractedData\": [{ \"category\": \"prices|contacts|dates|links|other\", \"items\": [\"item1\"] }],\\n';\nprompt += '  \"keyFacts\": [\"important fact 1\", \"important fact 2\"],\\n';\nprompt += '  \"metadata\": { \"author\": \"\", \"publishDate\": \"\", \"language\": \"\", \"wordCount\": 0 }\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1306-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExtraction",
+      "name": "Run Claude AI content extraction",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1306-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExtraction.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { pageTitle: '', pageType: 'other', summary: raw, mainSections: [], extractedData: [], keyFacts: [], metadata: {} }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Sheets rows from extracted data",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = new Date().toISOString().slice(0, 10);\nconst rows = [];\nrows.push(['Date', 'URL', 'Page Title', 'Page Type', 'Section', 'Content', 'Key Facts']);\n\nconst factsStr = (ai.keyFacts || []).join('; ');\n(ai.mainSections || []).forEach(s => {\n  rows.push([today, $.input.url, ai.pageTitle || '', ai.pageType || '', s.heading || '', (s.content || '').slice(0, 1500), '']);\n});\nif (rows.length === 1) {\n  rows.push([today, $.input.url, ai.pageTitle || '', ai.pageType || '', 'Summary', ai.summary || '', factsStr]);\n} else {\n  rows[1][6] = factsStr;\n}\n\n(ai.extractedData || []).forEach(d => {\n  rows.push([today, $.input.url, '', '', 'Data: ' + (d.category || ''), (d.items || []).join(', '), '']);\n});\n\nreturn { rows, sectionCount: (ai.mainSections || []).length };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save extracted content to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "Extracted Content",
+          "values": "$.steps.buildSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst d = $.steps.prepareContent.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Webpage Content Extracted', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Page:* <' + d.url + '|' + (ai.pageTitle || d.title || 'View Page') + '>\\n*Type:* ' + (ai.pageType || 'unknown') + ' | *Sections:* ' + (ai.mainSections || []).length } });\nblocks.push({ type: 'divider' });\n\nif (ai.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:* ' + ai.summary.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.keyFacts && ai.keyFacts.length > 0) {\n  let factText = '*Key Facts:*\\n';\n  ai.keyFacts.slice(0, 8).forEach((f, i) => { factText += (i + 1) + '. ' + f + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: factText.slice(0, 1800) } });\n}\n\n(ai.mainSections || []).slice(0, 4).forEach(s => {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + s.heading + '*\\n' + (s.content || '').slice(0, 400) } });\n});\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Data saved to Google Sheets | Powered by Firecrawl + Claude AI' }] });\nconst fallback = 'Extracted: ' + (ai.pageTitle || d.url) + ' - ' + (ai.summary || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post extraction summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

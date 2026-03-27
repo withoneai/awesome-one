@@ -1,0 +1,176 @@
+{
+  "key": "n8n-2753-rag-chatbot-company",
+  "name": "RAG chatbot for company documents using Google Drive and Gemini",
+  "description": "A RAG-style chatbot that answers employee questions using company documents stored in Google Drive. Searches Drive for relevant files, exports their content as plain text, and uses Claude to synthesize an accurate answer grounded in the document content. Results are posted to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2753,
+    "url": "https://n8n.io/workflows/2753",
+    "originalName": "RAG chatbot for company documents using Google Drive and Gemini",
+    "totalViews": 284330,
+    "rank": 10,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "googleDriveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting results",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The employee's question about company documents"
+    },
+    "folderId": {
+      "type": "string",
+      "required": false,
+      "description": "Google Drive folder ID to search within (optional \u2014 searches all files if omitted)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildSearchQuery",
+      "name": "Build Google Drive search query from the question",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\n// Extract key terms for Drive search \u2014 remove common stop words\nconst stopWords = ['what','is','the','a','an','how','does','do','can','where','when','which','who','why','are','was','were','been','being','have','has','had','will','would','should','could','may','might','shall','about','into','through','during','before','after','above','below','from','with','this','that','these','those','for','and','but','or'];\nconst keywords = question.split(/\\s+/).filter(w => w.length > 2 && !stopWords.includes(w.toLowerCase())).slice(0, 5).join(' ');\n\nlet q = \"trashed=false and mimeType != 'application/vnd.google-apps.folder'\";\nif (keywords) q += \" and fullText contains '\" + keywords.replace(/'/g, '') + \"'\";\nif ($.input.folderId) q += \" and '\" + $.input.folderId + \"' in parents\";\n\nreturn { searchQuery: q, keywords };"
+      }
+    },
+    {
+      "id": "searchFiles",
+      "name": "Search Google Drive for relevant documents",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.googleDriveKey",
+        "data": {
+          "q": "$.steps.buildSearchQuery.output.searchQuery",
+          "pageSize": 10,
+          "orderBy": "modifiedTime desc"
+        }
+      }
+    },
+    {
+      "id": "selectFiles",
+      "name": "Select top files to fetch content from",
+      "type": "code",
+      "code": {
+        "source": "const files = ($.steps.searchFiles.response.files || []).slice(0, 5);\nconst exportable = files.map(f => ({\n  id: f.id,\n  name: f.name,\n  mimeType: f.mimeType,\n  modifiedTime: f.modifiedTime,\n  isGoogleDoc: (f.mimeType || '').startsWith('application/vnd.google-apps.')\n}));\n\nreturn { files: exportable, fileCount: exportable.length };"
+      }
+    },
+    {
+      "id": "fetchContent",
+      "name": "Export each Google Doc as plain text",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.selectFiles.output.files",
+        "as": "file",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "exportFile",
+            "name": "Export file content as text",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "google-drive",
+              "actionId": "conn_mod_def::GJ6RziZnVhE::KyuPyhkzQ1K3CQxYqa8IGA",
+              "connectionKey": "$.input.googleDriveKey",
+              "data": {
+                "fileId": "$.loop.file.id",
+                "mimeType": "text/plain"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileDocuments",
+      "name": "Compile document content for AI analysis",
+      "type": "code",
+      "code": {
+        "source": "const files = $.steps.selectFiles.output.files || [];\nconst iterations = $.steps.fetchContent.response.iterations || [];\n\nlet docsText = '';\nfiles.forEach((f, i) => {\n  const iter = iterations[i] || {};\n  const exportResp = iter.exportFile || {};\n  // The export endpoint returns raw text, not JSON\n  let content = '';\n  if (exportResp.response) {\n    content = typeof exportResp.response === 'string' ? exportResp.response : JSON.stringify(exportResp.response);\n  }\n  content = content.slice(0, 4000);\n  \n  docsText += '--- DOCUMENT ' + (i+1) + ' ---\\n';\n  docsText += 'Title: ' + f.name + '\\n';\n  docsText += 'Modified: ' + (f.modifiedTime || 'Unknown') + '\\n';\n  docsText += 'Content:\\n' + (content || '(No content extracted)') + '\\n\\n';\n});\n\nreturn { docsText, docCount: files.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build RAG prompt with document context",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are a helpful company knowledge assistant. Answer the employee's question ONLY based on the company documents provided below. If the documents don't contain enough information to answer, say so clearly.\n\nEMPLOYEE QUESTION: ${$.input.question}\n\nCOMPANY DOCUMENTS (${$.steps.compileDocuments.output.docCount} found):\n${$.steps.compileDocuments.output.docsText}\n\nINSTRUCTIONS:\n- Answer based strictly on the document content\n- Reference which document(s) you used by number, e.g. [Doc 1]\n- If multiple documents provide relevant info, synthesize them\n- If the documents don't address the question, say \"I couldn't find information about this in the available documents\" and suggest what to search for\n- Be concise but thorough\n- Use Slack mrkdwn formatting: *bold* (NOT **bold**), _italic_, > for quotes. No markdown tables. No # headings.\n\nReturn ONLY valid JSON:\n{\n  \"answer\": \"<answer grounded in document content, using Slack mrkdwn>\",\n  \"documentsUsed\": [<document numbers used>],\n  \"confidence\": \"high|medium|low\",\n  \"suggestedFollowUp\": \"<optional follow-up question>\"\n}`;\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2753-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis on documents",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2753-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, documentsUsed: [], confidence: 'medium', suggestedFollowUp: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst question = $.input.question;\nconst files = $.steps.selectFiles.output.files || [];\nconst docCount = $.steps.compileDocuments.output.docCount;\n\nconst confidenceEmoji = ai.confidence === 'high' ? ':large_green_circle:' : ai.confidence === 'low' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\n\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Company Knowledge Answer' } });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No answer generated.').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: answerText } });\nblocks.push({ type: 'divider' });\n\n// Show which documents were referenced\nconst usedDocs = (ai.documentsUsed || []);\nif (usedDocs.length > 0 && files.length > 0) {\n  let docList = '*Documents Referenced:*\\n';\n  usedDocs.forEach(num => {\n    const f = files[num - 1];\n    if (f) docList += ':page_facing_up: ' + f.name + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: docList } });\n}\n\nif (ai.suggestedFollowUp) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':bulb: *Try asking:* ' + ai.suggestedFollowUp } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: confidenceEmoji + ' Confidence: *' + (ai.confidence || 'medium') + '* | Documents searched: *' + docCount + '* | Documents cited: *' + usedDocs.length + '*' }] });\n\nconst fallback = 'Company Knowledge Answer: ' + question;\n\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

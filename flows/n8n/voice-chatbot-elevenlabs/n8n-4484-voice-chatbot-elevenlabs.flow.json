@@ -1,0 +1,137 @@
+{
+  "key": "n8n-4484-voice-chatbot-elevenlabs",
+  "name": "AI chatbot with knowledge search",
+  "description": "Adapted from the voice AI chatbot concept. Takes a user question, searches for relevant knowledge via Exa, uses Claude AI to synthesize a comprehensive expert answer, and delivers the response to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4484,
+    "url": "https://n8n.io/workflows/4484",
+    "originalName": "Build a voice AI chatbot with ElevenLabs and InfraNodus knowledge experts",
+    "totalViews": 58109,
+    "rank": 103,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for knowledge search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the answer",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The user question to research and answer"
+    },
+    "knowledgeDomain": {
+      "type": "string",
+      "required": false,
+      "default": "general",
+      "description": "Domain to focus the search (e.g. 'technology', 'science', 'business', 'health')"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    }
+  },
+  "steps": [
+    {
+      "id": "webSearch",
+      "name": "Search for relevant knowledge via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile search results into knowledge base",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.webSearch.response.results || [];\nconst domain = $.input.knowledgeDomain || 'general';\n\nlet sourcesText = '';\nresults.forEach((r, i) => {\n  sourcesText += (i + 1) + '. ' + (r.title || 'Untitled') + '\\n';\n  sourcesText += '   URL: ' + r.url + '\\n';\n  if (r.publishedDate) sourcesText += '   Published: ' + r.publishedDate + '\\n';\n  sourcesText += '   ' + (r.text || '').slice(0, 1200) + '\\n\\n';\n});\n\nreturn { sourcesText, sourceCount: results.length, domain, topSources: results.slice(0, 5).map(r => ({ title: r.title || r.url, url: r.url })) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for expert knowledge answer",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileSources.output;\nconst question = $.input.question;\nconst domain = d.domain;\n\nlet prompt = 'You are a knowledgeable expert in ' + domain + '. Answer the following question using the research sources provided. Act as a helpful knowledge assistant with deep domain expertise.\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n';\nprompt += 'DOMAIN: ' + domain + '\\n\\n';\nprompt += 'KNOWLEDGE SOURCES (' + d.sourceCount + ' found):\\n';\nprompt += d.sourcesText + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Provide a thorough, expert-level answer synthesized from the sources\\n';\nprompt += '- Cite sources by number, e.g. [1], [2]\\n';\nprompt += '- If sources conflict, explain the different perspectives\\n';\nprompt += '- Include practical takeaways or recommendations when appropriate\\n';\nprompt += '- Use Slack mrkdwn: *bold*, _italic_, > for quotes, numbered lists\\n';\nprompt += '- Slack rules: use *bold* (NOT **bold**). No markdown tables. No # headings.\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"<comprehensive expert answer in Slack mrkdwn>\",\\n';\nprompt += '  \"confidence\": \"high|medium|low\",\\n';\nprompt += '  \"keyInsights\": [\"<insight1>\", \"<insight2>\", \"<insight3>\"],\\n';\nprompt += '  \"relatedTopics\": [\"<topic1>\", \"<topic2>\"],\\n';\nprompt += '  \"sourcesUsed\": [1, 2, 3]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4484-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4484-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, confidence: 'medium', keyInsights: [], relatedTopics: [], sourcesUsed: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst sourceCount = $.steps.compileSources.output.sourceCount;\nconst topSources = $.steps.compileSources.output.topSources || [];\n\nconst confidenceEmoji = ai.confidence === 'high' ? ':large_green_circle:' : ai.confidence === 'low' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'AI Knowledge Assistant' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No answer generated.').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: answerText } });\nblocks.push({ type: 'divider' });\n\nif (ai.keyInsights && ai.keyInsights.length > 0) {\n  let insText = '*Key Insights:*\\n';\n  ai.keyInsights.forEach((ins, i) => { insText += (i + 1) + '. ' + ins + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: insText.slice(0, 1800) } });\n}\n\nif (ai.relatedTopics && ai.relatedTopics.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Related Topics:* ' + ai.relatedTopics.join(', ') } });\n}\n\nblocks.push({ type: 'divider' });\n\nlet sourceLinks = '';\ntopSources.slice(0, 3).forEach((s, i) => {\n  sourceLinks += (i + 1) + '. <' + s.url + '|' + (s.title || s.url).slice(0, 60) + '>\\n';\n});\nif (sourceLinks) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Top Sources:*\\n' + sourceLinks } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: confidenceEmoji + ' Confidence: *' + (ai.confidence || 'medium') + '* | Sources analyzed: *' + sourceCount + '*' }] });\n\nconst fallback = 'AI Knowledge answer: ' + question;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

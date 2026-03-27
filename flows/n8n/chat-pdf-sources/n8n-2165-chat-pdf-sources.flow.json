@@ -1,0 +1,186 @@
+{
+  "key": "n8n-2165-chat-pdf-sources",
+  "name": "Chat with PDF docs using AI (quoting sources)",
+  "description": "Searches Google Drive for documents, uses Firecrawl to extract content from a document URL, then Claude AI answers a user question with source citations. Posts the answer to Slack using Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2165,
+    "url": "https://n8n.io/workflows/2165",
+    "originalName": "Chat with PDF docs using AI (quoting sources)",
+    "totalViews": 116487,
+    "rank": 41,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for document search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for content extraction",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the answer"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Question to ask about the documents"
+    },
+    "documentUrl": {
+      "type": "string",
+      "required": false,
+      "description": "Direct URL to a document or webpage to analyze. If not provided, Exa search is used to find relevant sources."
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": false,
+      "description": "Search query to find documents via Exa (used when documentUrl is not provided)"
+    }
+  },
+  "steps": [
+    {
+      "id": "prepareSearch",
+      "name": "Determine search query",
+      "type": "code",
+      "code": {
+        "source": "const query = $.input.searchQuery || $.input.question;\nconst hasDirectUrl = !!$.input.documentUrl;\nreturn { query, hasDirectUrl };"
+      }
+    },
+    {
+      "id": "searchDocs",
+      "name": "Search for relevant documents via Exa",
+      "type": "action",
+      "if": "!$.input.documentUrl",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.prepareSearch.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "resolveUrl",
+      "name": "Determine the URL to scrape",
+      "type": "code",
+      "code": {
+        "source": "if ($.input.documentUrl) {\n  return { url: $.input.documentUrl, source: 'direct' };\n}\nconst results = ($.steps.searchDocs && $.steps.searchDocs.response && $.steps.searchDocs.response.results) || [];\nif (results.length === 0) {\n  return { url: null, source: 'none', error: 'No documents found' };\n}\nreturn { url: results[0].url, source: 'exa_search', allResults: results.map((r, i) => ({ index: i+1, title: r.title || '', url: r.url, snippet: (r.text || '').slice(0, 300) })) };"
+      }
+    },
+    {
+      "id": "scrapeDoc",
+      "name": "Extract document content with Firecrawl",
+      "type": "action",
+      "if": "$.steps.resolveUrl.output.url",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.steps.resolveUrl.output.url",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "compileContext",
+      "name": "Compile document context for AI",
+      "type": "code",
+      "code": {
+        "source": "const scrapeResp = ($.steps.scrapeDoc && $.steps.scrapeDoc.response && $.steps.scrapeDoc.response.data) || {};\nconst primaryContent = scrapeResp.markdown || '';\nconst primaryUrl = $.steps.resolveUrl.output.url || '';\n\nconst searchResults = $.steps.resolveUrl.output.allResults || [];\n\nlet context = 'PRIMARY DOCUMENT:\\n';\ncontext += 'URL: ' + primaryUrl + '\\n';\ncontext += 'Content:\\n' + primaryContent.slice(0, 6000) + '\\n\\n';\n\nif (searchResults.length > 1) {\n  context += 'ADDITIONAL SEARCH RESULTS:\\n';\n  searchResults.slice(1).forEach((r, i) => {\n    context += (i + 2) + '. ' + r.title + ' (' + r.url + ')\\n';\n    context += '   ' + r.snippet + '\\n\\n';\n  });\n}\n\nreturn { context, primaryUrl, hasContent: primaryContent.length > 0, sourceCount: searchResults.length || 1 };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for Q&A with citations",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst context = $.steps.compileContext.output.context;\n\nlet prompt = 'You are a document analysis assistant. Answer the user question based ONLY on the provided document content. You MUST cite your sources by quoting the exact text you used to form your answer.\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n\\n';\nprompt += 'DOCUMENT CONTENT:\\n' + context + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Answer the question thoroughly using information from the document\\n';\nprompt += '- Include direct quotes from the source text as citations\\n';\nprompt += '- If the document does not contain enough information to answer, say so clearly\\n';\nprompt += '- Attribute each piece of information to its source URL\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"your detailed answer to the question\",\\n';\nprompt += '  \"citations\": [\\n';\nprompt += '    { \"quote\": \"exact text quoted from the document\", \"sourceUrl\": \"URL where this was found\", \"relevance\": \"why this quote supports the answer\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"confidence\": \"high/medium/low\",\\n';\nprompt += '  \"summary\": \"one-sentence summary of the answer\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2165-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2165-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, citations: [], confidence: 'low', summary: 'See raw answer' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message with citations",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst primaryUrl = $.steps.compileContext.output.primaryUrl || '';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Document Q&A', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No answer generated.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Answer:*\\n' + answerText } });\n\nif (ai.citations && ai.citations.length > 0) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Sources & Citations:*' } });\n  ai.citations.slice(0, 5).forEach((c, i) => {\n    let citText = '>' + (i + 1) + '. _\"' + (c.quote || '').slice(0, 300) + '\"_\\n';\n    if (c.sourceUrl) citText += '   <' + c.sourceUrl + '|Source>';\n    if (c.relevance) citText += ' - ' + c.relevance;\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: citText } });\n  });\n}\n\nblocks.push({ type: 'divider' });\nconst confEmoji = ai.confidence === 'high' ? 'large_green_circle' : ai.confidence === 'medium' ? 'large_yellow_circle' : 'red_circle';\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':' + confEmoji + ': Confidence: ' + (ai.confidence || 'unknown') + ' | Source: <' + primaryUrl + '|Document>' }] });\n\nconst fallbackText = 'Document Q&A: ' + (ai.summary || question);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

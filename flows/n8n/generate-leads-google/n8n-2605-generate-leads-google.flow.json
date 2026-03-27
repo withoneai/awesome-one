@@ -1,0 +1,230 @@
+{
+  "key": "n8n-2605-generate-leads-google",
+  "name": "Generate leads with Google Maps",
+  "description": "Automated lead generation pipeline: searches for businesses using Exa, scrapes their websites with Firecrawl, uses Claude AI to extract contact information, and saves structured leads to a new Google Sheets spreadsheet.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2605,
+    "url": "https://n8n.io/workflows/2605",
+    "originalName": "Generate leads with Google Maps",
+    "totalViews": 176490,
+    "rank": 25,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "googleSheetsKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": true,
+      "description": "Business type and location to search for (e.g. 'plumbers in Austin TX', 'dentists in Chicago')"
+    },
+    "maxResults": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Maximum number of businesses to find (default 10)"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchBusinesses",
+      "name": "Search for businesses via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.searchQuery",
+          "numResults": "$.input.maxResults",
+          "type": "auto",
+          "category": "company",
+          "contents": {
+            "text": {
+              "maxCharacters": 500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "extractUrls",
+      "name": "Extract unique URLs from search results",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchBusinesses.response.results || [];\nconst urls = results.map(r => r.url).filter(Boolean);\nconst unique = [...new Set(urls)].slice(0, 10);\nconst summaries = {};\nresults.forEach(r => { if (r.url) summaries[r.url] = { title: r.title || '', snippet: (r.text || '').slice(0, 300) }; });\nreturn { urls: unique, summaries };"
+      }
+    },
+    {
+      "id": "scrapeWebsites",
+      "name": "Scrape business websites for contact info",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractUrls.output.urls",
+        "as": "siteUrl",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrape",
+            "name": "Scrape website with Firecrawl",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.siteUrl",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileScrapedData",
+      "name": "Compile scraped data for AI extraction",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.scrapeWebsites.response.iterations || [];\nconst urls = $.steps.extractUrls.output.urls;\nconst summaries = $.steps.extractUrls.output.summaries;\nlet sitesText = '';\niterations.forEach((iter, i) => {\n  const url = urls[i] || 'Unknown';\n  const info = summaries[url] || {};\n  const md = (iter.scrape && iter.scrape.response && iter.scrape.response.data) ? (iter.scrape.response.data.markdown || '') : '';\n  sitesText += '--- SITE ' + (i+1) + ': ' + url + ' ---\\n';\n  sitesText += 'Title: ' + (info.title || 'N/A') + '\\n';\n  sitesText += 'Content:\\n' + md.slice(0, 2000) + '\\n\\n';\n});\nreturn { sitesText, siteCount: urls.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI extraction prompt",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are a lead generation specialist. Extract business contact information from the following scraped websites.\n\nSEARCH QUERY: ${$.input.searchQuery}\n\nSCRAPED WEBSITE DATA:\n${$.steps.compileScrapedData.output.sitesText}\n\nFor each business found, extract:\n- Business name\n- Phone number (if available)\n- Email address (if available)\n- Physical address (if available)\n- Website URL\n- Business type/category\n- Brief description (1 sentence)\n\nReturn ONLY valid JSON \u2014 an array of objects:\n[\n  {\n    \"business_name\": \"...\",\n    \"phone\": \"...\",\n    \"email\": \"...\",\n    \"address\": \"...\",\n    \"website\": \"...\",\n    \"category\": \"...\",\n    \"description\": \"...\"\n  }\n]\n\nIf a field is not found, use empty string. Return at least the business name and website for every site.`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2605-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExtraction",
+      "name": "Run Claude AI to extract contacts",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2605-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExtraction.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry {\n  const leads = JSON.parse(raw);\n  const rows = leads.map(l => [l.business_name || '', l.phone || '', l.email || '', l.address || '', l.website || '', l.category || '', l.description || '']);\n  return { leads, rows };\n} catch(e) {\n  return { leads: [], rows: [], text: raw };\n}"
+      }
+    },
+    {
+      "id": "createSpreadsheet",
+      "name": "Create a new Google Sheets spreadsheet for leads",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.googleSheetsKey",
+        "data": {
+          "properties": {
+            "title": "Lead Gen: {{$.input.searchQuery}} \u2014 {{$.steps.compileScrapedData.output.siteCount}} leads"
+          },
+          "sheets": [
+            {
+              "properties": {
+                "title": "Leads"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "addHeaders",
+      "name": "Add header row to spreadsheet",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GJ30kKk8ogk::hCE5XVrgQ3m0ip3lGzJRfQ",
+        "connectionKey": "$.input.googleSheetsKey",
+        "data": {
+          "values": [
+            [
+              "Business Name",
+              "Phone",
+              "Email",
+              "Address",
+              "Website",
+              "Category",
+              "Description"
+            ]
+          ]
+        },
+        "pathVars": {
+          "spreadsheetId": "$.steps.createSpreadsheet.response.spreadsheetId",
+          "range": "Leads!A1:G1"
+        },
+        "queryParams": {
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "appendLeads",
+      "name": "Append lead rows to spreadsheet",
+      "type": "action",
+      "if": "$.steps.parseAI.output.rows.length > 0",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GJ30kKk8ogk::hCE5XVrgQ3m0ip3lGzJRfQ",
+        "connectionKey": "$.input.googleSheetsKey",
+        "data": {
+          "values": "$.steps.parseAI.output.rows"
+        },
+        "pathVars": {
+          "spreadsheetId": "$.steps.createSpreadsheet.response.spreadsheetId",
+          "range": "Leads!A2:G"
+        },
+        "queryParams": {
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    }
+  ]
+}

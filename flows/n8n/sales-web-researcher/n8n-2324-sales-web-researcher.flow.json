@@ -1,0 +1,209 @@
+{
+  "key": "n8n-2324-sales-web-researcher",
+  "name": "AI Sales Web Researcher",
+  "description": "Takes a company name, uses Exa for web search and Firecrawl for deep scraping of company pages, Claude AI builds comprehensive sales intelligence including company overview, key contacts, pain points, and talking points, then saves the intel to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2324,
+    "url": "https://n8n.io/workflows/2324",
+    "originalName": "AI web researcher for sales",
+    "totalViews": 77948,
+    "rank": 74,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for deep scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving intel",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID to save sales research"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Sales Intel",
+      "description": "Sheet tab name (default: 'Sales Intel')"
+    },
+    "companyName": {
+      "type": "string",
+      "required": true,
+      "description": "Target company name to research (e.g. 'Stripe', 'Notion')"
+    },
+    "industry": {
+      "type": "string",
+      "required": false,
+      "description": "Industry context for better research (e.g. 'fintech', 'SaaS')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQueries",
+      "name": "Build research queries for the company",
+      "type": "code",
+      "code": {
+        "source": "const company = $.input.companyName;\nconst industry = $.input.industry || '';\nconst ctx = industry ? ' ' + industry : '';\n\nreturn {\n  companyQuery: company + ctx + ' company overview about funding team',\n  newsQuery: company + ' latest news announcements ' + new Date().getFullYear(),\n  company,\n  industry: industry || 'N/A',\n  today: new Date().toISOString().split('T')[0]\n};"
+      }
+    },
+    {
+      "id": "searchCompany",
+      "name": "Search Exa for company overview",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQueries.output.companyQuery",
+          "numResults": 5,
+          "type": "neural",
+          "useAutoprompt": true,
+          "contents": {
+            "text": {
+              "maxCharacters": 2000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "searchNews",
+      "name": "Search Exa for recent company news",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQueries.output.newsQuery",
+          "numResults": 5,
+          "type": "neural",
+          "useAutoprompt": true,
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "extractTopUrl",
+      "name": "Extract top company URL for deep scraping",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchCompany.response.results || $.steps.searchCompany.response.data || [];\nlet topUrl = '';\nfor (const r of results) {\n  const url = r.url || '';\n  if (url && (url.includes($.input.companyName.toLowerCase().replace(/\\s+/g, '')) || !topUrl)) {\n    topUrl = url;\n    break;\n  }\n}\nif (!topUrl && results.length > 0) topUrl = results[0].url || '';\nreturn { topUrl, hasUrl: !!topUrl };"
+      }
+    },
+    {
+      "id": "scrapeCompanySite",
+      "name": "Deep scrape company website with Firecrawl",
+      "type": "action",
+      "if": "$.steps.extractTopUrl.output.hasUrl",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.steps.extractTopUrl.output.topUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile all research data",
+      "type": "code",
+      "code": {
+        "source": "let compiled = '';\n\nconst companyResults = $.steps.searchCompany.response.results || $.steps.searchCompany.response.data || [];\ncompiled += '=== COMPANY OVERVIEW ===\\n';\ncompanyResults.slice(0, 5).forEach((r, i) => {\n  compiled += 'Source ' + (i + 1) + ': ' + (r.title || 'N/A') + '\\n';\n  compiled += (r.text || r.content || '').slice(0, 1500) + '\\n\\n';\n});\n\nconst newsResults = $.steps.searchNews.response.results || $.steps.searchNews.response.data || [];\ncompiled += '=== RECENT NEWS ===\\n';\nnewsResults.slice(0, 5).forEach((r, i) => {\n  compiled += 'News ' + (i + 1) + ': ' + (r.title || 'N/A') + '\\n';\n  compiled += (r.text || r.content || '').slice(0, 1000) + '\\n\\n';\n});\n\nconst scrapeResp = $.steps.scrapeCompanySite && $.steps.scrapeCompanySite.response;\nif (scrapeResp) {\n  const md = (scrapeResp.data && scrapeResp.data.markdown) || scrapeResp.markdown || '';\n  if (md) {\n    compiled += '=== COMPANY WEBSITE (SCRAPED) ===\\n';\n    compiled += md.slice(0, 3000) + '\\n\\n';\n  }\n}\n\nreturn { compiled, sourceCount: companyResults.length + newsResults.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for sales intelligence",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileResearch.output;\nconst q = $.steps.buildQueries.output;\n\nlet prompt = 'You are a senior sales intelligence analyst. Create a comprehensive sales brief for prospecting ' + q.company + ' (Industry: ' + q.industry + ').\\n\\n';\nprompt += 'RESEARCH DATA:\\n' + d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Build a complete company profile useful for a sales team\\n';\nprompt += '- Identify potential pain points and business challenges\\n';\nprompt += '- Suggest personalized outreach angles and talking points\\n';\nprompt += '- Identify key decision makers (titles/roles if available)\\n';\nprompt += '- Note recent events that could be conversation starters\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"company\": \"' + q.company + '\",\\n';\nprompt += '  \"industry\": \"industry\",\\n';\nprompt += '  \"overview\": \"2-3 sentence company description\",\\n';\nprompt += '  \"founded\": \"year or N/A\",\\n';\nprompt += '  \"headquarters\": \"location\",\\n';\nprompt += '  \"employeeCount\": \"estimated\",\\n';\nprompt += '  \"funding\": \"funding info or N/A\",\\n';\nprompt += '  \"keyProducts\": [\"product 1\", \"product 2\"],\\n';\nprompt += '  \"targetBuyers\": [{ \"title\": \"VP of Engineering\", \"relevance\": \"why they matter\" }],\\n';\nprompt += '  \"painPoints\": [\"pain point 1\", \"pain point 2\"],\\n';\nprompt += '  \"talkingPoints\": [\"personalized angle 1\", \"angle 2\"],\\n';\nprompt += '  \"recentNews\": [{ \"headline\": \"title\", \"relevance\": \"why it matters for outreach\" }],\\n';\nprompt += '  \"competitors\": [\"competitor 1\"],\\n';\nprompt += '  \"techStack\": [\"known tools\"],\\n';\nprompt += '  \"outreachStrategy\": \"recommended approach\",\\n';\nprompt += '  \"summary\": \"executive summary for the sales team\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2324-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI sales intelligence analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2324-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude AI output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { company: $.input.companyName, overview: raw, painPoints: [], talkingPoints: [], recentNews: [], summary: raw }; }"
+      }
+    },
+    {
+      "id": "prepareSheetRows",
+      "name": "Prepare rows for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = new Date().toISOString().split('T')[0];\n\nconst headerRow = ['Company', 'Industry', 'Overview', 'HQ', 'Employees', 'Funding', 'Key Products', 'Pain Points', 'Talking Points', 'Competitors', 'Tech Stack', 'Outreach Strategy', 'Recent News', 'Date Researched'];\nconst dataRow = [\n  ai.company || '',\n  ai.industry || '',\n  ai.overview || '',\n  ai.headquarters || '',\n  ai.employeeCount || '',\n  ai.funding || '',\n  (ai.keyProducts || []).join(', '),\n  (ai.painPoints || []).join('; '),\n  (ai.talkingPoints || []).join('; '),\n  (ai.competitors || []).join(', '),\n  (ai.techStack || []).join(', '),\n  ai.outreachStrategy || '',\n  (ai.recentNews || []).map(n => n.headline || n).join('; '),\n  today\n];\n\nreturn { rows: [headerRow, dataRow], summary: ai.summary || '' };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save sales intel to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": "$.steps.prepareSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    }
+  ]
+}

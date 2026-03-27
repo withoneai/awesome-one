@@ -1,0 +1,132 @@
+{
+  "key": "n8n-199-discord-ai-bot",
+  "name": "Discord AI-powered question answering bot",
+  "description": "Takes a user question, searches the web via Exa for relevant information, Claude AI synthesizes a comprehensive answer from the sources, then posts the answer to a Discord channel. Adapted from n8n's Discord AI-powered bot workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 199,
+    "url": "https://n8n.io/workflows/199",
+    "originalName": "Discord AI-powered bot",
+    "totalViews": 30808,
+    "rank": 199,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "discordKey": {
+      "type": "string",
+      "required": true,
+      "description": "Discord connection key for posting messages",
+      "connection": {
+        "platform": "discord"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The user question to research and answer"
+    },
+    "channelId": {
+      "type": "string",
+      "required": true,
+      "description": "Discord channel ID to post the answer to"
+    }
+  },
+  "steps": [
+    {
+      "id": "webSearch",
+      "name": "Search the web for relevant sources via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile search results into source text",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.webSearch.response.results || [];\nlet sourcesText = '';\nresults.forEach((r, i) => {\n  sourcesText += (i + 1) + '. ' + (r.title || 'Untitled') + '\\n';\n  sourcesText += '   URL: ' + r.url + '\\n';\n  sourcesText += '   ' + (r.text || '').slice(0, 1200) + '\\n\\n';\n});\nreturn { sourcesText, sourceCount: results.length, topSources: results.slice(0, 3).map(r => ({ title: r.title || 'Untitled', url: r.url || '' })) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for answer generation",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileSources.output;\nconst question = $.input.question;\n\nlet prompt = 'You are a helpful AI assistant for a Discord server. Answer the following question using web search results.\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n\\n';\nprompt += 'WEB SEARCH RESULTS (' + d.sourceCount + ' sources):\\n';\nprompt += d.sourcesText + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Provide a clear, comprehensive answer\\n';\nprompt += '- Cite sources by number [1], [2], etc.\\n';\nprompt += '- Keep the answer concise but informative (under 1800 characters for Discord)\\n';\nprompt += '- Use Discord markdown formatting: **bold**, *italic*, > for quotes, `code`\\n';\nprompt += '- Do NOT use Slack-style formatting\\n';\nprompt += '- Be conversational and friendly\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"the answer in Discord markdown format\",\\n';\nprompt += '  \"confidence\": \"high|medium|low\",\\n';\nprompt += '  \"sourcesUsed\": [1, 2],\\n';\nprompt += '  \"followUpSuggestions\": [\"suggestion 1\", \"suggestion 2\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-199-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnswer",
+      "name": "Run Claude AI answer generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-199-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnswer.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, confidence: 'medium', sourcesUsed: [], followUpSuggestions: [] }; }"
+      }
+    },
+    {
+      "id": "buildDiscordMessage",
+      "name": "Build Discord message with answer and sources",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst topSources = $.steps.compileSources.output.topSources || [];\nconst sourceCount = $.steps.compileSources.output.sourceCount;\n\nconst confEmoji = ai.confidence === 'high' ? ':green_circle:' : ai.confidence === 'low' ? ':red_circle:' : ':yellow_circle:';\n\nlet message = '**Question:** ' + question + '\\n\\n';\nmessage += (ai.answer || 'No answer generated.').slice(0, 1600) + '\\n\\n';\n\nif (topSources.length > 0) {\n  message += '**Sources:**\\n';\n  topSources.forEach((s, i) => {\n    message += (i + 1) + '. [' + s.title + '](' + s.url + ')\\n';\n  });\n  message += '\\n';\n}\n\nmessage += confEmoji + ' Confidence: **' + (ai.confidence || 'medium') + '** | Sources: **' + sourceCount + '**';\n\nif (ai.followUpSuggestions && ai.followUpSuggestions.length > 0) {\n  message += '\\n\\n*Try asking:* ' + ai.followUpSuggestions.slice(0, 2).join(' | ');\n}\n\nreturn { content: message.slice(0, 2000) };"
+      }
+    },
+    {
+      "id": "postToDiscord",
+      "name": "Post answer to Discord channel",
+      "type": "action",
+      "action": {
+        "platform": "discord",
+        "actionId": "conn_mod_def::GJ2V63KF4zs::ftkHHNGaTlyiikolAQZ0tA",
+        "connectionKey": "$.input.discordKey",
+        "data": {
+          "content": "$.steps.buildDiscordMessage.output.content"
+        },
+        "pathVars": {
+          "channelId": "$.input.channelId"
+        }
+      }
+    }
+  ]
+}

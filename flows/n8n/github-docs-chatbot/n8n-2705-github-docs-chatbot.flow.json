@@ -1,0 +1,183 @@
+{
+  "key": "n8n-2705-github-docs-chatbot",
+  "name": "GitHub API documentation Q&A with web search and AI",
+  "description": "Answers questions about the GitHub API by searching for relevant documentation via Exa, scraping the results with Firecrawl, and synthesizing answers with Claude AI. Posts the Q&A to Slack. Adapted from n8n's RAG-powered GitHub API chatbot workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2705,
+    "url": "https://n8n.io/workflows/2705",
+    "originalName": "Chat with GitHub API documentation: RAG-powered chatbot with Pinecone & OpenAI",
+    "totalViews": 30119,
+    "rank": 204,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for searching GitHub docs",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping doc pages",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting answers",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for Q&A responses"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Question about the GitHub API (e.g. 'How do I create a pull request via the API?')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery_searchDocs",
+      "name": "Build search query for GitHub docs",
+      "type": "code",
+      "code": {
+        "source": "const q = $.input.question;\nconst staticTerms = 'GitHub API documentation docs.github.com';\nreturn { query: q + ' ' + staticTerms };"
+      }
+    },
+    {
+      "id": "searchDocs",
+      "name": "Search Exa for relevant GitHub documentation",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_searchDocs.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 2000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "extractTopResults",
+      "name": "Extract top documentation URLs",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchDocs.response.results || [];\nconst docs = results.map((r, i) => ({\n  index: i + 1,\n  title: r.title || 'Untitled',\n  url: r.url || '',\n  text: (r.text || '').slice(0, 1500)\n})).filter(d => d.url.length > 0).slice(0, 3);\nreturn { docs, count: docs.length };"
+      }
+    },
+    {
+      "id": "scrapeDocs",
+      "name": "Scrape top documentation pages with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractTopResults.output.docs",
+        "as": "doc",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapeOne",
+            "name": "Scrape documentation page",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.doc.url"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileContext",
+      "name": "Compile documentation context",
+      "type": "code",
+      "code": {
+        "source": "const docs = $.steps.extractTopResults.output.docs || [];\nconst iterations = $.steps.scrapeDocs.response.iterations || [];\nlet context = '';\ndocs.forEach((d, i) => {\n  context += '--- DOC ' + d.index + ': ' + d.title + ' ---\\n';\n  context += 'URL: ' + d.url + '\\n';\n  if (iterations[i] && iterations[i].scrapeOne && iterations[i].scrapeOne.response) {\n    const s = iterations[i].scrapeOne.response;\n    const content = s.data ? (s.data.markdown || s.data.content || s.data.text || '') : (typeof s === 'string' ? s : JSON.stringify(s));\n    context += content.slice(0, 4000) + '\\n';\n  } else {\n    context += d.text + '\\n';\n  }\n  context += '\\n';\n});\nreturn { context: context.slice(0, 20000) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for Q&A",
+      "type": "code",
+      "code": {
+        "source": "const ctx = $.steps.compileContext.output.context;\nconst question = $.input.question;\nlet prompt = 'You are a GitHub API expert. Answer the following question using the documentation context provided.\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n\\n';\nprompt += 'DOCUMENTATION CONTEXT:\\n' + ctx + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Provide a clear, detailed answer\\n';\nprompt += '- Include code examples where appropriate\\n';\nprompt += '- Cite the documentation sources\\n';\nprompt += '- If the docs are insufficient, say so clearly\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"detailed answer with code examples\",\\n';\nprompt += '  \"endpoint\": \"relevant API endpoint if applicable\",\\n';\nprompt += '  \"method\": \"HTTP method (GET/POST/etc)\",\\n';\nprompt += '  \"codeExample\": \"curl or code example\",\\n';\nprompt += '  \"sources\": [\"url1\", \"url2\"],\\n';\nprompt += '  \"confidence\": \"high|medium|low\"\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2705-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnswer",
+      "name": "Run Claude AI Q&A",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2705-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnswer.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, endpoint: '', method: '', codeExample: '', sources: [], confidence: 'medium' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit Q&A response",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst q = $.input.question;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'GitHub API Q&A', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Q:* ' + q } });\nblocks.push({ type: 'divider' });\n\nconst answer = (ai.answer || 'No answer found').slice(0, 2000);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*A:* ' + answer } });\n\nif (ai.endpoint) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Endpoint:* `' + (ai.method || 'GET') + ' ' + ai.endpoint + '`' } });\n}\n\nif (ai.codeExample) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Example:*\\n```' + ai.codeExample.slice(0, 800) + '```' } });\n}\n\nconst sources = ai.sources || [];\nif (sources.length > 0) {\n  const srcText = sources.map(s => '<' + s + '|link>').join(' | ');\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Sources: ' + srcText + ' | Confidence: ' + (ai.confidence || 'medium') }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa + Firecrawl + Claude AI' }] });\n\nconst fallback = 'GitHub API Q&A: ' + q.slice(0, 60);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post Q&A to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

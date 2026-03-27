@@ -1,0 +1,142 @@
+{
+  "key": "n8n-2271-gmail-auto-responder",
+  "name": "Gmail AI Auto-Responder with Slack Review",
+  "description": "Fetches unread Gmail emails, uses Claude AI to assess each email and draft contextually appropriate replies, then posts the drafted replies to Slack with Block Kit formatting for human review before sending.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2271,
+    "url": "https://n8n.io/workflows/2271",
+    "originalName": "Gmail AI Auto-Responder: Create Draft Replies to incoming emails",
+    "totalViews": 72946,
+    "rank": 80,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for reading unread emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting draft review",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post drafted replies for review"
+    },
+    "senderName": {
+      "type": "string",
+      "required": false,
+      "default": "AI Assistant",
+      "description": "Your name to use in reply signatures"
+    },
+    "replyTone": {
+      "type": "string",
+      "required": false,
+      "default": "professional",
+      "description": "Tone for replies: professional, friendly, formal, casual"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 15,
+      "description": "Maximum number of unread emails to process"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchUnread",
+      "name": "Fetch unread Gmail emails",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "maxResults": 20,
+          "q": "in:inbox is:unread",
+          "labelIds": [
+            "INBOX",
+            "UNREAD"
+          ]
+        }
+      }
+    },
+    {
+      "id": "compileEmails",
+      "name": "Compile unread email data",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.fetchUnread.response;\nconst messages = response.messages || response.data || [];\nconst maxEmails = $.input.maxEmails || 15;\nconst emails = [];\n\nif (Array.isArray(messages)) {\n  messages.slice(0, maxEmails).forEach((msg, i) => {\n    const headers = msg.payload && msg.payload.headers ? msg.payload.headers : [];\n    const getH = (n) => { const h = headers.find(h => h.name && h.name.toLowerCase() === n.toLowerCase()); return h ? h.value : ''; };\n    emails.push({\n      index: i + 1,\n      id: msg.id || '',\n      threadId: msg.threadId || '',\n      from: getH('From') || msg.from || 'Unknown',\n      to: getH('To') || msg.to || '',\n      subject: getH('Subject') || msg.subject || '(no subject)',\n      date: getH('Date') || msg.date || '',\n      snippet: msg.snippet || msg.body || '',\n      messageId: getH('Message-ID') || ''\n    });\n  });\n}\n\nlet compiled = '';\nemails.forEach(e => {\n  compiled += 'EMAIL #' + e.index + ':\\n';\n  compiled += '  From: ' + e.from + '\\n';\n  compiled += '  Subject: ' + e.subject + '\\n';\n  compiled += '  Date: ' + e.date + '\\n';\n  compiled += '  Body: ' + e.snippet.slice(0, 500) + '\\n\\n';\n});\n\nreturn { compiled, emails, emailCount: emails.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for draft replies",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileEmails.output;\nconst tone = $.input.replyTone || 'professional';\nconst name = $.input.senderName || 'AI Assistant';\n\nlet prompt = 'You are an email response assistant. For each email below, assess whether it needs a reply, and if so, draft a ' + tone + ' response.\\n\\n';\nprompt += 'SENDER NAME: ' + name + '\\n';\nprompt += 'EMAILS (' + d.emailCount + ' total):\\n' + d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- For each email, first decide: NEEDS_REPLY, NO_REPLY_NEEDED, or SKIP (spam/newsletter)\\n';\nprompt += '- For emails needing a reply, draft a complete response\\n';\nprompt += '- Keep replies concise and ' + tone + '\\n';\nprompt += '- Do NOT reply to automated/no-reply emails, newsletters, or marketing\\n';\nprompt += '- Sign replies with \"' + name + '\"\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"replies\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"emailIndex\": 1,\\n';\nprompt += '      \"from\": \"original sender\",\\n';\nprompt += '      \"subject\": \"original subject\",\\n';\nprompt += '      \"assessment\": \"NEEDS_REPLY|NO_REPLY_NEEDED|SKIP\",\\n';\nprompt += '      \"reason\": \"why this assessment\",\\n';\nprompt += '      \"draftReply\": \"full draft reply text or empty string\",\\n';\nprompt += '      \"replySubject\": \"Re: original subject\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"totalEmails\": ' + d.emailCount + ',\\n';\nprompt += '  \"needsReply\": 0,\\n';\nprompt += '  \"skipped\": 0\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2271-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI to draft replies",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2271-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude AI output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { replies: [], totalEmails: 0, needsReply: 0, skipped: 0 }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit with drafted replies",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst emailCount = $.steps.compileEmails.output.emailCount;\nconst replies = ai.replies || [];\nconst needsReply = replies.filter(r => r.assessment === 'NEEDS_REPLY');\nconst skipped = replies.filter(r => r.assessment === 'SKIP' || r.assessment === 'NO_REPLY_NEEDED');\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Gmail Auto-Responder Draft Review', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Emails Processed:*\\n' + emailCount },\n  { type: 'mrkdwn', text: '*Drafts Created:*\\n' + needsReply.length },\n  { type: 'mrkdwn', text: '*Skipped:*\\n' + skipped.length }\n] });\nblocks.push({ type: 'divider' });\n\nif (needsReply.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Drafted Replies for Review:*' } });\n  needsReply.slice(0, 10).forEach((r, i) => {\n    blocks.push({ type: 'divider' });\n    let replyText = '*' + (i + 1) + '. Reply to: ' + (r.from || 'Unknown') + '*\\n';\n    replyText += '*Subject:* ' + (r.subject || '(no subject)') + '\\n';\n    replyText += '*Assessment:* ' + r.reason + '\\n\\n';\n    replyText += '*Draft Reply:*\\n';\n    replyText += '```' + (r.draftReply || 'No draft').slice(0, 1200) + '```';\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: replyText.slice(0, 1800) } });\n  });\n} else {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '_No emails require a reply at this time._' } });\n}\n\nif (skipped.length > 0) {\n  blocks.push({ type: 'divider' });\n  let skipText = '*Skipped Emails:*\\n';\n  skipped.slice(0, 5).forEach((s, i) => {\n    skipText += (i + 1) + '. ' + (s.subject || 'N/A') + ' from ' + (s.from || 'Unknown') + ' - _' + (s.reason || 'auto-skipped') + '_\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: skipText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':envelope: Review drafts above and send manually. | Powered by Gmail + Claude AI | One CLI' }] });\n\nconst fallbackText = 'Gmail Auto-Responder: ' + needsReply.length + ' drafts created from ' + emailCount + ' emails';\nreturn { blocks, fallbackText, draftReplies: needsReply };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post drafted replies to Slack for review",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

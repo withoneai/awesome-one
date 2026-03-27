@@ -1,0 +1,147 @@
+{
+  "key": "n8n-3393-calendar-reminder-slack",
+  "name": "Google Calendar reminder system with AI and Slack",
+  "description": "Fetches upcoming Google Calendar events, uses Claude AI to prioritize and format reminders with context and preparation tips, then posts a structured daily briefing to Slack. Adapted from n8n's Google Calendar reminder system with GPT-4o workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3393,
+    "url": "https://n8n.io/workflows/3393",
+    "originalName": "Google Calendar \ud83d\udcc5 reminder system with GPT-4o and Telegram",
+    "totalViews": 28924,
+    "rank": 213,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "calendarKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Calendar connection key",
+      "connection": {
+        "platform": "google-calendar"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for reminders",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for calendar reminders"
+    },
+    "calendarId": {
+      "type": "string",
+      "required": false,
+      "default": "primary",
+      "description": "Google Calendar ID (default: primary)"
+    },
+    "hoursAhead": {
+      "type": "number",
+      "required": false,
+      "default": 24,
+      "description": "How many hours ahead to look for events"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildTimeRange",
+      "name": "Build time range for calendar query",
+      "type": "code",
+      "code": {
+        "source": "const now = new Date();\nconst hours = $.input.hoursAhead || 24;\nconst end = new Date(now.getTime() + hours * 60 * 60 * 1000);\nreturn {\n  timeMin: now.toISOString(),\n  timeMax: end.toISOString(),\n  today: now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })\n};"
+      }
+    },
+    {
+      "id": "fetchEvents",
+      "name": "Fetch upcoming calendar events",
+      "type": "action",
+      "action": {
+        "platform": "google-calendar",
+        "actionId": "conn_mod_def::GJ6RlnIYK20::YzuWSmaVQgurletRDNJavA",
+        "connectionKey": "$.input.calendarKey",
+        "data": {},
+        "pathVars": {
+          "calendarId": "$.input.calendarId"
+        },
+        "queryParams": {
+          "timeMin": "$.steps.buildTimeRange.output.timeMin",
+          "timeMax": "$.steps.buildTimeRange.output.timeMax",
+          "singleEvents": "true",
+          "orderBy": "startTime",
+          "maxResults": "20"
+        }
+      }
+    },
+    {
+      "id": "parseEvents",
+      "name": "Parse calendar events",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.fetchEvents.response || {};\nconst items = resp.items || [];\nconst events = items.map((e, i) => {\n  const start = e.start ? (e.start.dateTime || e.start.date || '') : '';\n  const end = e.end ? (e.end.dateTime || e.end.date || '') : '';\n  return {\n    index: i + 1,\n    summary: e.summary || 'No Title',\n    start: start,\n    end: end,\n    location: e.location || '',\n    description: (e.description || '').slice(0, 200),\n    attendees: (e.attendees || []).map(a => a.email || '').filter(Boolean).slice(0, 5),\n    hangoutLink: e.hangoutLink || e.conferenceData?.entryPoints?.[0]?.uri || ''\n  };\n});\nlet compiled = '';\nevents.forEach(e => {\n  compiled += e.index + '. ' + e.summary + '\\n';\n  compiled += '   Time: ' + e.start + ' to ' + e.end + '\\n';\n  if (e.location) compiled += '   Location: ' + e.location + '\\n';\n  if (e.description) compiled += '   Details: ' + e.description + '\\n';\n  if (e.attendees.length > 0) compiled += '   Attendees: ' + e.attendees.join(', ') + '\\n';\n  if (e.hangoutLink) compiled += '   Meet: ' + e.hangoutLink + '\\n';\n  compiled += '\\n';\n});\nreturn { events, compiled, count: events.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for smart reminders",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.parseEvents.output;\nconst today = $.steps.buildTimeRange.output.today;\nlet prompt = 'You are a personal executive assistant. Create smart, actionable reminders for upcoming calendar events.\\n\\n';\nprompt += 'TODAY: ' + today + '\\n\\n';\nprompt += 'UPCOMING EVENTS (' + d.count + '):\\n';\nprompt += d.compiled + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Prioritize events by urgency and importance\\n';\nprompt += '- Add preparation tips for meetings\\n';\nprompt += '- Flag scheduling conflicts\\n';\nprompt += '- Suggest time blocks for preparation\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"dayOverview\": \"brief day overview\",\\n';\nprompt += '  \"reminders\": [{\\n';\nprompt += '    \"event\": \"event name\",\\n';\nprompt += '    \"time\": \"formatted time\",\\n';\nprompt += '    \"priority\": \"high|medium|low\",\\n';\nprompt += '    \"prepTip\": \"preparation suggestion\",\\n';\nprompt += '    \"reminder\": \"what to remember\"\\n';\nprompt += '  }],\\n';\nprompt += '  \"conflicts\": [\"any scheduling conflicts\"],\\n';\nprompt += '  \"freeSlots\": [\"available time blocks\"]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3393-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiReminders",
+      "name": "Run Claude AI smart reminders",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3393-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiReminders.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { dayOverview: raw, reminders: [], conflicts: [], freeSlots: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit daily briefing",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = $.steps.buildTimeRange.output.today;\nconst reminders = ai.reminders || [];\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Daily Calendar Briefing', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + today + '*' } });\n\nif (ai.dayOverview) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.dayOverview.slice(0, 500) } });\n}\n\nblocks.push({ type: 'divider' });\n\nreminders.forEach(r => {\n  let icon = ':white_circle:';\n  if (r.priority === 'high') icon = ':red_circle:';\n  if (r.priority === 'medium') icon = ':large_yellow_circle:';\n  let text = icon + ' *' + (r.event || 'Event') + '* \u2014 ' + (r.time || '');\n  if (r.prepTip) text += '\\n_Prep:_ ' + r.prepTip;\n  if (r.reminder) text += '\\n_Note:_ ' + r.reminder;\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text } });\n});\n\nconst conflicts = ai.conflicts || [];\nif (conflicts.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':warning: *Conflicts:* ' + conflicts.join(', ') } });\n}\n\nconst freeSlots = ai.freeSlots || [];\nif (freeSlots.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':clock3: *Free Slots:* ' + freeSlots.join(', ') } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Google Calendar + Claude AI' }] });\n\nconst fallback = 'Daily Briefing: ' + reminders.length + ' events for ' + today;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post daily briefing to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

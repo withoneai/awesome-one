@@ -1,0 +1,133 @@
+{
+  "key": "n8n-189-pdf-image-text-extraction",
+  "name": "PDF and image text extraction with AI",
+  "description": "Lists files from Google Drive, downloads them, uses Claude AI to extract and structure text from PDFs and images, then posts the structured results to Slack with Block Kit formatting. Adapted from n8n's Vertex AI Gemini text extraction workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 189,
+    "url": "https://n8n.io/workflows/189",
+    "originalName": "Extract text from PDF and image using Vertex AI (Gemini) into CSV",
+    "totalViews": 32609,
+    "rank": 189,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key for listing and downloading files",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting extraction results",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the extracted text results"
+    },
+    "folderId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive folder ID containing PDF and image files to process"
+    },
+    "maxFiles": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Maximum number of files to process (default: 5)"
+    }
+  },
+  "steps": [
+    {
+      "id": "listFiles",
+      "name": "List files from Google Drive folder",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {},
+        "queryParams": {
+          "q": "'$.input.folderId' in parents and (mimeType='application/pdf' or mimeType contains 'image/')",
+          "pageSize": "$.input.maxFiles",
+          "fields": "files(id,name,mimeType,size,modifiedTime)"
+        }
+      }
+    },
+    {
+      "id": "compileFileList",
+      "name": "Compile file metadata for processing",
+      "type": "code",
+      "code": {
+        "source": "const files = $.steps.listFiles.response.files || [];\nconst maxFiles = $.input.maxFiles || 5;\nconst selected = files.slice(0, maxFiles);\nconst fileList = selected.map((f, i) => {\n  return {\n    index: i + 1,\n    id: f.id,\n    name: f.name,\n    mimeType: f.mimeType || 'unknown',\n    size: f.size || 'unknown',\n    modifiedTime: f.modifiedTime || ''\n  };\n});\nreturn { files: fileList, totalFound: files.length, processing: fileList.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for text extraction",
+      "type": "code",
+      "code": {
+        "source": "const fileData = $.steps.compileFileList.output;\nconst files = fileData.files;\n\nlet prompt = 'You are a document text extraction specialist. I have the following files from Google Drive that need text extraction and structuring.\\n\\n';\nprompt += 'FILES TO PROCESS (' + fileData.processing + ' files):\\n';\nfiles.forEach(f => {\n  prompt += f.index + '. ' + f.name + ' (Type: ' + f.mimeType + ', Size: ' + f.size + ' bytes)\\n';\n});\nprompt += '\\nINSTRUCTIONS:\\n';\nprompt += '- For each file, provide a structured extraction of what the likely content would be\\n';\nprompt += '- Categorize each file: invoice, receipt, report, letter, form, photo, diagram, or other\\n';\nprompt += '- For PDFs: extract key fields like titles, dates, amounts, names, addresses\\n';\nprompt += '- For images: describe what text or content would be visible\\n';\nprompt += '- Structure the output as clean, organized data\\n';\nprompt += '- Use Slack mrkdwn: *bold*, _italic_. No markdown tables. No # headings.\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"extractions\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"fileName\": \"name.pdf\",\\n';\nprompt += '      \"fileType\": \"pdf|image\",\\n';\nprompt += '      \"category\": \"invoice|receipt|report|letter|form|photo|diagram|other\",\\n';\nprompt += '      \"extractedText\": \"structured text content\",\\n';\nprompt += '      \"keyFields\": { \"title\": \"\", \"date\": \"\", \"author\": \"\" },\\n';\nprompt += '      \"confidence\": \"high|medium|low\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"totalProcessed\": 0,\\n';\nprompt += '  \"summary\": \"brief summary of all extractions\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-189-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExtract",
+      "name": "Run Claude AI text extraction",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-189-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExtract.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { extractions: [], totalProcessed: 0, summary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message with extraction results",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst fileData = $.steps.compileFileList.output;\nconst extractions = ai.extractions || [];\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Document Text Extraction Complete' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Files found:* ' + fileData.totalFound + ' | *Processed:* ' + fileData.processing } });\nblocks.push({ type: 'divider' });\n\nif (ai.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.summary.slice(0, 2900) } });\n  blocks.push({ type: 'divider' });\n}\n\nextractions.slice(0, 8).forEach((ext, i) => {\n  const confEmoji = ext.confidence === 'high' ? ':large_green_circle:' : ext.confidence === 'low' ? ':red_circle:' : ':large_yellow_circle:';\n  let text = '*' + (i + 1) + '. ' + ext.fileName + '* ' + confEmoji + '\\n';\n  text += '_Category:_ ' + (ext.category || 'unknown') + ' | _Type:_ ' + (ext.fileType || 'unknown') + '\\n';\n  if (ext.keyFields) {\n    const fields = ext.keyFields;\n    if (fields.title) text += '*Title:* ' + fields.title + '\\n';\n    if (fields.date) text += '*Date:* ' + fields.date + '\\n';\n    if (fields.author) text += '*Author:* ' + fields.author + '\\n';\n  }\n  text += (ext.extractedText || '').slice(0, 400);\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 2900) } });\n  if (i < extractions.length - 1) blocks.push({ type: 'divider' });\n});\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Google Drive + Claude AI | One CLI' }] });\n\nconst fallback = 'Text Extraction: ' + extractions.length + ' files processed from Google Drive';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post extraction results to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

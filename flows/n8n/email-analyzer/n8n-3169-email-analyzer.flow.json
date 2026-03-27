@@ -1,0 +1,176 @@
+{
+  "key": "n8n-3169-email-analyzer",
+  "name": "AI email analyzer with PDF processing and Google Sheets logging",
+  "description": "Lists recent Gmail messages, uses Claude AI to analyze email content and extract key data, saves structured summaries to Google Sheets, and posts a consolidated report to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3169,
+    "url": "https://n8n.io/workflows/3169",
+    "originalName": "AI email analyzer: Process PDFs, images & save to Google Drive + Telegram",
+    "totalViews": 28577,
+    "rank": 217,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for listing emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "googleSheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving summaries",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for report delivery",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for the email analysis report"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Maximum number of recent emails to analyze"
+    },
+    "spreadsheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Email Analysis Report",
+      "description": "Name for the Google Sheets spreadsheet"
+    }
+  },
+  "steps": [
+    {
+      "id": "listEmails",
+      "name": "List recent Gmail messages",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "maxResults": "$.input.maxEmails"
+        }
+      }
+    },
+    {
+      "id": "extractEmails",
+      "name": "Extract email data for analysis",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.listEmails.response || {};\nconst messages = response.data?.messages || response.messages || [];\nlet emailData = '';\nconst emailCount = Math.min(messages.length, 10);\n\nmessages.slice(0, 10).forEach(function(msg, i) {\n  const headers = msg.payload?.headers || [];\n  let subject = '';\n  let from = '';\n  let date = '';\n  headers.forEach(function(h) {\n    if (h.name === 'Subject') subject = h.value || '';\n    if (h.name === 'From') from = h.value || '';\n    if (h.name === 'Date') date = h.value || '';\n  });\n  const snippet = msg.snippet || '';\n  emailData += '=== EMAIL ' + (i + 1) + ' ===\\n';\n  emailData += 'From: ' + from + '\\n';\n  emailData += 'Subject: ' + subject + '\\n';\n  emailData += 'Date: ' + date + '\\n';\n  emailData += 'Snippet: ' + snippet + '\\n\\n';\n});\n\nreturn { emailData: emailData, emailCount: emailCount };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for email analysis",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.extractEmails.output;\n\nlet prompt = 'You are an email analysis specialist. Analyze the following batch of emails and provide structured insights.\\n\\n';\nprompt += 'EMAILS TO ANALYZE: ' + data.emailCount + '\\n\\n';\nprompt += data.emailData + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Categorize each email (newsletter, personal, transactional, promotional, important, spam)\\n';\nprompt += '- Extract key action items from emails that require response\\n';\nprompt += '- Identify the most important emails\\n';\nprompt += '- Provide an overall inbox summary\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"inboxSummary\": \"2-3 sentence overview of the inbox\",\\n';\nprompt += '  \"emails\": [\\n';\nprompt += '    { \"index\": 1, \"from\": \"sender\", \"subject\": \"subject\", \"category\": \"category\", \"priority\": \"high|medium|low\", \"actionRequired\": true, \"actionItem\": \"what to do\", \"summary\": \"1 sentence\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"actionItems\": [\"action 1\", \"action 2\"],\\n';\nprompt += '  \"highPriorityCount\": 0,\\n';\nprompt += '  \"categories\": { \"newsletter\": 0, \"personal\": 0, \"transactional\": 0, \"promotional\": 0, \"important\": 0 }\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3169-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Analyze emails with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3169-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { inboxSummary: raw.slice(0, 300), emails: [], actionItems: [], highPriorityCount: 0, categories: {} }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build spreadsheet rows from email analysis",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst rows = [];\nconst emails = ai.emails || [];\nemails.forEach(function(e) {\n  rows.push([\n    String(e.index || ''),\n    e.from || '',\n    e.subject || '',\n    e.category || '',\n    e.priority || '',\n    e.actionRequired ? 'Yes' : 'No',\n    e.actionItem || '',\n    e.summary || ''\n  ]);\n});\nreturn { rows: rows, title: $.input.spreadsheetName };"
+      }
+    },
+    {
+      "id": "createSpreadsheet",
+      "name": "Save email analysis to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.googleSheetsKey",
+        "data": {
+          "title": "$.steps.buildSheetRows.output.title",
+          "sheets": [
+            {
+              "title": "Email Analysis",
+              "headers": [
+                "#",
+                "From",
+                "Subject",
+                "Category",
+                "Priority",
+                "Action Required",
+                "Action Item",
+                "Summary"
+              ],
+              "rows": "$.steps.buildSheetRows.output.rows"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Email Analysis Report', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: (ai.inboxSummary || 'Analysis complete.').slice(0, 1800) } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Emails Analyzed:*\\n' + ((ai.emails || []).length) },\n  { type: 'mrkdwn', text: '*High Priority:*\\n' + (ai.highPriorityCount || 0) }\n] });\nblocks.push({ type: 'divider' });\nconst actions = ai.actionItems || [];\nif (actions.length > 0) {\n  let actionText = '*Action Items:*\\n';\n  actions.slice(0, 8).forEach(function(a, i) { actionText += (i + 1) + '. ' + a + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: actionText.slice(0, 1800) } });\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Data saved to Google Sheets | Powered by Gmail + Claude AI' }] });\nconst fallbackText = 'Email Analysis: ' + ((ai.emails || []).length) + ' emails analyzed, ' + (ai.highPriorityCount || 0) + ' high priority';\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post email analysis report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

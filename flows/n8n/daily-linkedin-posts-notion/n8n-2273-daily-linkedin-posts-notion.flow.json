@@ -1,0 +1,135 @@
+{
+  "key": "n8n-2273-daily-linkedin-posts-notion",
+  "name": "Daily LinkedIn post publisher from Notion",
+  "description": "Fetches scheduled social media posts from a Notion database, uses Claude AI to polish and format the content for LinkedIn, and posts a ready-to-publish draft to Slack for review.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2273,
+    "url": "https://n8n.io/workflows/2273",
+    "originalName": "Automated Workflow for Daily LinkedIn Posts Using Notion",
+    "totalViews": 25512,
+    "rank": 250,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "notionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Notion connection key for reading the content database",
+      "connection": {
+        "platform": "notion"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the LinkedIn-ready draft",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the LinkedIn draft"
+    },
+    "notionDatabaseId": {
+      "type": "string",
+      "required": true,
+      "description": "Notion database ID containing social media posts (must have Title, Content, Status, and ScheduledDate properties)"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchPosts",
+      "name": "Query Notion database for today's scheduled posts",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5EnlW1AEk::mEAQjNttT1GjVqNeMTvDiw",
+        "connectionKey": "$.input.notionKey",
+        "data": {
+          "databaseId": "$.input.notionDatabaseId",
+          "filter": {
+            "and": [
+              {
+                "property": "Status",
+                "select": {
+                  "equals": "Ready"
+                }
+              }
+            ]
+          },
+          "page_size": 10
+        }
+      }
+    },
+    {
+      "id": "extractPosts",
+      "name": "Extract post content from Notion results",
+      "type": "code",
+      "code": {
+        "source": "var results = $.steps.fetchPosts.response.results || [];\nvar posts = results.map(function(page, i) {\n  var props = page.properties || {};\n  var title = '';\n  if (props.Title && props.Title.title && props.Title.title.length > 0) {\n    title = props.Title.title.map(function(t) { return t.plain_text || ''; }).join('');\n  }\n  if (!title && props.Name && props.Name.title && props.Name.title.length > 0) {\n    title = props.Name.title.map(function(t) { return t.plain_text || ''; }).join('');\n  }\n  var content = '';\n  if (props.Content && props.Content.rich_text) {\n    content = props.Content.rich_text.map(function(t) { return t.plain_text || ''; }).join('');\n  }\n  var scheduledDate = '';\n  if (props.ScheduledDate && props.ScheduledDate.date) {\n    scheduledDate = props.ScheduledDate.date.start || '';\n  }\n  return { index: i + 1, title: title, content: content, scheduledDate: scheduledDate, pageId: page.id };\n});\nvar postList = '';\nposts.forEach(function(p) {\n  postList += 'Post ' + p.index + ':\\n';\n  postList += '  Title: ' + p.title + '\\n';\n  postList += '  Content: ' + p.content.slice(0, 500) + '\\n';\n  postList += '  Date: ' + p.scheduledDate + '\\n\\n';\n});\nreturn { posts: posts, postList: postList, postCount: posts.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for LinkedIn post optimization",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.extractPosts.output;\nvar prompt = 'You are a LinkedIn content strategist. Transform the following draft posts into polished, engaging LinkedIn posts.\\n\\n';\nprompt += 'DRAFT POSTS (' + data.postCount + '):\\n' + data.postList + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Optimize each post for LinkedIn engagement\\n';\nprompt += '- Add a strong hook in the first line\\n';\nprompt += '- Use short paragraphs and line breaks for readability\\n';\nprompt += '- Include relevant hashtags (3-5 per post)\\n';\nprompt += '- Add a call-to-action at the end\\n';\nprompt += '- Keep each post under 1300 characters\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"posts\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"originalTitle\": \"...\",\\n';\nprompt += '      \"linkedinPost\": \"Full formatted LinkedIn post text\",\\n';\nprompt += '      \"hashtags\": [\"#tag1\", \"#tag2\"],\\n';\nprompt += '      \"estimatedEngagement\": \"High|Medium|Low\",\\n';\nprompt += '      \"bestTimeToPost\": \"e.g. Tuesday 9am EST\"\\n';\nprompt += '    }\\n';\nprompt += '  ]\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2273-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiOptimize",
+      "name": "Run Claude AI to optimize posts for LinkedIn",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2273-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiOptimize.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { posts: [{ originalTitle: 'Draft', linkedinPost: raw, hashtags: [], estimatedEngagement: 'Medium', bestTimeToPost: '' }] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message with LinkedIn drafts",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar posts = ai.posts || [];\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'LinkedIn Posts Ready for Review', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + posts.length + ' post(s)* from Notion, optimized for LinkedIn' } });\nblocks.push({ type: 'divider' });\nposts.forEach(function(p, i) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Post ' + (i + 1) + ': ' + (p.originalTitle || 'Untitled') + '*\\nEngagement: ' + (p.estimatedEngagement || '') + ' | Best time: ' + (p.bestTimeToPost || 'anytime') } });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: p.linkedinPost.slice(0, 2500) } });\n  if (p.hashtags && p.hashtags.length > 0) {\n    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: p.hashtags.join(' ') }] });\n  }\n  blocks.push({ type: 'divider' });\n});\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Generated from Notion via Claude AI + One CLI' }] });\nvar fallback = posts.length + ' LinkedIn post(s) ready for review';\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post LinkedIn drafts to Slack for review",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

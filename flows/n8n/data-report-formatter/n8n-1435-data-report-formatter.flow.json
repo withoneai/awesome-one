@@ -1,0 +1,115 @@
+{
+  "key": "n8n-1435-data-report-formatter",
+  "name": "AI Data Report Formatter",
+  "description": "Takes JSON data input, uses Claude AI to analyze, format, and transform it into a structured business report, and posts the formatted report to Slack with Block Kit formatting. Adapted from n8n's JSON-to-Excel file converter workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1435,
+    "url": "https://n8n.io/workflows/1435",
+    "originalName": "Convert JSON to an Excel file",
+    "totalViews": 46001,
+    "rank": 131,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the report",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the formatted report"
+    },
+    "jsonData": {
+      "type": "string",
+      "required": true,
+      "description": "JSON data to format into a report (stringified JSON array or object)"
+    },
+    "reportTitle": {
+      "type": "string",
+      "required": false,
+      "default": "Data Report",
+      "description": "Title for the formatted report"
+    },
+    "reportType": {
+      "type": "string",
+      "required": false,
+      "default": "summary",
+      "description": "Report type: summary, detailed, executive, comparison"
+    }
+  },
+  "steps": [
+    {
+      "id": "parseInput",
+      "name": "Parse and validate JSON input",
+      "type": "code",
+      "code": {
+        "source": "const raw = $.input.jsonData || '{}';\nlet data;\ntry { data = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch(e) { data = { rawText: raw }; }\n\nconst isArray = Array.isArray(data);\nconst recordCount = isArray ? data.length : 1;\nconst fields = isArray && data.length > 0 ? Object.keys(data[0]) : Object.keys(data);\nconst preview = JSON.stringify(isArray ? data.slice(0, 3) : data, null, 2).slice(0, 3000);\n\nreturn { data: JSON.stringify(data).slice(0, 30000), isArray, recordCount, fields, preview };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for report generation",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.parseInput.output;\nconst title = $.input.reportTitle || 'Data Report';\nconst reportType = $.input.reportType || 'summary';\n\nlet prompt = 'You are a data analyst. Transform the following JSON data into a well-formatted ' + reportType + ' report.\\n\\n';\nprompt += 'REPORT TITLE: ' + title + '\\n';\nprompt += 'REPORT TYPE: ' + reportType + '\\n';\nprompt += 'DATA INFO: ' + d.recordCount + ' records, Fields: ' + d.fields.join(', ') + '\\n\\n';\nprompt += 'DATA:\\n' + d.data + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- For summary: high-level overview, key metrics, trends\\n';\nprompt += '- For detailed: break down each record/group with analysis\\n';\nprompt += '- For executive: concise highlights, actionable recommendations\\n';\nprompt += '- For comparison: identify similarities, differences, rankings\\n';\nprompt += '- Calculate totals, averages, min/max where applicable\\n';\nprompt += '- Use Slack mrkdwn: *bold* (NOT **bold**), _italic_, numbered lists\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"report title\",\\n';\nprompt += '  \"highlight\": \"one-line key takeaway\",\\n';\nprompt += '  \"metrics\": [{ \"label\": \"Total Records\", \"value\": \"100\" }],\\n';\nprompt += '  \"sections\": [{ \"heading\": \"Section Title\", \"content\": \"formatted section content\" }],\\n';\nprompt += '  \"recommendations\": [\"recommendation 1\", \"recommendation 2\"],\\n';\nprompt += '  \"dataQualityNotes\": \"any issues with the input data\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1435-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI report generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1435-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: $.input.reportTitle || 'Data Report', highlight: '', metrics: [], sections: [{ heading: 'Report', content: raw.slice(0, 2900) }], recommendations: [], dataQualityNotes: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst d = $.steps.parseInput.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: (ai.title || 'Data Report').slice(0, 150), emoji: true } });\n\nif (ai.highlight) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':bulb: *Key Takeaway:* ' + ai.highlight } });\n}\n\nif (ai.metrics && ai.metrics.length > 0) {\n  let metricsText = '*Key Metrics:*\\n';\n  ai.metrics.forEach(m => { metricsText += '*' + m.label + ':* ' + m.value + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: metricsText.slice(0, 2900) } });\n}\nblocks.push({ type: 'divider' });\n\n(ai.sections || []).forEach(section => {\n  if (section.heading) {\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + section.heading + '*' } });\n  }\n  if (section.content) {\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: section.content.slice(0, 2900) } });\n  }\n  blocks.push({ type: 'divider' });\n});\n\nif (ai.recommendations && ai.recommendations.length > 0) {\n  let recText = ':white_check_mark: *Recommendations:*\\n';\n  ai.recommendations.forEach((r, i) => { recText += (i + 1) + '. ' + r + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: recText.slice(0, 2900) } });\n}\n\nif (ai.dataQualityNotes) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':mag: Data quality: ' + ai.dataQualityNotes }] });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Records: ' + d.recordCount + ' | Fields: ' + d.fields.join(', ') + ' | Generated with Claude AI | One CLI' }] });\n\nconst fallback = (ai.title || 'Data Report') + ': ' + d.recordCount + ' records - ' + (ai.highlight || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

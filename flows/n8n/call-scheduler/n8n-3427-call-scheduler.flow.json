@@ -1,0 +1,195 @@
+{
+  "key": "n8n-3427-call-scheduler",
+  "name": "AI Call Scheduler",
+  "description": "Checks Airtable for contacts that need calls scheduled, fetches Google Calendar availability, uses Claude AI to suggest optimal meeting times considering schedules and preferences, and posts the scheduling suggestions to Slack. Adapted from n8n's voice AI receptionist call scheduling workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3427,
+    "url": "https://n8n.io/workflows/3427",
+    "originalName": "Automate call scheduling with Voice AI receptionist using Vapi, Google Calendar & Airtable",
+    "totalViews": 47234,
+    "rank": 128,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "airtableKey": {
+      "type": "string",
+      "required": true,
+      "description": "Airtable connection key for fetching contacts",
+      "connection": {
+        "platform": "airtable"
+      }
+    },
+    "calendarKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Calendar connection key for checking availability",
+      "connection": {
+        "platform": "google-calendar"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting suggestions",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "baseId": {
+      "type": "string",
+      "required": true,
+      "description": "Airtable base ID containing contacts"
+    },
+    "tableName": {
+      "type": "string",
+      "required": true,
+      "description": "Airtable table name with contacts to schedule"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post scheduling suggestions"
+    },
+    "meetingDuration": {
+      "type": "number",
+      "required": false,
+      "default": 30,
+      "description": "Default meeting duration in minutes (default: 30)"
+    },
+    "workHoursStart": {
+      "type": "number",
+      "required": false,
+      "default": 9,
+      "description": "Work day start hour (default: 9)"
+    },
+    "workHoursEnd": {
+      "type": "number",
+      "required": false,
+      "default": 17,
+      "description": "Work day end hour (default: 17)"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchContacts",
+      "name": "Fetch contacts from Airtable that need scheduling",
+      "type": "action",
+      "action": {
+        "platform": "airtable",
+        "actionId": "conn_mod_def::GJz_YE7BwKk::1sPbZAuRTkWvELUJh-6mcw",
+        "connectionKey": "$.input.airtableKey",
+        "pathVars": {
+          "baseId": "$.input.baseId",
+          "tableIdOrName": "$.input.tableName"
+        },
+        "queryParams": {
+          "maxRecords": 20
+        }
+      }
+    },
+    {
+      "id": "extractContacts",
+      "name": "Extract contact details from Airtable records",
+      "type": "code",
+      "code": {
+        "source": "const records = $.steps.fetchContacts.response.records || [];\nconst contacts = records.map(r => {\n  const fields = r.fields || {};\n  return {\n    id: r.id,\n    name: fields.Name || fields.name || fields['Contact Name'] || 'Unknown',\n    email: fields.Email || fields.email || '',\n    phone: fields.Phone || fields.phone || '',\n    company: fields.Company || fields.company || '',\n    notes: fields.Notes || fields.notes || fields.Description || '',\n    priority: fields.Priority || fields.priority || 'normal',\n    preferredTime: fields['Preferred Time'] || fields.preferredTime || ''\n  };\n});\n\nlet contactSummary = '';\ncontacts.forEach((c, i) => {\n  contactSummary += (i + 1) + '. ' + c.name;\n  if (c.company) contactSummary += ' (' + c.company + ')';\n  if (c.email) contactSummary += ' - ' + c.email;\n  if (c.priority) contactSummary += ' [' + c.priority + ']';\n  if (c.preferredTime) contactSummary += ' prefers: ' + c.preferredTime;\n  if (c.notes) contactSummary += '\\n   Notes: ' + c.notes.slice(0, 200);\n  contactSummary += '\\n';\n});\n\nreturn { contacts, contactCount: contacts.length, contactSummary };"
+      }
+    },
+    {
+      "id": "getDateRange",
+      "name": "Calculate date range for calendar query",
+      "type": "code",
+      "code": {
+        "source": "const now = new Date();\nconst endDate = new Date(now);\nendDate.setDate(now.getDate() + 7);\n\nconst todayStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });\nconst workStart = $.input.workHoursStart || 9;\nconst workEnd = $.input.workHoursEnd || 17;\n\nreturn { timeMin: now.toISOString(), timeMax: endDate.toISOString(), today: todayStr, workStart, workEnd };"
+      }
+    },
+    {
+      "id": "fetchCalendar",
+      "name": "Fetch calendar events for the next week",
+      "type": "action",
+      "action": {
+        "platform": "google-calendar",
+        "actionId": "conn_mod_def::GJ6RlnIYK20::YzuWSmaVQgurletRDNJavA",
+        "connectionKey": "$.input.calendarKey",
+        "pathVars": {
+          "calendarId": "primary"
+        },
+        "queryParams": {
+          "timeMin": "$.steps.getDateRange.output.timeMin",
+          "timeMax": "$.steps.getDateRange.output.timeMax",
+          "singleEvents": true,
+          "orderBy": "startTime",
+          "maxResults": 50
+        }
+      }
+    },
+    {
+      "id": "compileSchedule",
+      "name": "Compile calendar schedule",
+      "type": "code",
+      "code": {
+        "source": "const events = $.steps.fetchCalendar.response.items || $.steps.fetchCalendar.response.data || [];\nlet schedule = '';\nlet eventCount = 0;\n\nif (Array.isArray(events)) {\n  events.forEach((e, i) => {\n    const startTime = e.start ? (e.start.dateTime || e.start.date || '') : '';\n    const endTime = e.end ? (e.end.dateTime || e.end.date || '') : '';\n    schedule += 'EVENT ' + (i + 1) + ': ' + (e.summary || '(no title)') + '\\n';\n    schedule += '  Start: ' + startTime + ' | End: ' + endTime + '\\n';\n    eventCount++;\n  });\n}\n\nreturn { schedule, eventCount };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for scheduling",
+      "type": "code",
+      "code": {
+        "source": "const contacts = $.steps.extractContacts.output;\nconst cal = $.steps.compileSchedule.output;\nconst dr = $.steps.getDateRange.output;\nconst duration = $.input.meetingDuration || 30;\n\nlet prompt = 'You are an expert scheduling assistant. Suggest optimal meeting times for each contact based on calendar availability and contact preferences.\\n\\n';\nprompt += 'CURRENT DATE: ' + dr.today + '\\n';\nprompt += 'WORK HOURS: ' + dr.workStart + ':00 to ' + dr.workEnd + ':00\\n';\nprompt += 'MEETING DURATION: ' + duration + ' minutes each\\n\\n';\nprompt += 'CONTACTS TO SCHEDULE (' + contacts.contactCount + ' contacts):\\n';\nprompt += contacts.contactSummary + '\\n\\n';\nprompt += 'EXISTING CALENDAR (' + cal.eventCount + ' events):\\n';\nprompt += cal.schedule + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- For each contact, suggest 2-3 available time slots\\n';\nprompt += '- Respect contact preferred times if specified\\n';\nprompt += '- Prioritize high-priority contacts for prime time slots\\n';\nprompt += '- Leave buffer time (15 min) between meetings\\n';\nprompt += '- Avoid scheduling on the same day too densely\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"schedulingSuggestions\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"contactName\": \"name\",\\n';\nprompt += '      \"priority\": \"high|normal|low\",\\n';\nprompt += '      \"suggestedSlots\": [{ \"day\": \"Monday\", \"date\": \"YYYY-MM-DD\", \"time\": \"10:00-10:30\", \"quality\": \"ideal|good|okay\" }],\\n';\nprompt += '      \"notes\": \"scheduling notes\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"weekOverview\": \"summary of the scheduling plan\",\\n';\nprompt += '  \"conflicts\": [\"any scheduling concerns\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3427-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI scheduling analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3427-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { schedulingSuggestions: [], weekOverview: raw, conflicts: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit scheduling message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst contactCount = $.steps.extractContacts.output.contactCount;\nconst dr = $.steps.getDateRange.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Call Scheduling Suggestions', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Date:* ' + dr.today + ' | *Contacts:* ' + contactCount + ' | *Duration:* ' + ($.input.meetingDuration || 30) + ' min each' } });\n\nif (ai.weekOverview) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Overview:* ' + ai.weekOverview.slice(0, 1800) } });\n}\nblocks.push({ type: 'divider' });\n\n(ai.schedulingSuggestions || []).forEach((s, i) => {\n  const priorityIcon = s.priority === 'high' ? ':red_circle:' : s.priority === 'low' ? ':white_circle:' : ':large_blue_circle:';\n  let text = priorityIcon + ' *' + s.contactName + '* [' + s.priority + ']\\n';\n  (s.suggestedSlots || []).forEach((slot, j) => {\n    const qualityIcon = slot.quality === 'ideal' ? ':star:' : slot.quality === 'good' ? ':white_check_mark:' : ':ok:';\n    text += '  ' + qualityIcon + ' ' + slot.day + ' ' + slot.date + ' ' + slot.time + '\\n';\n  });\n  if (s.notes) text += '  _' + s.notes + '_\\n';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 2900) } });\n  if (i < (ai.schedulingSuggestions || []).length - 1) {\n    blocks.push({ type: 'divider' });\n  }\n});\n\nif (ai.conflicts && ai.conflicts.length > 0) {\n  blocks.push({ type: 'divider' });\n  let conflictText = ':warning: *Scheduling Concerns:*\\n';\n  ai.conflicts.forEach((c, i) => { conflictText += (i + 1) + '. ' + c + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: conflictText.slice(0, 2900) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Airtable + Google Calendar + Claude AI | One CLI' }] });\n\nconst fallback = 'Call Scheduling: ' + contactCount + ' contacts - ' + (ai.weekOverview || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post scheduling suggestions to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

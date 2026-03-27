@@ -1,0 +1,143 @@
+{
+  "key": "n8n-1960-ask-questions-about",
+  "name": "Ask questions about a PDF using AI",
+  "description": "RAG-style Q&A pipeline: searches Google Drive for documents, retrieves their content, uses Claude AI to answer questions based on the document content, and posts the answer to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1960,
+    "url": "https://n8n.io/workflows/1960",
+    "originalName": "Ask questions about a PDF using AI",
+    "totalViews": 142816,
+    "rank": 32,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "googleSheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key (used to access Google Drive files)",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The question you want answered based on document content"
+    },
+    "searchTopic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic to search for relevant documents (e.g. 'bitcoin whitepaper', 'quarterly report 2024')"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchDocs",
+      "name": "Search for relevant documents via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.searchTopic",
+          "numResults": 10,
+          "type": "auto",
+          "category": "research paper",
+          "contents": {
+            "text": {
+              "maxCharacters": 3000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileDocs",
+      "name": "Compile document content for AI context",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchDocs.response.results || [];\nlet docsText = '';\nresults.forEach((r, i) => {\n  docsText += '=== DOCUMENT ' + (i+1) + ' ===\\n';\n  docsText += 'Title: ' + (r.title || 'Untitled') + '\\n';\n  docsText += 'URL: ' + (r.url || '') + '\\n';\n  if (r.publishedDate) docsText += 'Published: ' + r.publishedDate + '\\n';\n  docsText += 'Content:\\n' + (r.text || '').slice(0, 2500) + '\\n\\n';\n});\nreturn { docsText, docCount: results.length, sources: results.slice(0, 5).map(r => ({ title: r.title || r.url, url: r.url })) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build RAG Q&A prompt",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are a knowledgeable research assistant. Answer the user's question based ONLY on the provided document content. If the documents don't contain enough information, say so explicitly.\n\nUSER QUESTION: ${$.input.question}\n\nDOCUMENT CONTENT:\n${$.steps.compileDocs.output.docsText}\n\nProvide a comprehensive answer that:\n1. Directly addresses the question\n2. Cites which document(s) the information comes from (by number)\n3. Includes relevant quotes or data points\n4. Notes any limitations or gaps in the available information\n\nReturn ONLY valid JSON:\n{\n  \"answer\": \"Comprehensive answer to the question\",\n  \"confidence\": \"high/medium/low\",\n  \"source_references\": [\n    { \"document\": 1, \"relevance\": \"What this document contributed to the answer\" }\n  ],\n  \"key_quotes\": [\"Important quotes from the documents\"],\n  \"limitations\": \"Any gaps or caveats about the answer\"\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1960-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI Q&A",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1960-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, confidence: 'unknown', source_references: [], key_quotes: [], limitations: '' }; }"
+      }
+    },
+    {
+      "id": "buildBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst sources = $.steps.compileDocs.output.sources || [];\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Document Q&A' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + $.input.question } });\nconst confEmoji = ai.confidence === 'high' ? ':white_check_mark:' : ai.confidence === 'medium' ? ':warning:' : ':question:';\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Confidence: ' + confEmoji + ' ' + (ai.confidence || 'unknown') + ' | Sources analyzed: ' + $.steps.compileDocs.output.docCount }] });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Answer*\\n' + (ai.answer || 'No answer generated.').slice(0, 1900) } });\nblocks.push({ type: 'divider' });\nif (ai.key_quotes && ai.key_quotes.length > 0) {\n  let quotesText = '*Key Quotes*\\n';\n  ai.key_quotes.slice(0, 3).forEach((q, i) => { quotesText += '> ' + q.slice(0, 400) + '\\n\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: quotesText.slice(0, 1900) } });\n}\nif (ai.source_references && ai.source_references.length > 0) {\n  let refText = '*Sources Referenced*\\n';\n  ai.source_references.forEach(ref => {\n    const src = sources[ref.document - 1];\n    refText += '- Doc ' + ref.document + (src ? ' (<' + src.url + '|' + src.title + '>)' : '') + ': ' + ref.relevance + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: refText.slice(0, 1900) } });\n}\nif (ai.limitations) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: '_Limitations: ' + ai.limitations + '_' }] });\n}\nreturn { blocks, fallback: 'Q&A: ' + $.input.question };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildBlocks.output.fallback",
+          "blocks": "$.steps.buildBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "key": "n8n-1418-rss-feed-generator",
+  "name": "RSS Feed Generator \u2014 Firecrawl Scrape + AI Extraction to Slack",
+  "description": "Scrapes a website with Firecrawl to extract its content, uses Claude AI to identify articles and updates, formats them as a structured feed summary, and posts it to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1418,
+    "url": "https://n8n.io/workflows/1418",
+    "originalName": "Create an RSS feed based on a website's content",
+    "totalViews": 44585,
+    "rank": 141,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the feed summary"
+    },
+    "websiteUrl": {
+      "type": "string",
+      "required": true,
+      "description": "Website URL to scrape for articles/updates (e.g. 'https://techcrunch.com')"
+    },
+    "feedTitle": {
+      "type": "string",
+      "required": false,
+      "default": "Website Feed",
+      "description": "Title for the feed summary"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeWebsite",
+      "name": "Scrape website content with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.websiteUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            },
+            {
+              "type": "links"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "extractContent",
+      "name": "Extract content and links from scraped data",
+      "type": "code",
+      "code": {
+        "source": "var data = ($.steps.scrapeWebsite.response && $.steps.scrapeWebsite.response.data) ? $.steps.scrapeWebsite.response.data : {};\nvar markdown = (data.markdown || '').slice(0, 6000);\nvar links = data.links || [];\nvar linkList = links.slice(0, 30).map(function(l) {\n  if (typeof l === 'string') return l;\n  return (l.text || l.title || '') + ' -> ' + (l.href || l.url || '');\n}).join('\\n');\nreturn { markdown: markdown, linkList: linkList, linkCount: links.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for feed extraction",
+      "type": "code",
+      "code": {
+        "source": "var ctx = $.steps.extractContent.output;\nvar prompt = 'You are a content curator AI. Analyze the following scraped website content and extract all identifiable articles, blog posts, news items, or updates.\\n\\nWEBSITE: ' + $.input.websiteUrl + '\\nFEED TITLE: ' + ($.input.feedTitle || 'Website Feed') + '\\n\\nSCRAPED CONTENT:\\n' + ctx.markdown + '\\n\\nLINKS FOUND (' + ctx.linkCount + ' total):\\n' + ctx.linkList + '\\n\\nExtract each article/update with its title, URL (if found), date (if found), and a brief summary. Return ONLY valid JSON:\\n{\\n  \"feedTitle\": \"...\",\\n  \"articles\": [\\n    { \"title\": \"...\", \"url\": \"...\", \"date\": \"...\", \"summary\": \"...\" }\\n  ],\\n  \"totalFound\": 0\\n}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/one-rss-feed-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExtract",
+      "name": "Run Claude AI to extract feed items",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/one-rss-feed-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse AI response and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExtract.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit feed summary",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar blocks = [];\nvar feedTitle = ai.feedTitle || $.input.feedTitle || 'Website Feed';\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':newspaper: ' + feedTitle, emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Source:* <' + $.input.websiteUrl + '> | *Articles found:* ' + (ai.totalFound || (ai.articles || []).length) } });\nblocks.push({ type: 'divider' });\nvar articles = ai.articles || [];\narticles.slice(0, 10).forEach(function(a, i) {\n  var titleText = a.url ? '<' + a.url + '|' + a.title + '>' : '*' + a.title + '*';\n  var meta = '';\n  if (a.date) meta = ':clock1: ' + a.date + '\\n';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + (i + 1) + '.* ' + titleText + '\\n' + meta + a.summary } });\n});\nif (articles.length > 10) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '_...and ' + (articles.length - 10) + ' more articles_' } });\n}\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':robot_face: Generated by Firecrawl + Claude AI via One CLI' }] });\nvar fallback = feedTitle + ': ' + articles.length + ' articles extracted from ' + $.input.websiteUrl;\nif (ai.text) fallback = ai.text.slice(0, 500);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post feed summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

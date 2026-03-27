@@ -1,0 +1,170 @@
+{
+  "key": "n8n-5910-social-video-content-planner",
+  "name": "AI Social Video Content Planner with Captions and Logging",
+  "description": "Generates a social media video content plan with Claude AI, creates optimized captions and hashtags, logs content to Google Sheets for tracking, and notifies via Slack. Designed for Instagram Reels, TikTok, and YouTube Shorts.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5910,
+    "url": "https://n8n.io/workflows/5910",
+    "originalName": "Auto-generate and post Instagram reels with Veo3, OpenAI, and Blotato",
+    "totalViews": 22234,
+    "rank": 276,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for trend research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "contentTopic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic or niche for social video content (e.g. 'AI productivity tips', 'cooking hacks')"
+    },
+    "numberOfPosts": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Number of content ideas to generate"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for content calendar"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Content Calendar",
+      "description": "Sheet tab name"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for notifications"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildExaQuery",
+      "name": "Build Exa query for trending social content",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.contentTopic || '';\nconst query = 'trending Instagram Reels TikTok ' + topic + ' viral content ideas';\nreturn { query };"
+      }
+    },
+    {
+      "id": "researchTrends",
+      "name": "Research trending content via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildExaQuery.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 300
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for content plan generation",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.contentTopic;\nconst count = $.input.numberOfPosts || 5;\nconst results = $.steps.researchTrends.response.results || [];\nlet trends = '';\nresults.forEach((r, i) => { trends += (i + 1) + '. ' + (r.title || r.url) + ': ' + (r.text || '').slice(0, 150) + '\\n'; });\n\nconst prompt = 'You are a social media content strategist specializing in short-form video. Generate a content plan for ' + count + ' social media video posts.\\n\\nTOPIC/NICHE: ' + topic + '\\n\\nTRENDING INSIGHTS:\\n' + trends + '\\n\\nReturn ONLY valid JSON:\\n{\\n  \"posts\": [\\n    {\\n      \"postNumber\": 1,\\n      \"concept\": \"video concept in one line\",\\n      \"hook\": \"first 3-second hook text\",\\n      \"script\": \"full narration script (15-30 seconds)\",\\n      \"caption\": \"Instagram/TikTok caption with emoji\",\\n      \"hashtags\": [\"hashtag1\", \"hashtag2\"],\\n      \"musicStyle\": \"background music suggestion\",\\n      \"visualStyle\": \"description of visual treatment\",\\n      \"bestPostingTime\": \"recommended day and time\",\\n      \"platform\": \"IG Reels/TikTok/YT Shorts/All\"\\n    }\\n  ],\\n  \"weeklyTheme\": \"overarching content theme\",\\n  \"contentStrategy\": \"brief strategy notes\"\\n}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5910-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Generate content plan with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5910-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { posts: [], weeklyTheme: raw.slice(0, 200) }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build rows for Google Sheets content calendar",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst posts = ai.posts || [];\nconst date = new Date().toISOString().split('T')[0];\nconst rows = posts.map(p => [\n  date,\n  p.postNumber || '',\n  p.concept || '',\n  p.hook || '',\n  p.script || '',\n  p.caption || '',\n  (p.hashtags || []).join(' '),\n  p.platform || 'All',\n  p.bestPostingTime || '',\n  'Draft'\n]);\nconst slackText = 'Content plan generated: ' + posts.length + ' posts for \"' + $.input.contentTopic + '\" | Theme: ' + (ai.weeklyTheme || 'N/A');\nreturn { rows, slackText };"
+      }
+    },
+    {
+      "id": "writeToSheets",
+      "name": "Log content plan to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": "$.steps.buildSheetRows.output.rows"
+        }
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Notify Slack of content plan completion",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSheetRows.output.slackText"
+        }
+      }
+    }
+  ]
+}

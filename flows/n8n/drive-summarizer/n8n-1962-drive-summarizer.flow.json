@@ -1,0 +1,131 @@
+{
+  "key": "n8n-1962-drive-summarizer",
+  "name": "Google Drive File Summarizer",
+  "description": "List files from Google Drive, use Claude AI to summarize their content, and post a structured summary to Slack. Ideal for quickly digesting documents across a Drive folder.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1962,
+    "url": "https://n8n.io/workflows/1962",
+    "originalName": "Load and summarize Google Drive files with AI",
+    "totalViews": 35732,
+    "rank": 174,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the file summaries"
+    },
+    "driveQuery": {
+      "type": "string",
+      "required": false,
+      "default": "mimeType != 'application/vnd.google-apps.folder'",
+      "description": "Google Drive search query to filter files (default: all non-folder files)"
+    },
+    "maxFiles": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Maximum number of files to summarize"
+    }
+  },
+  "steps": [
+    {
+      "id": "listDriveFiles",
+      "name": "List files from Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "queryParams": {
+          "q": "$.input.driveQuery",
+          "pageSize": "$.input.maxFiles",
+          "fields": "files(id,name,mimeType,modifiedTime,size,webViewLink)"
+        }
+      }
+    },
+    {
+      "id": "compileFileList",
+      "name": "Compile file metadata for AI analysis",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar files = [];\nvar resp = fb($.steps.listDriveFiles.response, {});\nvar rawFiles = fb(resp.files, []);\n\nrawFiles.forEach(function(f, i) {\n  files.push({\n    index: i + 1,\n    name: fb(f.name, 'Untitled'),\n    mimeType: fb(f.mimeType, 'unknown'),\n    modified: fb(f.modifiedTime, 'unknown'),\n    size: fb(f.size, 'unknown'),\n    link: fb(f.webViewLink, '')\n  });\n});\n\nvar fileList = '';\nfiles.forEach(function(f) {\n  fileList += f.index + '. ' + f.name + ' (' + f.mimeType + ')\\n';\n  fileList += '   Modified: ' + f.modified + ' | Size: ' + f.size + ' bytes\\n';\n  fileList += '   Link: ' + f.link + '\\n\\n';\n});\n\nreturn { files: files, fileList: fileList, fileCount: files.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude analysis prompt",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileFileList.output;\n\nvar prompt = 'You are a document analyst. Given the following Google Drive file listing, provide a structured summary and organization of the files.\\n\\n';\nprompt += 'FILE LISTING (' + data.fileCount + ' files):\\n\\n';\nprompt += data.fileList + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Categorize files by type and purpose\\n';\nprompt += '- Identify the most recently modified files\\n';\nprompt += '- Suggest which files might need attention or review\\n';\nprompt += '- Note any patterns in file naming or organization\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"summary\": \"2-3 sentence overview of the Drive contents\",\\n';\nprompt += '  \"categories\": [{ \"name\": \"category\", \"files\": [\"file names\"], \"description\": \"what these files contain\" }],\\n';\nprompt += '  \"recentlyModified\": [{ \"name\": \"file name\", \"modified\": \"date\", \"note\": \"why it might be relevant\" }],\\n';\nprompt += '  \"actionItems\": [\"suggested action 1\", \"suggested action 2\"],\\n';\nprompt += '  \"totalFiles\": 0\\n';\nprompt += '}';\n\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/drive-summarizer-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/drive-summarizer-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse Claude response",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiAnalysis.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, categories: [], totalFiles: $.steps.compileFileList.output.fileCount }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseResponse.output;\nvar fileCount = $.steps.compileFileList.output.fileCount;\n\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':file_folder: Google Drive Summary \u2014 ' + fileCount + ' files', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: fb(ai.summary, fileCount) + ' file(s) analyzed.' } });\nblocks.push({ type: 'divider' });\n\nvar categories = fb(ai.categories, []);\ncategories.forEach(function(cat) {\n  var catText = '*' + cat.name + '*\\n';\n  catText += cat.description + '\\n';\n  var catFiles = fb(cat.files, []);\n  catFiles.forEach(function(f) { catText += '  - ' + f + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: catText } });\n});\n\nvar recent = fb(ai.recentlyModified, []);\nif (recent.length > 0) {\n  blocks.push({ type: 'divider' });\n  var recentText = '*:clock1: Recently Modified*\\n';\n  recent.forEach(function(r) {\n    recentText += '- *' + r.name + '* (' + r.modified + '): ' + (fb(r.note, '')) + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: recentText } });\n}\n\nvar actions = fb(ai.actionItems, []);\nif (actions.length > 0) {\n  blocks.push({ type: 'divider' });\n  var actionText = '*:pushpin: Suggested Actions*\\n';\n  actions.forEach(function(a, i) { actionText += (i + 1) + '. ' + a + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: actionText } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Google Drive + Claude AI + One CLI' }] });\n\nvar fallback = 'Google Drive Summary: ' + fileCount + ' files analyzed';\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

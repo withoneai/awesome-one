@@ -1,0 +1,137 @@
+{
+  "key": "n8n-2907-human-loop-email",
+  "name": "Human-in-the-Loop Email Responder",
+  "description": "Fetch recent emails from Gmail, use Claude AI to draft replies, and post the drafts to Slack for human review before sending. A simple but effective email triage and response system.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2907,
+    "url": "https://n8n.io/workflows/2907",
+    "originalName": "A very simple Human in the Loop email response system using AI and IMAP",
+    "totalViews": 33226,
+    "rank": 181,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailListKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "gmail"
+      },
+      "description": "Gmail connection key for listing emails"
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post draft replies for review"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Maximum number of recent emails to process"
+    },
+    "emailLabel": {
+      "type": "string",
+      "required": false,
+      "default": "INBOX",
+      "description": "Gmail label to filter emails (e.g. INBOX, UNREAD)"
+    },
+    "replyTone": {
+      "type": "string",
+      "required": false,
+      "default": "professional and friendly",
+      "description": "Tone for drafted replies (e.g. 'formal', 'casual', 'professional and friendly')"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchEmails",
+      "name": "Fetch recent emails from Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailListKey",
+        "queryParams": {
+          "labelIds": "$.input.emailLabel",
+          "maxResults": "$.input.maxEmails"
+        }
+      }
+    },
+    {
+      "id": "compileEmails",
+      "name": "Compile email data for AI processing",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar resp = fb($.steps.fetchEmails.response, {});\nvar messages = fb(resp.messages, []);\nvar replyTone = fb($.input.replyTone, 'professional and friendly');\n\nvar emailData = '';\nmessages.forEach(function(msg, i) {\n  var headers = msg.payload ? (fb(msg.payload.headers, [])) : [];\n  var subject = '';\n  var from = '';\n  var date = '';\n  headers.forEach(function(h) {\n    if (h.name === 'Subject') subject = h.value;\n    if (h.name === 'From') from = h.value;\n    if (h.name === 'Date') date = h.value;\n  });\n  var snippet = fb(msg.snippet, '');\n  emailData += '--- Email ' + (i + 1) + ' ---\\n';\n  emailData += 'From: ' + from + '\\n';\n  emailData += 'Subject: ' + subject + '\\n';\n  emailData += 'Date: ' + date + '\\n';\n  emailData += 'Preview: ' + snippet.slice(0, 500) + '\\n\\n';\n});\n\nreturn { emailData: emailData, emailCount: messages.length, replyTone: replyTone };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for email reply drafting",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileEmails.output;\n\nvar prompt = 'You are an email assistant. For each email below, draft a reply that is ' + data.replyTone + '. Also provide a summary and priority assessment.\\n\\n';\nprompt += 'EMAILS TO PROCESS (' + data.emailCount + '):\\n\\n';\nprompt += data.emailData + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Draft a concise, appropriate reply for each email\\n';\nprompt += '- Assess priority: urgent, normal, or low\\n';\nprompt += '- Summarize each email in one sentence\\n';\nprompt += '- Flag any emails that should NOT get an auto-reply (e.g. newsletters, no-reply)\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"summary\": \"overview of the email batch\",\\n';\nprompt += '  \"emails\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"from\": \"sender\",\\n';\nprompt += '      \"subject\": \"subject line\",\\n';\nprompt += '      \"oneSentenceSummary\": \"what this email is about\",\\n';\nprompt += '      \"priority\": \"urgent/normal/low\",\\n';\nprompt += '      \"shouldReply\": true,\\n';\nprompt += '      \"draftReply\": \"the drafted reply text\",\\n';\nprompt += '      \"replyNotes\": \"any notes about the reply\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"urgentCount\": 0,\\n';\nprompt += '  \"skipCount\": 0\\n';\nprompt += '}';\n\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/email-reply-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiDraft",
+      "name": "Draft replies with Claude",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/email-reply-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse Claude response",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiDraft.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, emails: [], urgentCount: 0 }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseResponse.output;\n\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':email: Email Drafts for Review', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: fb(ai.summary, 'Email drafts ready for review.') } });\n\nvar urgentCount = fb(ai.urgentCount, 0);\nvar skipCount = fb(ai.skipCount, 0);\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':rotating_light: *Urgent:* ' + urgentCount + '  |  :fast_forward: *Auto-skip:* ' + skipCount + '  |  *Total:* ' + (fb(ai.emails, [])).length }] });\nblocks.push({ type: 'divider' });\n\nvar emails = fb(ai.emails, []);\nemails.forEach(function(email) {\n  var priorityIcon = ':white_circle:';\n  if (email.priority === 'urgent') priorityIcon = ':red_circle:';\n  if (email.priority === 'normal') priorityIcon = ':large_blue_circle:';\n\n  var emailText = priorityIcon + ' *' + (fb(email.subject, 'No Subject')) + '*\\n';\n  emailText += '_From:_ ' + (fb(email.from, 'Unknown')) + '\\n';\n  emailText += '_Summary:_ ' + (fb(email.oneSentenceSummary, '')) + '\\n';\n\n  if (email.shouldReply) {\n    emailText += '\\n*Draft Reply:*\\n> ' + (fb(email.draftReply, '')).replace(/\\n/g, '\\n> ') + '\\n';\n    if (email.replyNotes) emailText += '\\n_Note:_ ' + email.replyNotes;\n  } else {\n    emailText += '\\n_:no_entry_sign: Recommended: Do not reply_';\n    if (email.replyNotes) emailText += ' \u2014 ' + email.replyNotes;\n  }\n\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: emailText } });\n  blocks.push({ type: 'divider' });\n});\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':point_up: Review and approve before sending | Powered by Gmail + Claude AI + One CLI' }] });\n\nvar fallback = 'Email Drafts: ' + (fb(ai.emails, [])).length + ' replies drafted for review';\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post draft replies to Slack for review",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

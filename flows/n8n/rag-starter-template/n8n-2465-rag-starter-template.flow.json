@@ -1,0 +1,133 @@
+{
+  "key": "n8n-2465-rag-starter-template",
+  "name": "RAG knowledge retrieval with Exa and Claude",
+  "description": "Takes a user question, performs knowledge retrieval using Exa web search, feeds the retrieved context to Claude AI for a grounded answer, and posts the response to Slack with source citations.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5010,
+    "url": "https://n8n.io/workflows/5010",
+    "originalName": "RAG Starter Template using Simple Vector Stores, Form trigger and OpenAI",
+    "totalViews": 95058,
+    "rank": 53,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the answer"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The question to answer using RAG retrieval"
+    },
+    "numResults": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Number of Exa search results to retrieve"
+    }
+  },
+  "steps": [
+    {
+      "id": "exaSearch",
+      "name": "Search for relevant knowledge with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": "$.input.numResults",
+          "type": "neural",
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "compileContext",
+      "name": "Compile search results into context",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.exaSearch.response || {};\nconst data = response.data || response;\nconst results = data.results || [];\n\nlet context = '';\nconst sources = [];\n\nresults.slice(0, 10).forEach((r, i) => {\n  const title = r.title || 'Source ' + (i + 1);\n  const url = r.url || '';\n  const text = (r.text || r.snippet || '').slice(0, 2000);\n  context += '=== SOURCE ' + (i + 1) + ' ===\\n';\n  context += 'Title: ' + title + '\\n';\n  context += 'URL: ' + url + '\\n';\n  context += 'Content:\\n' + text + '\\n\\n';\n  sources.push({ title, url });\n});\n\nreturn { context, sources, resultCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build RAG prompt with retrieved context",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst ctx = $.steps.compileContext.output;\n\nlet prompt = 'You are a knowledgeable assistant that answers questions using retrieved context. Use ONLY the provided sources to answer. If the sources do not contain enough information, say so clearly.\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n\\n';\nprompt += 'RETRIEVED CONTEXT (' + ctx.resultCount + ' sources):\\n' + ctx.context + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Answer the question thoroughly using the provided sources\\n';\nprompt += '- Cite source numbers in your answer (e.g., [Source 1])\\n';\nprompt += '- If sources conflict, note the discrepancy\\n';\nprompt += '- Be concise but comprehensive (200-400 words)\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"your detailed answer with source citations\",\\n';\nprompt += '  \"confidence\": \"high|medium|low\",\\n';\nprompt += '  \"sourcesUsed\": [1, 2, 3],\\n';\nprompt += '  \"keyPoints\": [\"point1\", \"point2\"],\\n';\nprompt += '  \"followUpQuestions\": [\"question1\"]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2465-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for RAG answer generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2465-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, confidence: 'unknown', sourcesUsed: [], keyPoints: [], followUpQuestions: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit answer with sources",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst ctx = $.steps.compileContext.output;\nconst question = $.input.question;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'RAG Knowledge Answer', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Sources Retrieved:*\\n' + ctx.resultCount },\n  { type: 'mrkdwn', text: '*Confidence:*\\n' + (ai.confidence || 'N/A') }\n] });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No answer generated.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Answer:*\\n' + answerText } });\n\nif (ai.keyPoints && ai.keyPoints.length > 0) {\n  let kpText = '*Key Points:*\\n';\n  ai.keyPoints.slice(0, 5).forEach((kp, i) => { kpText += (i + 1) + '. ' + kp + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kpText.slice(0, 1800) } });\n}\n\nif (ctx.sources && ctx.sources.length > 0) {\n  blocks.push({ type: 'divider' });\n  let srcText = '*Sources:*\\n';\n  ctx.sources.slice(0, 5).forEach((s, i) => {\n    srcText += (i + 1) + '. <' + s.url + '|' + (s.title || 'Source') + '>\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText.slice(0, 1800) } });\n}\n\nif (ai.followUpQuestions && ai.followUpQuestions.length > 0) {\n  let fuText = '*Follow-up Questions:*\\n';\n  ai.followUpQuestions.slice(0, 3).forEach((q, i) => { fuText += '- ' + q + '\\n'; });\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: fuText.slice(0, 1800) }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa Search + Claude AI (RAG)' }] });\n\nconst fallbackText = 'RAG Answer: ' + question.slice(0, 50) + ' - ' + (ai.answer || '').slice(0, 100);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post RAG answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

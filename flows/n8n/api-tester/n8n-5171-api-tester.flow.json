@@ -1,0 +1,139 @@
+{
+  "key": "n8n-5171-api-tester",
+  "name": "AI API Response Tester",
+  "description": "Fetches data from a user-provided API URL, uses Claude AI to analyze the response structure, data quality, and potential issues, and posts a comprehensive API analysis report to Slack with Block Kit formatting. Adapted from n8n's interactive API fundamentals tutorial workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5171,
+    "url": "https://n8n.io/workflows/5171",
+    "originalName": "Learn API Fundamentals with an Interactive Hands-On Tutorial Workflow",
+    "totalViews": 45170,
+    "rank": 134,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the analysis",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the API analysis"
+    },
+    "apiUrl": {
+      "type": "string",
+      "required": true,
+      "description": "The API endpoint URL to test (e.g. https://api.example.com/v1/data)"
+    },
+    "httpMethod": {
+      "type": "string",
+      "required": false,
+      "default": "GET",
+      "description": "HTTP method: GET, POST, PUT, DELETE (default: GET)"
+    },
+    "headers": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Optional HTTP headers as JSON string (e.g. {\"Authorization\": \"Bearer token\"})"
+    },
+    "requestBody": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Optional request body for POST/PUT requests (JSON string)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildCurlCommand",
+      "name": "Build curl command from inputs",
+      "type": "code",
+      "code": {
+        "source": "const url = $.input.apiUrl;\nconst method = ($.input.httpMethod || 'GET').toUpperCase();\nconst headersStr = $.input.headers || '';\nconst body = $.input.requestBody || '';\n\nlet cmd = 'curl -sS -w \"\\n---HTTP_CODE:%{http_code}---\\n---TOTAL_TIME:%{time_total}---\\n---SIZE:%{size_download}---\" -m 30';\ncmd += ' -X ' + method;\n\nif (headersStr) {\n  try {\n    const h = JSON.parse(headersStr);\n    Object.entries(h).forEach(([k, v]) => {\n      cmd += ' -H \"' + k + ': ' + v + '\"';\n    });\n  } catch(e) {}\n}\n\nif (body && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {\n  cmd += ' -H \"Content-Type: application/json\"';\n  cmd += \" -d '\" + body.replace(/'/g, \"'\\\\''\") + \"'\";\n}\n\ncmd += ' \"' + url + '\"';\n\nreturn { curlCommand: cmd, url, method };"
+      }
+    },
+    {
+      "id": "callApi",
+      "name": "Execute API call via curl",
+      "type": "bash",
+      "bash": {
+        "command": "$.steps.buildCurlCommand.output.curlCommand",
+        "timeout": 60000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse API response and metadata",
+      "type": "code",
+      "code": {
+        "source": "const raw = $.steps.callApi.output || '';\nlet httpCode = '';\nlet totalTime = '';\nlet size = '';\nlet body = raw;\n\nconst codeMatch = raw.match(/---HTTP_CODE:(\\d+)---/);\nif (codeMatch) httpCode = codeMatch[1];\nconst timeMatch = raw.match(/---TOTAL_TIME:([\\d.]+)---/);\nif (timeMatch) totalTime = timeMatch[1];\nconst sizeMatch = raw.match(/---SIZE:(\\d+)---/);\nif (sizeMatch) size = sizeMatch[1];\n\nbody = body.replace(/\\n---HTTP_CODE:\\d+---/, '').replace(/\\n---TOTAL_TIME:[\\d.]+---/, '').replace(/\\n---SIZE:\\d+---/, '').trim();\n\nlet isJson = false;\nlet prettyBody = body;\ntry { const parsed = JSON.parse(body); isJson = true; prettyBody = JSON.stringify(parsed, null, 2); } catch(e) {}\n\nreturn {\n  httpCode: httpCode || 'unknown',\n  totalTime: totalTime || 'unknown',\n  size: size || '0',\n  isJson,\n  body: prettyBody.slice(0, 25000),\n  bodyPreview: prettyBody.slice(0, 3000),\n  url: $.steps.buildCurlCommand.output.url,\n  method: $.steps.buildCurlCommand.output.method\n};"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for API analysis",
+      "type": "code",
+      "code": {
+        "source": "const r = $.steps.parseResponse.output;\n\nlet prompt = 'You are an API testing expert. Analyze the following API response and provide a comprehensive report.\\n\\n';\nprompt += 'API ENDPOINT: ' + r.method + ' ' + r.url + '\\n';\nprompt += 'HTTP STATUS: ' + r.httpCode + '\\n';\nprompt += 'RESPONSE TIME: ' + r.totalTime + ' seconds\\n';\nprompt += 'RESPONSE SIZE: ' + r.size + ' bytes\\n';\nprompt += 'IS JSON: ' + r.isJson + '\\n\\n';\nprompt += 'RESPONSE BODY:\\n' + r.body + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Analyze the response structure and data types\\n';\nprompt += '- Assess if the HTTP status code is appropriate\\n';\nprompt += '- Evaluate response time performance\\n';\nprompt += '- Identify any data quality issues or anomalies\\n';\nprompt += '- Check for common API best practices (pagination, error handling, etc.)\\n';\nprompt += '- Rate the API response quality overall\\n';\nprompt += '- Use Slack mrkdwn: *bold* (NOT **bold**), _italic_, numbered lists\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"statusAssessment\": \"is the status code appropriate and why\",\\n';\nprompt += '  \"responseStructure\": { \"type\": \"object|array|string\", \"fieldCount\": 0, \"nestedLevels\": 0, \"fields\": [\"field1: type\"] },\\n';\nprompt += '  \"performanceRating\": \"excellent|good|acceptable|slow|poor\",\\n';\nprompt += '  \"dataQuality\": [\"observation 1\", \"observation 2\"],\\n';\nprompt += '  \"bestPractices\": { \"met\": [\"practice 1\"], \"missing\": [\"practice 1\"] },\\n';\nprompt += '  \"issues\": [\"issue 1\"],\\n';\nprompt += '  \"overallRating\": \"A|B|C|D|F\",\\n';\nprompt += '  \"summary\": \"one-paragraph summary of the API response quality\",\\n';\nprompt += '  \"recommendations\": [\"recommendation 1\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5171-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI API analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5171-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, statusAssessment: '', responseStructure: {}, performanceRating: 'unknown', dataQuality: [], bestPractices: { met: [], missing: [] }, issues: [], overallRating: '?', recommendations: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit API analysis report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst r = $.steps.parseResponse.output;\n\nconst ratingEmoji = { 'A': ':star:', 'B': ':white_check_mark:', 'C': ':ok:', 'D': ':warning:', 'F': ':x:' };\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'API Response Analysis', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Endpoint:* `' + r.method + ' ' + r.url + '`\\n*Status:* ' + r.httpCode + ' | *Time:* ' + r.totalTime + 's | *Size:* ' + r.size + ' bytes | *Rating:* ' + (ratingEmoji[ai.overallRating] || ':grey_question:') + ' ' + (ai.overallRating || '?') } });\nblocks.push({ type: 'divider' });\n\nif (ai.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary*\\n' + ai.summary.slice(0, 2900) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.statusAssessment) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Status Assessment*\\n' + ai.statusAssessment.slice(0, 1500) } });\n}\n\nif (ai.responseStructure && ai.responseStructure.fields) {\n  let structText = '*Response Structure:* ' + (ai.responseStructure.type || 'unknown') + ' with ' + (ai.responseStructure.fieldCount || 0) + ' fields\\n';\n  (ai.responseStructure.fields || []).slice(0, 15).forEach(f => { structText += '  - ' + f + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: structText.slice(0, 2900) } });\n}\n\nconst perfEmoji = { excellent: ':rocket:', good: ':white_check_mark:', acceptable: ':ok:', slow: ':snail:', poor: ':x:' };\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Performance:* ' + (perfEmoji[ai.performanceRating] || '') + ' ' + (ai.performanceRating || 'unknown') + ' (' + r.totalTime + 's)' } });\nblocks.push({ type: 'divider' });\n\nif (ai.bestPractices) {\n  let bpText = '';\n  if (ai.bestPractices.met && ai.bestPractices.met.length > 0) {\n    bpText += ':white_check_mark: *Best practices met:*\\n';\n    ai.bestPractices.met.forEach(p => { bpText += '  - ' + p + '\\n'; });\n  }\n  if (ai.bestPractices.missing && ai.bestPractices.missing.length > 0) {\n    bpText += ':x: *Missing best practices:*\\n';\n    ai.bestPractices.missing.forEach(p => { bpText += '  - ' + p + '\\n'; });\n  }\n  if (bpText) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: bpText.slice(0, 2900) } });\n}\n\nif (ai.recommendations && ai.recommendations.length > 0) {\n  let recText = ':bulb: *Recommendations:*\\n';\n  ai.recommendations.forEach((r, i) => { recText += (i + 1) + '. ' + r + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: recText.slice(0, 2900) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'API Testing powered by Claude AI | One CLI' }] });\n\nconst fallback = 'API Analysis: ' + r.method + ' ' + r.url + ' - Status ' + r.httpCode + ' - Rating ' + (ai.overallRating || '?');\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post API analysis to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "key": "n8n-2642-chart-analyzer",
+  "name": "Chart & Data Analyzer \u2014 Firecrawl Scrape + Claude AI to Slack",
+  "description": "Scrapes a URL containing charts, tables, or data visualizations using Firecrawl, uses Claude AI to analyze the visual and data content, and posts a structured analysis to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2642,
+    "url": "https://n8n.io/workflows/2642",
+    "originalName": "Analyze tradingview.com charts with Chrome extension, n8n and OpenAI",
+    "totalViews": 43807,
+    "rank": 144,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the analysis"
+    },
+    "pageUrl": {
+      "type": "string",
+      "required": true,
+      "description": "URL of the page with charts/data to analyze (e.g. 'https://example.com/dashboard')"
+    },
+    "analysisGoal": {
+      "type": "string",
+      "required": false,
+      "default": "Provide a comprehensive analysis of all data, charts, and trends visible on this page.",
+      "description": "What specifically to analyze (e.g. 'Identify key price trends and support levels')"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapePage",
+      "name": "Scrape the page with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.pageUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            },
+            {
+              "type": "html"
+            }
+          ],
+          "onlyMainContent": false
+        }
+      }
+    },
+    {
+      "id": "extractData",
+      "name": "Extract data elements from scraped content",
+      "type": "code",
+      "code": {
+        "source": "var data = ($.steps.scrapePage.response && $.steps.scrapePage.response.data) ? $.steps.scrapePage.response.data : {};\nvar markdown = (data.markdown || '').slice(0, 5000);\nvar html = data.html || data.rawHtml || '';\nvar tables = html.match(/<table[\\s\\S]*?<\\/table>/gi) || [];\nvar tableCount = tables.length;\nvar numbers = markdown.match(/\\d+[,.]?\\d*%?/g) || [];\nvar imgCount = (html.match(/<img /gi) || []).length;\nvar svgCount = (html.match(/<svg/gi) || []).length;\nvar canvasCount = (html.match(/<canvas/gi) || []).length;\nreturn {\n  markdown: markdown,\n  tableCount: tableCount,\n  tablePreview: tables.slice(0, 2).join('\\n').slice(0, 2000),\n  numberCount: numbers.length,\n  imgCount: imgCount,\n  chartElements: svgCount + canvasCount,\n  keyNumbers: numbers.slice(0, 20).join(', ')\n};"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for data analysis",
+      "type": "code",
+      "code": {
+        "source": "var ex = $.steps.extractData.output;\nvar prompt = 'You are an expert data analyst. Analyze the following page content that contains charts, tables, and data visualizations.\\n\\nURL: ' + $.input.pageUrl + '\\nANALYSIS GOAL: ' + ($.input.analysisGoal || 'General data analysis') + '\\n\\nPAGE CONTENT:\\n' + ex.markdown + '\\n\\nDATA ELEMENTS DETECTED:\\n- Tables: ' + ex.tableCount + '\\n- Images: ' + ex.imgCount + '\\n- Chart elements (SVG/Canvas): ' + ex.chartElements + '\\n- Key numbers found: ' + ex.keyNumbers + '\\n\\nTABLE PREVIEW:\\n' + ex.tablePreview + '\\n\\nAnalyze the data and provide:\\n1. Summary of all data/charts found\\n2. Key trends and patterns\\n3. Notable data points\\n4. Insights and implications\\n5. Any anomalies or concerns\\n\\nReturn ONLY valid JSON:\\n{\\n  \"summary\": \"...\",\\n  \"trends\": [\"trend1\", \"trend2\"],\\n  \"keyDataPoints\": [{\"metric\": \"...\", \"value\": \"...\", \"significance\": \"...\"}],\\n  \"insights\": [\"insight1\", \"insight2\"],\\n  \"anomalies\": [\"anomaly1\"],\\n  \"recommendation\": \"...\"\\n}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/one-chart-analyzer-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalyze",
+      "name": "Run Claude AI for data analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/one-chart-analyzer-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse AI response and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalyze.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit analysis message",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar ex = $.steps.extractData.output;\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':bar_chart: Data Analysis: ' + $.input.pageUrl.slice(0, 80), emoji: true } });\nif (ai.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.summary } });\n}\nblocks.push({ type: 'divider' });\nif (ai.trends && ai.trends.length > 0) {\n  var trendsText = '*Trends*\\n';\n  ai.trends.forEach(function(t, i) { trendsText += ':chart_with_upwards_trend: ' + t + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: trendsText } });\n}\nif (ai.keyDataPoints && ai.keyDataPoints.length > 0) {\n  blocks.push({ type: 'divider' });\n  var dpText = '*Key Data Points*\\n';\n  ai.keyDataPoints.slice(0, 5).forEach(function(dp) {\n    dpText += ':small_blue_diamond: *' + dp.metric + '*: ' + dp.value + ' (' + dp.significance + ')\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: dpText } });\n}\nif (ai.insights && ai.insights.length > 0) {\n  blocks.push({ type: 'divider' });\n  var insText = '*Insights*\\n';\n  ai.insights.forEach(function(ins, i) { insText += (i + 1) + '. ' + ins + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: insText } });\n}\nif (ai.anomalies && ai.anomalies.length > 0) {\n  blocks.push({ type: 'divider' });\n  var anText = '*:warning: Anomalies*\\n';\n  ai.anomalies.forEach(function(a) { anText += '- ' + a + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: anText } });\n}\nif (ai.recommendation) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Recommendation:* ' + ai.recommendation } });\n}\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':robot_face: Firecrawl + Claude AI | Tables: ' + ex.tableCount + ' | Charts: ' + ex.chartElements + ' | Data points: ' + ex.numberCount }] });\nvar fallback = ai.summary ? ai.summary.slice(0, 500) : (ai.text || '').slice(0, 500);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post analysis to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

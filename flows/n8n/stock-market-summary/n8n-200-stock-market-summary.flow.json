@@ -1,0 +1,174 @@
+{
+  "key": "n8n-200-stock-market-summary",
+  "name": "AI-powered stock market summary bot",
+  "description": "Searches for the latest market news via Exa, Claude AI summarizes market movements, key events, and sector performance, then posts a formatted daily market summary to Slack with Block Kit formatting. Adapted from n8n's AI-powered stock market summary bot workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 200,
+    "url": "https://n8n.io/workflows/200",
+    "originalName": "AI-powered stock market summary bot",
+    "totalViews": 30756,
+    "rank": 200,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for market news search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the market summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the market summary"
+    },
+    "marketFocus": {
+      "type": "string",
+      "required": false,
+      "default": "US stock market",
+      "description": "Market focus area (e.g., 'US stock market', 'crypto', 'global markets')"
+    },
+    "sectors": {
+      "type": "string",
+      "required": false,
+      "default": "technology, healthcare, finance, energy, consumer",
+      "description": "Comma-separated list of sectors to track"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery_searchMarketNews",
+      "name": "Build search query for searchMarketNews",
+      "type": "code",
+      "code": {
+        "source": "const parts = [$.input.marketFocus];\nconst staticTerms = \"today stock market summary news major moves\";\nreturn { query: parts.filter(Boolean).join(\" \") + \" \" + staticTerms };"
+      }
+    },
+    {
+      "id": "searchMarketNews",
+      "name": "Search Exa for latest market news",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_searchMarketNews.output.query",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "buildQuery_searchSectorNews",
+      "name": "Build search query",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic || $.input.companyName || $.input.marketFocus || \"market analysis\";\nreturn { query: topic + \" stock market analysis trends\" };"
+      }
+    },
+    {
+      "id": "searchSectorNews",
+      "name": "Search Exa for sector-specific market news",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_searchSectorNews.output.query",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1200
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile all market news sources",
+      "type": "code",
+      "code": {
+        "source": "const market = $.steps.searchMarketNews.response.results || [];\nconst sector = $.steps.searchSectorNews.response.results || [];\n\nlet sourcesText = 'MARKET NEWS:\\n';\nmarket.forEach((r, i) => {\n  sourcesText += (i + 1) + '. ' + (r.title || 'Untitled') + '\\n';\n  sourcesText += '   URL: ' + r.url + '\\n';\n  if (r.publishedDate) sourcesText += '   Published: ' + r.publishedDate + '\\n';\n  sourcesText += '   ' + (r.text || '').slice(0, 1200) + '\\n\\n';\n});\n\nsourcesText += '\\nSECTOR NEWS:\\n';\nsector.forEach((r, i) => {\n  sourcesText += (market.length + i + 1) + '. ' + (r.title || 'Untitled') + '\\n';\n  sourcesText += '   URL: ' + r.url + '\\n';\n  sourcesText += '   ' + (r.text || '').slice(0, 1000) + '\\n\\n';\n});\n\nreturn { sourcesText, totalSources: market.length + sector.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for market summary",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileSources.output;\nconst focus = $.input.marketFocus || 'US stock market';\nconst sectors = $.input.sectors || 'technology, healthcare, finance, energy, consumer';\nconst today = new Date().toISOString().slice(0, 10);\n\nlet prompt = 'You are a financial market analyst. Create a comprehensive daily market summary.\\n\\n';\nprompt += 'MARKET FOCUS: ' + focus + '\\n';\nprompt += 'SECTORS TO TRACK: ' + sectors + '\\n';\nprompt += 'DATE: ' + today + '\\n\\n';\nprompt += 'NEWS SOURCES (' + d.totalSources + ' articles):\\n';\nprompt += d.sourcesText + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Summarize overall market direction and sentiment\\n';\nprompt += '- Report major index movements (S&P 500, NASDAQ, Dow Jones)\\n';\nprompt += '- Highlight top movers (gainers and losers)\\n';\nprompt += '- Sector performance breakdown\\n';\nprompt += '- Key catalysts and events driving the market\\n';\nprompt += '- Upcoming events to watch\\n';\nprompt += '- Use Slack mrkdwn: *bold*, _italic_. No markdown tables. No # headings.\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"date\": \"' + today + '\",\\n';\nprompt += '  \"marketSentiment\": \"bullish|bearish|neutral|mixed\",\\n';\nprompt += '  \"indices\": {\\n';\nprompt += '    \"sp500\": { \"value\": \"\", \"change\": \"\", \"percentChange\": \"\" },\\n';\nprompt += '    \"nasdaq\": { \"value\": \"\", \"change\": \"\", \"percentChange\": \"\" },\\n';\nprompt += '    \"dowJones\": { \"value\": \"\", \"change\": \"\", \"percentChange\": \"\" }\\n';\nprompt += '  },\\n';\nprompt += '  \"topGainers\": [{ \"name\": \"\", \"change\": \"\" }],\\n';\nprompt += '  \"topLosers\": [{ \"name\": \"\", \"change\": \"\" }],\\n';\nprompt += '  \"sectorPerformance\": [{ \"sector\": \"\", \"performance\": \"\", \"outlook\": \"\" }],\\n';\nprompt += '  \"keyCatalysts\": [\"catalyst 1\", \"catalyst 2\"],\\n';\nprompt += '  \"upcomingEvents\": [\"event 1\", \"event 2\"],\\n';\nprompt += '  \"executiveSummary\": \"2-3 sentence market overview\",\\n';\nprompt += '  \"tradingOutlook\": \"brief outlook for next session\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-200-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiSummary",
+      "name": "Run Claude AI market summary",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-200-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiSummary.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { date: new Date().toISOString().slice(0, 10), marketSentiment: 'unknown', indices: {}, topGainers: [], topLosers: [], sectorPerformance: [], keyCatalysts: [], upcomingEvents: [], executiveSummary: raw, tradingOutlook: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit market summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst date = ai.date || new Date().toISOString().slice(0, 10);\n\nconst sentimentEmoji = { bullish: ':chart_with_upwards_trend:', bearish: ':chart_with_downwards_trend:', neutral: ':left_right_arrow:', mixed: ':twisted_rightwards_arrows:' };\nconst emoji = sentimentEmoji[ai.marketSentiment] || ':bar_chart:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Daily Market Summary - ' + date } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: emoji + ' *Market Sentiment:* ' + (ai.marketSentiment || 'unknown').toUpperCase() } });\nblocks.push({ type: 'divider' });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: (ai.executiveSummary || 'No summary available').slice(0, 2900) } });\nblocks.push({ type: 'divider' });\n\nconst indices = ai.indices || {};\nlet indexText = '*Major Indices:*\\n';\nif (indices.sp500) indexText += ':chart_with_upwards_trend: *S&P 500:* ' + (indices.sp500.value || 'N/A') + ' (' + (indices.sp500.percentChange || 'N/A') + ')\\n';\nif (indices.nasdaq) indexText += ':computer: *NASDAQ:* ' + (indices.nasdaq.value || 'N/A') + ' (' + (indices.nasdaq.percentChange || 'N/A') + ')\\n';\nif (indices.dowJones) indexText += ':classical_building: *Dow Jones:* ' + (indices.dowJones.value || 'N/A') + ' (' + (indices.dowJones.percentChange || 'N/A') + ')\\n';\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: indexText } });\nblocks.push({ type: 'divider' });\n\nconst gainers = ai.topGainers || [];\nconst losers = ai.topLosers || [];\nlet moversText = '';\nif (gainers.length > 0) {\n  moversText += ':arrow_up: *Top Gainers:*\\n';\n  gainers.slice(0, 5).forEach(g => { moversText += '  ' + g.name + ' ' + g.change + '\\n'; });\n}\nif (losers.length > 0) {\n  moversText += ':arrow_down: *Top Losers:*\\n';\n  losers.slice(0, 5).forEach(l => { moversText += '  ' + l.name + ' ' + l.change + '\\n'; });\n}\nif (moversText) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: moversText.slice(0, 2900) } });\n  blocks.push({ type: 'divider' });\n}\n\nconst sectors = ai.sectorPerformance || [];\nif (sectors.length > 0) {\n  let sectorText = '*Sector Performance:*\\n';\n  sectors.slice(0, 6).forEach(s => {\n    sectorText += ':small_blue_diamond: *' + s.sector + ':* ' + s.performance + ' - _' + (s.outlook || '') + '_\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: sectorText.slice(0, 2900) } });\n  blocks.push({ type: 'divider' });\n}\n\nconst catalysts = ai.keyCatalysts || [];\nif (catalysts.length > 0) {\n  let catText = '*Key Catalysts:*\\n';\n  catalysts.slice(0, 5).forEach((c, i) => { catText += (i + 1) + '. ' + c + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: catText } });\n}\n\nif (ai.tradingOutlook) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':crystal_ball: *Outlook:* ' + ai.tradingOutlook } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa + Claude AI | One CLI' }] });\n\nconst fallback = 'Market Summary ' + date + ': Sentiment ' + (ai.marketSentiment || 'unknown');\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post market summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,225 @@
+{
+  "key": "n8n-3443-google-maps-leads",
+  "name": "Google Maps Business Lead Scraper",
+  "description": "Searches for businesses via Exa, scrapes their websites with Firecrawl for contact details, uses Claude AI to extract and structure lead data (name, email, phone, address), and saves the leads to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3443,
+    "url": "https://n8n.io/workflows/3443",
+    "originalName": "Scrape business leads from Google Maps using OpenAI and Google Sheets",
+    "totalViews": 67447,
+    "rank": 89,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for business search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping business websites",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving leads",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for completion notification",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for lead generation updates"
+    },
+    "businessType": {
+      "type": "string",
+      "required": true,
+      "description": "Type of business to search for (e.g. 'plumbers', 'restaurants', 'dentists')"
+    },
+    "location": {
+      "type": "string",
+      "required": true,
+      "description": "Location to search in (e.g. 'San Francisco, CA', 'New York City')"
+    },
+    "sheetTitle": {
+      "type": "string",
+      "required": false,
+      "default": "Business Leads",
+      "description": "Title for the Google Sheets spreadsheet"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchBusinesses",
+      "name": "Search for businesses via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.businessType",
+          "numResults": 10,
+          "type": "auto",
+          "useAutoprompt": true,
+          "contents": {
+            "text": {
+              "maxCharacters": 500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "extractUrls",
+      "name": "Extract business URLs from search results",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchBusinesses.response.results || $.steps.searchBusinesses.response.data || [];\nconst businesses = results.slice(0, 8).map((r, i) => ({\n  index: i + 1,\n  url: r.url || '',\n  title: r.title || 'Business ' + (i + 1),\n  snippet: (r.text || '').slice(0, 300)\n})).filter(b => b.url.length > 0);\n\nreturn { businesses, businessCount: businesses.length, location: $.input.location || '' };"
+      }
+    },
+    {
+      "id": "scrapeBusinessSites",
+      "name": "Scrape business websites with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractUrls.output.businesses",
+        "as": "biz",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapeSite",
+            "name": "Scrape business website",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.biz.url",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileBusinessData",
+      "name": "Compile all business data for extraction",
+      "type": "code",
+      "code": {
+        "source": "const businesses = $.steps.extractUrls.output.businesses;\nconst iterations = $.steps.scrapeBusinessSites.response.iterations || [];\nlet compiled = '';\nlet successCount = 0;\n\niterations.forEach((iter, i) => {\n  const biz = businesses[i] || { url: 'Unknown', title: 'Unknown' };\n  const resp = (iter.scrapeSite && iter.scrapeSite.response && iter.scrapeSite.response.data) ? iter.scrapeSite.response.data : null;\n\n  compiled += '=== BUSINESS ' + (i + 1) + ': ' + biz.title + ' ===\\n';\n  compiled += 'URL: ' + biz.url + '\\n';\n  compiled += 'Search Snippet: ' + (biz.snippet || '') + '\\n';\n\n  if (resp && resp.markdown) {\n    successCount++;\n    compiled += 'Website Content:\\n' + resp.markdown.slice(0, 3000) + '\\n\\n';\n  } else {\n    compiled += 'Website: Could not scrape\\n\\n';\n  }\n});\n\nreturn { compiled, successCount, totalBusinesses: businesses.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for lead extraction",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileBusinessData.output;\nconst bizType = $.input.businessType;\nconst location = $.input.location;\n\nlet prompt = 'You are a lead generation specialist. Extract structured contact and business information from the following scraped business websites.\\n\\n';\nprompt += 'BUSINESS TYPE: ' + bizType + '\\n';\nprompt += 'TARGET LOCATION: ' + location + '\\n';\nprompt += 'BUSINESSES SCRAPED: ' + d.successCount + '/' + d.totalBusinesses + '\\n\\n';\nprompt += 'BUSINESS DATA:\\n' + d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract all contact information: business name, phone, email, address, website\\n';\nprompt += '- Look for owner/manager names if available\\n';\nprompt += '- Extract business hours if listed\\n';\nprompt += '- Note the business category/type\\n';\nprompt += '- Rate lead quality (hot/warm/cold) based on available info\\n';\nprompt += '- If contact info is missing, mark as \"Not found\"\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"leads\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"businessName\": \"name\",\\n';\nprompt += '      \"phone\": \"phone or Not found\",\\n';\nprompt += '      \"email\": \"email or Not found\",\\n';\nprompt += '      \"address\": \"full address or Not found\",\\n';\nprompt += '      \"website\": \"url\",\\n';\nprompt += '      \"ownerName\": \"name or Not found\",\\n';\nprompt += '      \"businessHours\": \"hours or Not found\",\\n';\nprompt += '      \"category\": \"business category\",\\n';\nprompt += '      \"leadQuality\": \"hot|warm|cold\",\\n';\nprompt += '      \"notes\": \"any additional relevant info\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"totalLeads\": 0,\\n';\nprompt += '  \"hotLeads\": 0,\\n';\nprompt += '  \"summary\": \"brief summary of lead generation results\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3443-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExtract",
+      "name": "Run Claude AI lead extraction",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3443-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExtract.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { leads: [], totalLeads: 0, hotLeads: 0, summary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetData",
+      "name": "Format leads for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst leads = ai.leads || [];\nconst date = new Date().toISOString().split('T')[0];\n\nconst sheetData = leads.map((lead, i) => ({\n  '#': i + 1,\n  'Business Name': lead.businessName || '',\n  'Phone': lead.phone || 'Not found',\n  'Email': lead.email || 'Not found',\n  'Address': lead.address || 'Not found',\n  'Website': lead.website || '',\n  'Owner/Contact': lead.ownerName || 'Not found',\n  'Hours': lead.businessHours || 'Not found',\n  'Category': lead.category || '',\n  'Lead Quality': lead.leadQuality || 'cold',\n  'Notes': lead.notes || ''\n}));\n\nreturn { sheetData, leadCount: leads.length, hotLeads: ai.hotLeads || 0, summary: ai.summary || '', date };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save leads to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "connectionKey": "$.input.sheetsKey",
+          "title": "{{$.input.sheetTitle}} - {{$.input.businessType}} {{$.input.location}} - {{$.steps.buildSheetData.output.date}}",
+          "sheetTitle": "Leads",
+          "data": "$.steps.buildSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack completion notification",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst d = $.steps.buildSheetData.output;\nconst scraped = $.steps.compileBusinessData.output;\nconst leads = ai.leads || [];\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Business Lead Generation Complete', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Business Type:*\\n' + ($.input.businessType || 'N/A') },\n  { type: 'mrkdwn', text: '*Location:*\\n' + ($.input.location || 'N/A') }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Sites Scraped:*\\n' + scraped.successCount + '/' + scraped.totalBusinesses },\n  { type: 'mrkdwn', text: '*Leads Found:*\\n' + d.leadCount },\n  { type: 'mrkdwn', text: '*Hot Leads:*\\n' + d.hotLeads }\n] });\n\nif (d.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:* ' + d.summary } });\n}\n\nblocks.push({ type: 'divider' });\n\nconst hotLeads = leads.filter(l => l.leadQuality === 'hot');\nif (hotLeads.length > 0) {\n  let hotText = '*Hot Leads:*\\n';\n  hotLeads.slice(0, 5).forEach((l, i) => {\n    hotText += (i + 1) + '. *' + (l.businessName || 'N/A') + '*';\n    if (l.phone !== 'Not found') hotText += ' | ' + l.phone;\n    if (l.email !== 'Not found') hotText += ' | ' + l.email;\n    hotText += '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: hotText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':chart_with_upwards_trend: All ' + d.leadCount + ' leads saved to Google Sheets: *' + ($.input.sheetTitle || 'Business Leads') + '*' } });\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa + Firecrawl + Claude AI + Google Sheets | One CLI' }] });\n\nconst fallback = 'Lead Gen: ' + d.leadCount + ' leads (' + d.hotLeads + ' hot) for ' + ($.input.businessType || '') + ' in ' + ($.input.location || '');\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post lead generation results to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

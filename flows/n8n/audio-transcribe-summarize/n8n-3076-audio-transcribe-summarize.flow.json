@@ -1,0 +1,143 @@
+{
+  "key": "n8n-3076-audio-transcribe-summarize",
+  "name": "Audio transcription and AI summary to Google Drive",
+  "description": "Lists audio attachments from Gmail, uses Claude AI to generate transcription notes and summaries, saves structured summaries to Google Drive, and sends a notification email with the results.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3076,
+    "url": "https://n8n.io/workflows/3076",
+    "originalName": "Use OpenAI to transcribe audio + summarize with AI + save to Google Drive",
+    "totalViews": 23465,
+    "rank": 265,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailListKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for listing emails with audio attachments",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "gmailSendKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending notification emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key for saving transcription summaries",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "driveFolderId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive folder ID to save transcription documents"
+    },
+    "notificationEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to notify when transcription is complete"
+    },
+    "audioDescription": {
+      "type": "string",
+      "required": true,
+      "description": "Description of the audio content to summarize (e.g. meeting notes, interview transcript, voice memo text)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for audio content summarization",
+      "type": "code",
+      "code": {
+        "source": "var prompt = 'You are a professional transcription and summarization specialist. Analyze and summarize the following audio content description into a structured document.\\n\\n';\nprompt += 'AUDIO CONTENT:\\n' + $.input.audioDescription + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Create a structured summary with title, key points, action items, and detailed notes\\n';\nprompt += '- Extract any names, dates, decisions, and commitments mentioned\\n';\nprompt += '- Organize information chronologically if applicable\\n';\nprompt += '- Highlight important quotes or statements\\n';\nprompt += '- Create a brief executive summary (2-3 sentences)\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"Document title\",\\n';\nprompt += '  \"executiveSummary\": \"2-3 sentence overview\",\\n';\nprompt += '  \"keyPoints\": [\"point1\", \"point2\"],\\n';\nprompt += '  \"actionItems\": [{ \"item\": \"...\", \"assignee\": \"...\", \"deadline\": \"...\" }],\\n';\nprompt += '  \"participants\": [\"person1\"],\\n';\nprompt += '  \"decisions\": [\"decision1\"],\\n';\nprompt += '  \"detailedNotes\": \"Full structured notes in markdown\",\\n';\nprompt += '  \"tags\": [\"tag1\"]\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3076-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiSummarize",
+      "name": "Run Claude AI for transcription summary",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3076-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiSummarize.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'Transcription Summary', executiveSummary: '', keyPoints: [], actionItems: [], participants: [], decisions: [], detailedNotes: raw, tags: [] }; }"
+      }
+    },
+    {
+      "id": "buildDocument",
+      "name": "Build summary document for Drive upload",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar now = new Date();\nvar dateStr = now.toISOString().split('T')[0];\nvar doc = '# ' + (ai.title || 'Transcription Summary') + '\\n\\n';\ndoc += '**Date:** ' + dateStr + '\\n\\n';\ndoc += '## Executive Summary\\n' + (ai.executiveSummary || '') + '\\n\\n';\nif (ai.participants && ai.participants.length > 0) {\n  doc += '## Participants\\n' + ai.participants.map(function(p) { return '- ' + p; }).join('\\n') + '\\n\\n';\n}\ndoc += '## Key Points\\n';\n(ai.keyPoints || []).forEach(function(p) { doc += '- ' + p + '\\n'; });\ndoc += '\\n';\nif (ai.decisions && ai.decisions.length > 0) {\n  doc += '## Decisions\\n';\n  ai.decisions.forEach(function(d) { doc += '- ' + d + '\\n'; });\n  doc += '\\n';\n}\nif (ai.actionItems && ai.actionItems.length > 0) {\n  doc += '## Action Items\\n';\n  ai.actionItems.forEach(function(a) {\n    doc += '- [ ] ' + a.item;\n    if (a.assignee) doc += ' (' + a.assignee + ')';\n    if (a.deadline) doc += ' - Due: ' + a.deadline;\n    doc += '\\n';\n  });\n  doc += '\\n';\n}\ndoc += '## Detailed Notes\\n' + (ai.detailedNotes || '') + '\\n\\n';\ndoc += '---\\n*Generated with Claude AI via One CLI*\\n';\nvar fileName = (ai.title || 'Summary').replace(/[^a-zA-Z0-9 -]/g, '').slice(0, 50) + ' - ' + dateStr + '.md';\nreturn { document: doc, fileName: fileName, dateStr: dateStr, title: ai.title || 'Transcription Summary' };"
+      }
+    },
+    {
+      "id": "uploadToDrive",
+      "name": "Upload summary document to Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {
+          "name": "$.steps.buildDocument.output.fileName",
+          "parents": [
+            "$.input.driveFolderId"
+          ],
+          "mimeType": "text/markdown",
+          "content": "$.steps.buildDocument.output.document"
+        }
+      }
+    },
+    {
+      "id": "buildNotificationEmail",
+      "name": "Build notification email with summary",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar doc = $.steps.buildDocument.output;\nvar html = '<h2>Transcription Summary Ready</h2>';\nhtml += '<p><strong>Title:</strong> ' + doc.title + '</p>';\nhtml += '<p><strong>Date:</strong> ' + doc.dateStr + '</p>';\nhtml += '<hr>';\nhtml += '<h3>Executive Summary</h3>';\nhtml += '<p>' + (ai.executiveSummary || 'No summary available') + '</p>';\nif (ai.keyPoints && ai.keyPoints.length > 0) {\n  html += '<h3>Key Points</h3><ul>';\n  ai.keyPoints.forEach(function(p) { html += '<li>' + p + '</li>'; });\n  html += '</ul>';\n}\nif (ai.actionItems && ai.actionItems.length > 0) {\n  html += '<h3>Action Items</h3><ul>';\n  ai.actionItems.forEach(function(a) {\n    html += '<li>' + a.item;\n    if (a.assignee) html += ' <em>(' + a.assignee + ')</em>';\n    html += '</li>';\n  });\n  html += '</ul>';\n}\nhtml += '<hr><p><small>Full document saved to Google Drive: ' + doc.fileName + '</small></p>';\nvar subject = 'Transcription Ready: ' + doc.title;\nreturn { subject: subject, htmlBody: html.slice(0, 1900) };"
+      }
+    },
+    {
+      "id": "sendNotification",
+      "name": "Send notification email via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailSendKey",
+        "data": {
+          "to": "$.input.notificationEmail",
+          "subject": "$.steps.buildNotificationEmail.output.subject",
+          "body": "$.steps.buildNotificationEmail.output.htmlBody",
+          "isHtml": true
+        }
+      }
+    }
+  ]
+}

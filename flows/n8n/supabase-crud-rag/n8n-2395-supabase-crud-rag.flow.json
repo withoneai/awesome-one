@@ -1,0 +1,194 @@
+{
+  "key": "n8n-2395-supabase-crud-rag",
+  "name": "Supabase document insertion, storage, and AI retrieval",
+  "description": "Fetches a document from Google Drive, stores its content in Supabase via SQL, and uses Claude AI to answer questions about the stored documents. Adapted from n8n's Supabase insertion/upsertion/retrieval workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2395,
+    "url": "https://n8n.io/workflows/2395",
+    "originalName": "Supabase insertion & upsertion & retrieval",
+    "totalViews": 29245,
+    "rank": 209,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key for fetching documents",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "supabaseKey": {
+      "type": "string",
+      "required": true,
+      "description": "Supabase connection key for database operations",
+      "connection": {
+        "platform": "supabase"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for status notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for operation results"
+    },
+    "driveFileId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive file ID of the document to ingest"
+    },
+    "supabaseProjectRef": {
+      "type": "string",
+      "required": true,
+      "description": "Supabase project reference ID"
+    },
+    "tableName": {
+      "type": "string",
+      "required": false,
+      "default": "documents",
+      "description": "Supabase table name for document storage"
+    },
+    "question": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Optional question to ask about the stored documents"
+    }
+  },
+  "steps": [
+    {
+      "id": "listDriveFiles",
+      "name": "Get document metadata from Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rz4PjeEw::JlK2zHExTBOUVHkICjB_dA",
+        "connectionKey": "$.input.driveKey",
+        "data": {},
+        "pathVars": {
+          "fileId": "$.input.driveFileId"
+        },
+        "queryParams": {
+          "fields": "id,name,mimeType,size"
+        }
+      }
+    },
+    {
+      "id": "exportFile",
+      "name": "Export file content from Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6RziZnVhE::KyuPyhkzQ1K3CQxYqa8IGA",
+        "connectionKey": "$.input.driveKey",
+        "data": {},
+        "pathVars": {
+          "fileId": "$.input.driveFileId"
+        },
+        "queryParams": {
+          "mimeType": "text/plain"
+        }
+      }
+    },
+    {
+      "id": "prepareContent",
+      "name": "Prepare document content for Supabase insertion",
+      "type": "code",
+      "code": {
+        "source": "const meta = $.steps.listDriveFiles.response || {};\nconst content = $.steps.exportFile.response || '';\nconst docText = (typeof content === 'string') ? content : JSON.stringify(content);\nconst fileName = meta.name || 'unknown_document';\nconst now = new Date().toISOString();\nreturn {\n  fileName: fileName,\n  content: docText.slice(0, 50000),\n  contentLength: docText.length,\n  createdAt: now\n};"
+      }
+    },
+    {
+      "id": "buildInsertQuery",
+      "name": "Build SQL insert query for Supabase",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.prepareContent.output;\nconst table = $.input.tableName || 'documents';\nconst escaped = d.content.replace(/'/g, \"''\").slice(0, 30000);\nconst query = \"INSERT INTO \" + table + \" (file_name, content, created_at) VALUES ('\" + d.fileName.replace(/'/g, \"''\") + \"', '\" + escaped + \"', '\" + d.createdAt + \"') ON CONFLICT (file_name) DO UPDATE SET content = EXCLUDED.content, created_at = EXCLUDED.created_at RETURNING id, file_name;\";\nreturn { query };"
+      }
+    },
+    {
+      "id": "insertToSupabase",
+      "name": "Insert document into Supabase",
+      "type": "action",
+      "action": {
+        "platform": "supabase",
+        "actionId": "conn_mod_def::GC40SckOddE::NFFu2-49QLyGsPBdfweitg",
+        "connectionKey": "$.input.supabaseKey",
+        "data": {
+          "query": "$.steps.buildInsertQuery.output.query"
+        },
+        "pathVars": {
+          "ref": "$.input.supabaseProjectRef"
+        }
+      }
+    },
+    {
+      "id": "buildRetrievalPrompt",
+      "name": "Build Claude prompt for document Q&A",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.prepareContent.output;\nconst question = $.input.question;\nif (!question || question.trim().length === 0) {\n  return { prompt: '', skip: true };\n}\nlet prompt = 'You are a document analyst. Answer the following question based on the document content.\\n\\n';\nprompt += 'DOCUMENT: ' + d.fileName + '\\n\\n';\nprompt += 'CONTENT:\\n' + d.content.slice(0, 15000) + '\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"detailed answer\",\\n';\nprompt += '  \"relevantExcerpts\": [\"excerpt1\", \"excerpt2\"],\\n';\nprompt += '  \"confidence\": \"high|medium|low\"\\n';\nprompt += '}';\nreturn { prompt, skip: false };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2395-prompt.txt",
+        "content": "$.steps.buildRetrievalPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiRetrieve",
+      "name": "Run Claude AI document Q&A",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2395-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiRetrieve.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw || 'Document stored successfully (no question asked)', relevantExcerpts: [], confidence: 'medium' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit status message",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.prepareContent.output;\nconst ai = $.steps.parseAI.output;\nconst question = $.input.question;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Supabase Document Operation', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Document:* ' + d.fileName + ' (' + d.contentLength + ' chars)' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Status:* Stored in Supabase table `' + ($.input.tableName || 'documents') + '`' } });\n\nif (question && question.trim().length > 0) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Q:* ' + question } });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*A:* ' + (ai.answer || 'No answer').slice(0, 1000) } });\n  if (ai.confidence) {\n    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Confidence: ' + ai.confidence }] });\n  }\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Google Drive + Supabase + Claude AI' }] });\n\nconst fallback = 'Supabase: ' + d.fileName + ' stored, ' + d.contentLength + ' chars';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post results to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

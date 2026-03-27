@@ -1,0 +1,145 @@
+{
+  "key": "n8n-3121-short-form-video-generator",
+  "name": "AI Short-Form Video Script Generator",
+  "description": "Claude AI creates professional short-form video scripts with AI image prompts, scene breakdowns, and voiceover text, then posts the scripts to both Discord and Slack for team review and production.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3121,
+    "url": "https://n8n.io/workflows/3121",
+    "originalName": "AI-powered short-form video generator with OpenAI, Flux, Kling, and ElevenLabs",
+    "totalViews": 113247,
+    "rank": 43,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting video scripts",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "discordKey": {
+      "type": "string",
+      "required": true,
+      "description": "Discord connection key for posting video scripts",
+      "connection": {
+        "platform": "discord"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post video scripts (e.g. '#video-scripts')"
+    },
+    "discordChannelId": {
+      "type": "string",
+      "required": true,
+      "description": "Discord channel ID to post video scripts"
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic or theme for the short-form video (e.g. 'productivity tips', 'cooking hacks')"
+    },
+    "style": {
+      "type": "string",
+      "required": false,
+      "default": "POV storytelling",
+      "description": "Video style (default: 'POV storytelling'). Options: 'POV storytelling', 'tutorial', 'listicle', 'before-after', 'day-in-the-life'"
+    },
+    "duration": {
+      "type": "string",
+      "required": false,
+      "default": "30-60 seconds",
+      "description": "Target video duration (default: '30-60 seconds')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for short-form video script",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic;\nconst style = $.input.style || 'POV storytelling';\nconst duration = $.input.duration || '30-60 seconds';\nconst today = new Date().toISOString().split('T')[0];\n\nlet prompt = 'You are an expert short-form video creator specializing in viral content for TikTok, YouTube Shorts, and Instagram Reels.\\n\\n';\nprompt += 'Create a complete video production script for the following:\\n';\nprompt += '- Topic: ' + topic + '\\n';\nprompt += '- Style: ' + style + '\\n';\nprompt += '- Duration: ' + duration + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Create a viral hook that stops scrolling in the first 2 seconds\\n';\nprompt += '- Write scene-by-scene breakdown with timing\\n';\nprompt += '- For each scene, provide a detailed AI image generation prompt (Flux/DALL-E style)\\n';\nprompt += '- Write the complete voiceover script with emotion cues\\n';\nprompt += '- Include transitions and visual effects suggestions\\n';\nprompt += '- Write platform-optimized captions and hashtags\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"video title\",\\n';\nprompt += '  \"hook\": \"first 2-second hook text\",\\n';\nprompt += '  \"style\": \"' + style + '\",\\n';\nprompt += '  \"totalDuration\": \"estimated duration\",\\n';\nprompt += '  \"scenes\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"sceneNum\": 1,\\n';\nprompt += '      \"duration\": \"3s\",\\n';\nprompt += '      \"visualDescription\": \"what the viewer sees\",\\n';\nprompt += '      \"aiImagePrompt\": \"detailed prompt for Flux/DALL-E image generation\",\\n';\nprompt += '      \"voiceover\": \"what is said\",\\n';\nprompt += '      \"emotionCue\": \"excited/calm/dramatic\",\\n';\nprompt += '      \"transition\": \"cut/zoom/fade\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"fullVoiceover\": \"complete voiceover script concatenated\",\\n';\nprompt += '  \"musicSuggestion\": \"music style and mood\",\\n';\nprompt += '  \"soundEffects\": [\"effect 1\", \"effect 2\"],\\n';\nprompt += '  \"caption\": \"social media caption\",\\n';\nprompt += '  \"hashtags\": [\"#tag1\", \"#tag2\"],\\n';\nprompt += '  \"platformNotes\": { \"tiktok\": \"tip\", \"youtube\": \"tip\", \"instagram\": \"tip\" }\\n';\nprompt += '}';\n\nreturn { prompt, today, topic, style };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3121-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to create video script",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3121-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude AI output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'Video Script', hook: '', scenes: [], fullVoiceover: raw, caption: '', hashtags: [] }; }"
+      }
+    },
+    {
+      "id": "buildDiscordMessage",
+      "name": "Build Discord embed for video script",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = $.steps.buildPrompt.output.today;\n\nlet sceneList = '';\n(ai.scenes || []).forEach(s => {\n  sceneList += '**Scene ' + s.sceneNum + '** (' + (s.duration || '') + '): ' + (s.visualDescription || '') + '\\n';\n});\n\nconst embeds = [{\n  title: ai.title || 'Video Script',\n  description: '**Hook:** ' + (ai.hook || '') + '\\n\\n**Scenes:**\\n' + sceneList.slice(0, 1500) + '\\n\\n**Voiceover:**\\n' + (ai.fullVoiceover || '').slice(0, 500),\n  color: 16744448,\n  fields: [\n    { name: 'Style', value: ai.style || 'N/A', inline: true },\n    { name: 'Duration', value: ai.totalDuration || 'N/A', inline: true },\n    { name: 'Music', value: ai.musicSuggestion || 'N/A', inline: true }\n  ],\n  footer: { text: 'Short-Form Video Generator | ' + today }\n}];\n\nconst contentText = 'New Short-Form Video Script: **' + (ai.title || 'Untitled') + '** ' + (ai.hashtags || []).join(' ');\nreturn { content: contentText.slice(0, 2000), embeds };"
+      }
+    },
+    {
+      "id": "postToDiscord",
+      "name": "Post video script to Discord",
+      "type": "action",
+      "action": {
+        "platform": "discord",
+        "actionId": "conn_mod_def::GJ2V63KF4zs::ftkHHNGaTlyiikolAQZ0tA",
+        "connectionKey": "$.input.discordKey",
+        "pathVariables": {
+          "channelId": "$.input.discordChannelId"
+        },
+        "data": {
+          "content": "$.steps.buildDiscordMessage.output.content",
+          "embeds": "$.steps.buildDiscordMessage.output.embeds"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message for video script",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = $.steps.buildPrompt.output.today;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ai.title || 'Video Script', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Style:*\\n' + (ai.style || 'N/A') },\n  { type: 'mrkdwn', text: '*Duration:*\\n' + (ai.totalDuration || 'N/A') },\n  { type: 'mrkdwn', text: '*Music:*\\n' + (ai.musicSuggestion || 'N/A') }\n] });\nblocks.push({ type: 'divider' });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Hook:*\\n' + (ai.hook || 'N/A') } });\nblocks.push({ type: 'divider' });\n\nlet scenesText = '*Scene Breakdown:*\\n';\n(ai.scenes || []).forEach(s => {\n  scenesText += '*Scene ' + s.sceneNum + '* (' + (s.duration || '') + '): ' + (s.visualDescription || '') + '\\n';\n  scenesText += '_Voiceover: ' + (s.voiceover || '') + '_\\n';\n  scenesText += 'Transition: ' + (s.transition || 'cut') + '\\n\\n';\n});\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: scenesText.slice(0, 1800) } });\nblocks.push({ type: 'divider' });\n\nlet imagePrompts = '*AI Image Prompts:*\\n';\n(ai.scenes || []).forEach(s => {\n  if (s.aiImagePrompt) imagePrompts += '*Scene ' + s.sceneNum + ':* ' + s.aiImagePrompt + '\\n\\n';\n});\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: imagePrompts.slice(0, 1800) } });\nblocks.push({ type: 'divider' });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Caption:*\\n' + (ai.caption || '') + '\\n\\n' + (ai.hashtags || []).join(' ') } });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI | One CLI' }] });\n\nconst fallbackText = 'Video Script: ' + (ai.title || 'Untitled') + ' - ' + (ai.scenes || []).length + ' scenes';\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post video script to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

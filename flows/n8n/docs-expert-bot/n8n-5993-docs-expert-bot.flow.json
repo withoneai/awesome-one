@@ -1,0 +1,150 @@
+{
+  "key": "n8n-5993-docs-expert-bot",
+  "name": "Documentation Expert Bot",
+  "description": "A RAG-powered documentation bot that queries a Supabase knowledge base using Claude AI to provide expert answers, then posts the response to Slack. Ask any question and get context-aware answers from your docs.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5993,
+    "url": "https://n8n.io/workflows/5993",
+    "originalName": "Create a Documentation Expert Bot with RAG, Gemini, and Supabase",
+    "totalViews": 33709,
+    "rank": 179,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "supabaseKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "supabase"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The question to ask the documentation bot"
+    },
+    "supabaseRef": {
+      "type": "string",
+      "required": true,
+      "description": "Supabase project reference ID"
+    },
+    "tableName": {
+      "type": "string",
+      "required": false,
+      "default": "documents",
+      "description": "Supabase table name containing documentation chunks"
+    },
+    "matchThreshold": {
+      "type": "number",
+      "required": false,
+      "default": 0.7,
+      "description": "Similarity threshold for document matching (0.0-1.0)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery_searchDocs",
+      "name": "Build search query for searchDocs",
+      "type": "code",
+      "code": {
+        "source": "const parts = [$.input.question, $.input.matchThreshold];\nconst staticTerms = \"SELECT id, content, metadata, similarity FROM match_documents('', , 10)\";\nreturn { query: parts.filter(Boolean).join(\" \") + \" \" + staticTerms };"
+      }
+    },
+    {
+      "id": "searchDocs",
+      "name": "Query Supabase for relevant documentation",
+      "type": "action",
+      "action": {
+        "platform": "supabase",
+        "actionId": "conn_mod_def::GC40SckOddE::NFFu2-49QLyGsPBdfweitg",
+        "connectionKey": "$.input.supabaseKey",
+        "pathVars": {
+          "ref": "$.input.supabaseRef"
+        },
+        "data": {
+          "query": "$.steps.buildQuery_searchDocs.output.query"
+        }
+      }
+    },
+    {
+      "id": "compileContext",
+      "name": "Compile retrieved documents into context",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar resp = fb($.steps.searchDocs.response, {});\nvar rows = fb(fb(fb(resp.rows, resp.result), resp.data), []);\nvar question = $.input.question;\n\nvar context = '';\nvar docCount = 0;\n\nif (Array.isArray(rows)) {\n  rows.forEach(function(row, i) {\n    var content = fb(fb(row.content, row.text), JSON.stringify(row));\n    var similarity = fb(row.similarity, 'N/A');\n    var metadata = fb(row.metadata, {});\n    context += '--- Document ' + (i + 1) + ' (similarity: ' + similarity + ') ---\\n';\n    if (metadata.source) context += 'Source: ' + metadata.source + '\\n';\n    context += content.slice(0, 2000) + '\\n\\n';\n    docCount++;\n  });\n}\n\nreturn { context: context, docCount: docCount, question: question };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build RAG prompt for Claude",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileContext.output;\n\nvar prompt = 'You are a documentation expert assistant. Answer the user\\'s question using ONLY the provided context from the documentation database. If the context does not contain enough information, say so clearly.\\n\\n';\nprompt += 'RETRIEVED DOCUMENTATION (' + data.docCount + ' documents):\\n\\n';\nprompt += data.context + '\\n';\nprompt += 'USER QUESTION: ' + data.question + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Answer based on the documentation context above\\n';\nprompt += '- Cite specific documents when possible\\n';\nprompt += '- If the docs don\\'t cover this topic, say so\\n';\nprompt += '- Be precise and technical when appropriate\\n';\nprompt += '- Suggest related topics the user might want to explore\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"your detailed answer\",\\n';\nprompt += '  \"confidence\": \"high/medium/low based on documentation coverage\",\\n';\nprompt += '  \"sources\": [\"source 1 reference\", \"source 2 reference\"],\\n';\nprompt += '  \"relatedTopics\": [\"topic 1\", \"topic 2\"],\\n';\nprompt += '  \"caveats\": \"any caveats or limitations of the answer\"\\n';\nprompt += '}';\n\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/docs-expert-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/docs-expert-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse Claude response",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiAnalysis.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, confidence: 'unknown', sources: [], relatedTopics: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseResponse.output;\nvar question = $.input.question;\nvar docCount = $.steps.compileContext.output.docCount;\n\nvar confidenceIcon = ':white_circle:';\nif (ai.confidence === 'high') confidenceIcon = ':large_green_circle:';\nif (ai.confidence === 'medium') confidenceIcon = ':large_orange_circle:';\n\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':books: Documentation Expert', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: fb(ai.answer, 'No answer could be generated.') } });\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: confidenceIcon + ' *Confidence:* ' + (fb(ai.confidence, 'unknown')) + '  |  *Docs matched:* ' + docCount }] });\n\nvar sources = fb(ai.sources, []);\nif (sources.length > 0) {\n  var sourceText = '*Sources:*\\n';\n  sources.forEach(function(s) { sourceText += '  - ' + s + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: sourceText } });\n}\n\nvar related = fb(ai.relatedTopics, []);\nif (related.length > 0) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':mag: *Related:* ' + related.join(', ') }] });\n}\n\nif (ai.caveats) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':warning: ' + ai.caveats }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Supabase RAG + Claude AI + One CLI' }] });\n\nvar fallback = 'Docs Expert \u2014 ' + question;\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

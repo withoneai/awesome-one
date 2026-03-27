@@ -1,0 +1,120 @@
+{
+  "key": "n8n-2896-batch-processor",
+  "name": "Batch Processor \u2014 Loop, Transform & Collect to Slack",
+  "description": "Takes a comma-separated list of items, loops over each one, uses Claude AI to transform/enrich each item, collects all results, and posts a formatted summary to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2896,
+    "url": "https://n8n.io/workflows/2896",
+    "originalName": "N8N for beginners: looping over items",
+    "totalViews": 44987,
+    "rank": 137,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post results"
+    },
+    "items": {
+      "type": "string",
+      "required": true,
+      "description": "Comma-separated list of items to process (e.g. 'Apple, Google, Microsoft')"
+    },
+    "transformInstruction": {
+      "type": "string",
+      "required": false,
+      "default": "Provide a one-sentence summary of what this company does and its main product.",
+      "description": "What Claude should do with each item"
+    }
+  },
+  "steps": [
+    {
+      "id": "parseItems",
+      "name": "Split input into individual items",
+      "type": "code",
+      "code": {
+        "source": "const items = $.input.items.split(',').map(function(s) { return s.trim(); }).filter(Boolean);\nreturn { items, count: items.length };"
+      }
+    },
+    {
+      "id": "processLoop",
+      "name": "Loop over each item and transform with AI",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.parseItems.output.items",
+        "as": "item",
+        "maxConcurrency": 2,
+        "steps": [
+          {
+            "id": "writeItemPrompt",
+            "name": "Write prompt for this item",
+            "type": "file-write",
+            "fileWrite": {
+              "path": "/tmp/one-batch-item-prompt.txt",
+              "content": "$.loop.item"
+            }
+          },
+          {
+            "id": "transformItem",
+            "name": "Transform item with Claude AI",
+            "type": "bash",
+            "bash": {
+              "command": "echo \"Process this item and follow the instruction below.\\nITEM: $(cat /tmp/one-batch-item-prompt.txt)\\nINSTRUCTION: Return a JSON object with keys 'item' (the original item name) and 'result' (your response). Return ONLY valid JSON.\" | claude --print -",
+              "timeout": 180000,
+              "parseJson": false
+            }
+          },
+          {
+            "id": "parseItemResult",
+            "name": "Parse item AI result",
+            "type": "code",
+            "code": {
+              "source": "let raw = $.steps.transformItem.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { item: $.loop.item, result: raw }; }"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "collectResults",
+      "name": "Collect all loop results into summary",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.processLoop.response.iterations || [];\nconst results = [];\niterations.forEach(function(iter) {\n  var parsed = (iter.parseItemResult && iter.parseItemResult.output) ? iter.parseItemResult.output : {};\n  results.push({ item: parsed.item || 'Unknown', result: parsed.result || 'No result' });\n});\nvar total = $.steps.parseItems.output.count;\nreturn { results, total, processed: results.length };"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.collectResults.output;\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':repeat: Batch Processing Complete', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Processed ' + data.processed + ' of ' + data.total + ' items*' } });\nblocks.push({ type: 'divider' });\ndata.results.forEach(function(r, i) {\n  var resultText = typeof r.result === 'string' ? r.result : JSON.stringify(r.result);\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + (i + 1) + '. ' + r.item + '*\\n' + resultText.slice(0, 500) } });\n});\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':gear: Batch processed with Claude AI via One CLI' }] });\nvar fallback = 'Batch Processing: ' + data.processed + ' items completed';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post batch results to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

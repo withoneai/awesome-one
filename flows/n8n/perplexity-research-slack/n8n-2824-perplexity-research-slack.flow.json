@@ -1,0 +1,136 @@
+{
+  "key": "n8n-2824-perplexity-research-slack",
+  "name": "AI research assistant with Exa web search and Slack Q&A",
+  "description": "Takes a question, searches the web with Exa to find authoritative answers, uses Claude AI to synthesize a comprehensive answer with citations, and posts the response to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2824,
+    "url": "https://n8n.io/workflows/2824",
+    "originalName": "Query Perplexity AI from your n8n workflows",
+    "totalViews": 24811,
+    "rank": 254,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the answer",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for the Q&A response"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Question to research and answer (e.g. 'What are the latest AI regulations in the EU?')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build search query from question",
+      "type": "code",
+      "code": {
+        "source": "var question = $.input.question || '';\nreturn { query: question };"
+      }
+    },
+    {
+      "id": "searchWeb",
+      "name": "Search the web with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery.output.query",
+          "numResults": 6,
+          "type": "auto",
+          "useAutoprompt": true,
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile source material from search results",
+      "type": "code",
+      "code": {
+        "source": "var results = $.steps.searchWeb.response.results || [];\nvar sourceText = '';\nvar citations = [];\nresults.forEach(function(r, i) {\n  sourceText += 'SOURCE ' + (i + 1) + ': ' + (r.title || '') + '\\n';\n  sourceText += 'URL: ' + (r.url || '') + '\\n';\n  sourceText += (r.text || '').slice(0, 2000) + '\\n\\n';\n  citations.push({ num: i + 1, title: r.title || '', url: r.url || '' });\n});\nreturn { sourceText: sourceText, citations: citations, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for question answering",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileSources.output;\nvar prompt = 'You are a knowledgeable research assistant. Answer the following question using the provided web sources. Always cite your sources.\\n\\n';\nprompt += 'QUESTION: ' + $.input.question + '\\n\\n';\nprompt += 'WEB SOURCES (' + data.sourceCount + '):\\n' + data.sourceText + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Provide a clear, comprehensive answer\\n';\nprompt += '- Cite sources using [1], [2], etc.\\n';\nprompt += '- Note if information conflicts across sources\\n';\nprompt += '- Indicate confidence level\\n';\nprompt += '- Suggest follow-up questions\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"Comprehensive answer with [1] citations\",\\n';\nprompt += '  \"confidence\": \"High|Medium|Low\",\\n';\nprompt += '  \"keyTakeaways\": [\"takeaway1\"],\\n';\nprompt += '  \"followUpQuestions\": [\"question1\"],\\n';\nprompt += '  \"sourcesUsed\": [1, 2, 3]\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2824-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnswer",
+      "name": "Run Claude AI to answer the question",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2824-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnswer.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, confidence: 'Medium', keyTakeaways: [], followUpQuestions: [], sourcesUsed: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit Q&A response",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar citations = $.steps.compileSources.output.citations;\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Research Answer', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Q:* ' + $.input.question } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Confidence:* ' + (ai.confidence || 'Medium') } });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: (ai.answer || '').slice(0, 2800) } });\nif (ai.keyTakeaways && ai.keyTakeaways.length > 0) {\n  blocks.push({ type: 'divider' });\n  var takeaways = '*Key Takeaways:*\\n';\n  ai.keyTakeaways.forEach(function(t, i) { takeaways += (i + 1) + '. ' + t + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: takeaways.slice(0, 1800) } });\n}\nif (citations.length > 0) {\n  blocks.push({ type: 'divider' });\n  var srcText = '*Sources:*\\n';\n  citations.forEach(function(c) { srcText += '[' + c.num + '] <' + c.url + '|' + c.title + '>\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText.slice(0, 1800) } });\n}\nif (ai.followUpQuestions && ai.followUpQuestions.length > 0) {\n  var followUp = '*Follow-up Questions:*\\n';\n  ai.followUpQuestions.forEach(function(q) { followUp += '- ' + q + '\\n'; });\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: followUp.slice(0, 500) }] });\n}\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Researched with Exa + Claude AI via One CLI' }] });\nvar fallback = 'Answer: ' + (ai.answer || '').slice(0, 200);\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post Q&A response to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

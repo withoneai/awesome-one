@@ -1,0 +1,72 @@
+{
+  "key": "n8n-1700-very-quick-quickstart",
+  "name": "Hello World \u2014 Random Quote to Slack",
+  "description": "A simple hello-world flow: fetches a random inspirational quote from the ZenQuotes API and posts it to Slack with Block Kit formatting. Great starter workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1700,
+    "url": "https://n8n.io/workflows/1700",
+    "originalName": "Very quick quickstart",
+    "totalViews": 317417,
+    "rank": 7,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the quote"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchQuote",
+      "name": "Fetch random quote from ZenQuotes API",
+      "type": "bash",
+      "bash": {
+        "command": "curl -s 'https://zenquotes.io/api/random'",
+        "timeout": 30000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseQuote",
+      "name": "Parse the quote response",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.fetchQuote.output || '[]';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry {\n  const data = JSON.parse(raw);\n  const quote = Array.isArray(data) ? data[0] : data;\n  return { text: quote.q || quote.text || 'No quote found', author: quote.a || quote.author || 'Unknown' };\n} catch(e) {\n  return { text: 'The best time to plant a tree was 20 years ago. The second best time is now.', author: 'Chinese Proverb' };\n}"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const q = $.steps.parseQuote.output;\nconst now = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });\n\nconst blocks = [\n  { type: 'header', text: { type: 'plain_text', text: ':sparkles: Daily Inspiration', emoji: true } },\n  { type: 'section', text: { type: 'mrkdwn', text: '> _' + q.text + '_' } },\n  { type: 'context', elements: [{ type: 'mrkdwn', text: ':writing_hand: *' + q.author + '* | ' + now }] },\n  { type: 'divider' },\n  { type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by ZenQuotes API + One CLI' }] }\n];\n\nconst fallback = '\"' + q.text + '\" \u2014 ' + q.author;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post quote to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

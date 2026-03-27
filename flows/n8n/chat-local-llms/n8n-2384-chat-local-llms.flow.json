@@ -1,0 +1,129 @@
+{
+  "key": "n8n-2384-chat-local-llms",
+  "name": "AI Research Chat \u2014 Ask a Question, Get an Answer",
+  "description": "Ask any question, search the web for relevant sources via Exa, have Claude AI analyze the findings, and post a well-sourced answer to Slack. A simple question-answering pipeline.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2384,
+    "url": "https://n8n.io/workflows/2384",
+    "originalName": "Chat with local LLMs using n8n and Ollama",
+    "totalViews": 186829,
+    "rank": 24,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The question you want answered"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    }
+  },
+  "steps": [
+    {
+      "id": "webSearch",
+      "name": "Search the web for relevant sources",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 800
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile search results into source material",
+      "type": "code",
+      "code": {
+        "source": "const results = ($.steps.webSearch.response && $.steps.webSearch.response.results) ? $.steps.webSearch.response.results : [];\nlet sourcesText = '';\nconst sourceList = [];\nresults.forEach((r, i) => {\n  sourcesText += (i + 1) + '. ' + (r.title || 'Untitled') + '\\n';\n  sourcesText += '   URL: ' + r.url + '\\n';\n  sourcesText += '   ' + (r.text || '').slice(0, 500) + '\\n\\n';\n  sourceList.push({ num: i + 1, title: r.title || 'Untitled', url: r.url });\n});\nreturn { sourcesText, sourceList, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI analysis prompt",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.compileSources.output;\nconst question = $.input.question;\nconst prompt = `You are a knowledgeable research assistant. Answer the following question using the provided web sources.\n\nQUESTION: ${question}\n\nSOURCES:\n${data.sourcesText}\n\nProvide a comprehensive, well-sourced answer. Reference source numbers [1], [2], etc. when citing information.\n\nReturn ONLY valid JSON:\n{\n  \"answer\": \"<comprehensive answer with source references like [1], [2]>\",\n  \"confidence\": \"<high|medium|low>\",\n  \"keyTakeaway\": \"<single sentence main takeaway>\",\n  \"relatedQuestions\": [\"<follow-up question 1>\", \"<follow-up question 2>\"]\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2384-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2384-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw.slice(0, 2000), confidence: 'unknown', keyTakeaway: '', relatedQuestions: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit answer",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst sources = $.steps.compileSources.output.sourceList || [];\nconst sourceCount = $.steps.compileSources.output.sourceCount;\n\nconst confEmoji = { high: ':green_circle:', medium: ':large_orange_circle:', low: ':red_circle:' };\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':mag: Research Answer', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: (confEmoji[ai.confidence] || ':white_circle:') + ' *Confidence:* ' + (ai.confidence || 'unknown') } });\nblocks.push({ type: 'divider' });\n\nconst answer = ai.answer || 'No answer generated.';\nconst answerChunks = [];\nlet current = '';\nanswer.split(' ').forEach(word => {\n  if ((current + ' ' + word).length > 2900) {\n    answerChunks.push(current);\n    current = word;\n  } else {\n    current = current ? current + ' ' + word : word;\n  }\n});\nif (current) answerChunks.push(current);\n\nanswerChunks.forEach(chunk => {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: chunk } });\n});\n\nblocks.push({ type: 'divider' });\n\nif (ai.keyTakeaway) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':dart: *Key Takeaway:* ' + ai.keyTakeaway } });\n}\n\nif (sources.length > 0) {\n  let srcText = '*Sources:*\\n';\n  sources.slice(0, 5).forEach(s => {\n    srcText += '[' + s.num + '] <' + s.url + '|' + s.title + '>\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText } });\n}\n\nif (ai.relatedQuestions && ai.relatedQuestions.length > 0) {\n  let rq = '*Related Questions:*\\n';\n  ai.relatedQuestions.forEach(q => { rq += ':grey_question: ' + q + '\\n'; });\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: rq }] });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: sourceCount + ' sources analyzed via Exa + Claude AI | One CLI' }] });\n\nconst fallback = 'Answer to: ' + question;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

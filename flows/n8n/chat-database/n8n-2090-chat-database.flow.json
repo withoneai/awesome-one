@@ -1,0 +1,178 @@
+{
+  "key": "n8n-2090-chat-database",
+  "name": "Chat with a database using AI",
+  "description": "Ask questions about data in a BigQuery database using natural language. Takes a question and database context, uses Claude to generate a SQL query, executes it via BigQuery, then uses Claude again to summarize the results in plain English. Results are posted to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2090,
+    "url": "https://n8n.io/workflows/2090",
+    "originalName": "Chat with a database using AI",
+    "totalViews": 261454,
+    "rank": 12,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "bigqueryKey": {
+      "type": "string",
+      "required": true,
+      "description": "BigQuery connection key",
+      "connection": {
+        "platform": "bigquery"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting results",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Natural language question about the data"
+    },
+    "projectId": {
+      "type": "string",
+      "required": true,
+      "description": "BigQuery project ID"
+    },
+    "datasetId": {
+      "type": "string",
+      "required": true,
+      "description": "BigQuery dataset ID"
+    },
+    "schemaHint": {
+      "type": "string",
+      "required": false,
+      "description": "Optional schema description (table names, columns, types) to help AI generate accurate SQL"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildSqlPrompt",
+      "name": "Build prompt for SQL generation",
+      "type": "code",
+      "code": {
+        "source": "const schemaInfo = $.input.schemaHint || 'No schema provided. Use INFORMATION_SCHEMA to discover tables if needed.';\n\nconst prompt = `You are a BigQuery SQL expert. Generate a GoogleSQL query to answer the user's question.\n\nUSER QUESTION: ${$.input.question}\n\nBIGQUERY PROJECT: ${$.input.projectId}\nDATASET: ${$.input.datasetId}\n\nSCHEMA INFORMATION:\n${schemaInfo}\n\nINSTRUCTIONS:\n- Write valid GoogleSQL (NOT legacy SQL)\n- Use fully qualified table names: \\`${$.input.projectId}.${$.input.datasetId}.table_name\\`\n- Add a LIMIT clause (max 100 rows) to prevent excessive results\n- If schema is not provided, first query INFORMATION_SCHEMA.TABLES and INFORMATION_SCHEMA.COLUMNS\n- Keep the query efficient and simple\n- Add comments explaining what the query does\n\nReturn ONLY valid JSON:\n{\n  \"sql\": \"<the BigQuery SQL query>\",\n  \"explanation\": \"<brief explanation of what the query does>\",\n  \"needsSchemaDiscovery\": false\n}`;\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "saveSqlPrompt",
+      "name": "Save SQL generation prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2090-sql-prompt.txt",
+        "content": "$.steps.buildSqlPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "generateSql",
+      "name": "Run Claude to generate SQL",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2090-sql-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseSql",
+      "name": "Parse Claude SQL output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.generateSql.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { sql: raw, explanation: 'Could not parse structured response', needsSchemaDiscovery: false }; }"
+      }
+    },
+    {
+      "id": "runQuery",
+      "name": "Execute SQL query on BigQuery",
+      "type": "action",
+      "action": {
+        "platform": "bigquery",
+        "actionId": "conn_mod_def::GJ6RV3Wlzc8::qxaXhFkrS7G7GftE1xTOYw",
+        "connectionKey": "$.input.bigqueryKey",
+        "data": {
+          "projectId": "$.input.projectId",
+          "query": "$.steps.parseSql.output.sql",
+          "useLegacySql": false,
+          "timeoutMs": 30000,
+          "maxResults": 100
+        }
+      }
+    },
+    {
+      "id": "formatResults",
+      "name": "Format query results for AI analysis",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.runQuery.response || {};\nconst schema = resp.schema || {};\nconst rows = resp.rows || [];\nconst totalRows = resp.totalRows || rows.length;\nconst jobComplete = resp.jobComplete;\nconst fields = (schema.fields || []).map(f => f.name);\n\n// Convert BigQuery row format to readable table\nlet tableText = '';\nif (fields.length > 0) {\n  tableText += 'Columns: ' + fields.join(' | ') + '\\n';\n  tableText += '-'.repeat(50) + '\\n';\n  rows.slice(0, 50).forEach(row => {\n    const values = (row.f || []).map(cell => cell.v || 'null');\n    tableText += values.join(' | ') + '\\n';\n  });\n}\n\nconst querySql = $.steps.parseSql.output.sql;\nconst queryExplanation = $.steps.parseSql.output.explanation;\n\nreturn { tableText, fields, rowCount: rows.length, totalRows, jobComplete, querySql, queryExplanation };"
+      }
+    },
+    {
+      "id": "buildSummaryPrompt",
+      "name": "Build prompt to summarize query results",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are a data analyst. Summarize the following database query results in plain language to answer the user's original question.\n\nORIGINAL QUESTION: ${$.input.question}\n\nSQL QUERY EXECUTED:\n${$.steps.formatResults.output.querySql}\n\nQUERY EXPLANATION: ${$.steps.formatResults.output.queryExplanation}\n\nQUERY RESULTS (${$.steps.formatResults.output.rowCount} rows of ${$.steps.formatResults.output.totalRows} total):\n${$.steps.formatResults.output.tableText}\n\nINSTRUCTIONS:\n- Directly answer the user's question using the data\n- Highlight key numbers, trends, or patterns\n- If the results are empty or unexpected, explain why\n- Use Slack mrkdwn formatting: *bold* (NOT **bold**), _italic_, > for quotes, numbered lists\n- Slack mrkdwn rules: No markdown tables. No # headings.\n\nReturn ONLY valid JSON:\n{\n  \"answer\": \"<plain language answer using Slack mrkdwn>\",\n  \"highlights\": [\"<key data point 1>\", \"<key data point 2>\"],\n  \"dataQualityNotes\": \"<any concerns about the data or query>\"\n}`;\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "saveSummaryPrompt",
+      "name": "Save summary prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2090-summary-prompt.txt",
+        "content": "$.steps.buildSummaryPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "summarizeResults",
+      "name": "Run Claude to summarize results",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2090-summary-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseSummary",
+      "name": "Parse Claude summary output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.summarizeResults.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, highlights: [], dataQualityNotes: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseSummary.output || {};\nconst question = $.input.question;\nconst sql = $.steps.formatResults.output.querySql || '';\nconst rowCount = $.steps.formatResults.output.rowCount;\nconst totalRows = $.steps.formatResults.output.totalRows;\n\nconst blocks = [];\n\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Database Query Results' } });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No answer generated.').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: answerText } });\nblocks.push({ type: 'divider' });\n\nif (ai.highlights && ai.highlights.length > 0) {\n  let highlights = '*Key Data Points:*\\n';\n  ai.highlights.forEach((h, i) => { highlights += ':small_blue_diamond: ' + h + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: highlights } });\n  blocks.push({ type: 'divider' });\n}\n\n// Show the SQL query (truncated)\nconst sqlPreview = sql.length > 500 ? sql.slice(0, 500) + '...' : sql;\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*SQL Query:*\\n```' + sqlPreview + '```' } });\n\nif (ai.dataQualityNotes) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':warning: ' + ai.dataQualityNotes }] });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':bar_chart: Rows returned: *' + rowCount + '* of *' + totalRows + '* total | Dataset: *' + $.input.projectId + '.' + $.input.datasetId + '*' }] });\n\nconst fallback = 'Database query results for: ' + question;\n\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post results to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

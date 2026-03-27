@@ -1,0 +1,129 @@
+{
+  "key": "n8n-2812-scrape-web-structured-json",
+  "name": "Structured web scraper with AI",
+  "description": "Scrapes any web page using Firecrawl, uses Claude to extract structured JSON data based on a user-defined schema, and posts the extracted data to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2812,
+    "url": "https://n8n.io/workflows/2812",
+    "originalName": "Scrape any web page into structured JSON data with ScrapeNinja and AI",
+    "totalViews": 65418,
+    "rank": 93,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for web scraping",
+      "default": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting results",
+      "default": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "URL to scrape (e.g. 'https://news.ycombinator.com')"
+    },
+    "schema": {
+      "type": "string",
+      "required": true,
+      "description": "Description of the data structure to extract (e.g. 'Extract product listings with: title, price, rating, description, image URL')"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the extracted data"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeUrl",
+      "name": "Scrape the target URL with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.url",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for structured extraction",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.scrapeUrl.response || {};\nconst data = resp.data || {};\nconst md = data.markdown || '';\nconst url = $.input.url;\nconst schema = $.input.schema;\n\nconst prompt = `You are a web scraping data extraction specialist. Extract structured data from the following scraped webpage content according to the user's schema definition.\\n\\nSOURCE URL: ${url}\\n\\nUSER-DEFINED SCHEMA:\\n${schema}\\n\\nSCRAPED CONTENT:\\n${md.slice(0, 8000)}\\n\\nINSTRUCTIONS:\\n- Extract ALL items matching the user's schema from the page content\\n- Follow the schema fields exactly as specified\\n- If a field cannot be found, use null\\n- Normalize data types (numbers as numbers, etc.)\\n- Sort by the most relevant field if applicable\\n\\nReturn ONLY valid JSON:\\n{\\n  \"pageTitle\": \"<title of the page>\",\\n  \"sourceUrl\": \"${url}\",\\n  \"schemaUsed\": \"${schema.slice(0, 100)}\",\\n  \"totalItems\": 0,\\n  \"items\": [\\n    { /* fields per schema */ }\\n  ],\\n  \"summary\": \"<one-line summary of extraction>\"\\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2812-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for structured data extraction",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2812-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { items: [], totalItems: 0, summary: raw, pageTitle: 'Scraped Data', sourceUrl: $.input.url }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message with extracted data",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst items = ai.items || [];\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Structured Data Extraction' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Source:* <' + (ai.sourceUrl || $.input.url) + '|' + (ai.pageTitle || 'Page') + '>\\n*Schema:* ' + $.input.schema.slice(0, 200) + '\\n*Items found:* ' + (ai.totalItems || items.length) } });\nblocks.push({ type: 'divider' });\n\nconst maxItems = Math.min(items.length, 10);\nfor (let i = 0; i < maxItems; i++) {\n  const item = items[i];\n  const keys = Object.keys(item);\n  let itemText = '*' + (i+1) + '.* ';\n  keys.forEach((k, ki) => {\n    const v = item[k] !== null && item[k] !== undefined ? String(item[k]) : 'N/A';\n    itemText += '*' + k + ':* ' + v.slice(0, 150);\n    if (ki < keys.length - 1) itemText += ' | ';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: itemText.slice(0, 1900) } });\n}\n\nif (items.length > 10) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '_...and ' + (items.length - 10) + ' more items_' } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':spider_web: ' + (ai.summary || 'Data extracted successfully') }] });\n\nconst fallback = 'Extracted ' + items.length + ' items from ' + $.input.url;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post extracted data to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

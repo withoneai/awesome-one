@@ -1,0 +1,189 @@
+{
+  "key": "n8n-3018-wordpress-content-pipeline",
+  "name": "WordPress Content Pipeline \u2014 Claude writes, publishes, tracks in Sheets",
+  "description": "Uses Claude AI to generate blog content on a given topic, publishes the post to WordPress, and logs the publication details to Google Sheets for tracking.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3018,
+    "url": "https://n8n.io/workflows/3018",
+    "originalName": "Automated content generation & publishing - Wordpress",
+    "totalViews": 40871,
+    "rank": 153,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "wordpressKey": {
+      "type": "string",
+      "required": true,
+      "description": "WordPress connection key",
+      "connection": {
+        "platform": "word-press"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for tracking",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for publish notifications"
+    },
+    "wordpressSiteId": {
+      "type": "string",
+      "required": true,
+      "description": "WordPress site ID or domain (e.g. mysite.wordpress.com)"
+    },
+    "spreadsheetUrl": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets URL to log published posts (columns: Date, Title, URL, Status, WordCount)"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Sheet1",
+      "description": "Sheet tab name for tracking"
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Blog post topic or keyword to write about"
+    },
+    "tone": {
+      "type": "string",
+      "required": false,
+      "default": "professional and engaging",
+      "description": "Writing tone (e.g. casual, formal, technical)"
+    },
+    "wordCount": {
+      "type": "number",
+      "required": false,
+      "default": 800,
+      "description": "Target word count for the blog post"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildContentPrompt",
+      "name": "Build Claude prompt to generate blog post",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic;\nconst tone = $.input.tone || 'professional and engaging';\nconst wordCount = $.input.wordCount || 800;\n\nlet prompt = 'You are an expert blog writer and content strategist. Write a complete, publish-ready blog post.\\n\\n';\nprompt += 'TOPIC: ' + topic + '\\n';\nprompt += 'TONE: ' + tone + '\\n';\nprompt += 'TARGET WORD COUNT: ' + wordCount + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Write an engaging title that is SEO-friendly\\n';\nprompt += '- Include an introduction, 3-5 main sections with headings, and a conclusion\\n';\nprompt += '- Use HTML formatting: <h2> for headings, <p> for paragraphs, <ul>/<li> for lists\\n';\nprompt += '- Include a meta description for SEO\\n';\nprompt += '- Add relevant tags (3-5 keywords)\\n';\nprompt += '- Make the content informative and original\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"Blog Post Title\",\\n';\nprompt += '  \"content\": \"<p>Full HTML content...</p>\",\\n';\nprompt += '  \"excerpt\": \"Short excerpt for preview (1-2 sentences)\",\\n';\nprompt += '  \"metaDescription\": \"SEO meta description under 160 chars\",\\n';\nprompt += '  \"tags\": [\"tag1\", \"tag2\"],\\n';\nprompt += '  \"wordCount\": 800,\\n';\nprompt += '  \"readingTime\": \"4 min\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3018-prompt.txt",
+        "content": "$.steps.buildContentPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to write blog post",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3018-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip code fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'Untitled Post', content: raw, excerpt: '', metaDescription: '', tags: [], wordCount: 0, readingTime: '0 min' }; }"
+      }
+    },
+    {
+      "id": "publishToWordPress",
+      "name": "Publish blog post to WordPress",
+      "type": "action",
+      "action": {
+        "platform": "word-press",
+        "actionId": "conn_mod_def::GJ8WW_SF41c::2UIlchnrQjqCWCK2VaWxwA",
+        "connectionKey": "$.input.wordpressKey",
+        "data": {
+          "site": "$.input.wordpressSiteId",
+          "title": "$.steps.parseAI.output.title",
+          "content": "$.steps.parseAI.output.content",
+          "excerpt": "$.steps.parseAI.output.excerpt",
+          "status": "publish",
+          "tags": "$.steps.parseAI.output.tags"
+        }
+      }
+    },
+    {
+      "id": "prepareSheetRow",
+      "name": "Prepare row data for Google Sheets tracking",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst wpResp = $.steps.publishToWordPress.response || {};\nconst wpData = wpResp.data || wpResp;\nconst now = new Date().toISOString().split('T')[0];\nconst postUrl = wpData.URL || wpData.url || wpData.short_URL || 'N/A';\nconst postId = wpData.ID || wpData.id || 'N/A';\n\nreturn {\n  date: now,\n  title: ai.title || 'Untitled',\n  url: postUrl,\n  postId: String(postId),\n  wordCount: String(ai.wordCount || 0),\n  readingTime: ai.readingTime || 'N/A',\n  status: 'published',\n  tags: (ai.tags || []).join(', ')\n};"
+      }
+    },
+    {
+      "id": "logToSheets",
+      "name": "Log published post to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetUrl": "$.input.spreadsheetUrl",
+          "sheetName": "$.input.sheetName",
+          "values": {
+            "Date": "$.steps.prepareSheetRow.output.date",
+            "Title": "$.steps.prepareSheetRow.output.title",
+            "URL": "$.steps.prepareSheetRow.output.url",
+            "Post ID": "$.steps.prepareSheetRow.output.postId",
+            "Word Count": "$.steps.prepareSheetRow.output.wordCount",
+            "Reading Time": "$.steps.prepareSheetRow.output.readingTime",
+            "Status": "$.steps.prepareSheetRow.output.status",
+            "Tags": "$.steps.prepareSheetRow.output.tags"
+          }
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit publish notification",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst row = $.steps.prepareSheetRow.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Blog Post Published!', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + (ai.title || 'Untitled') + '*' } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Word Count:*\\n' + (ai.wordCount || 'N/A') },\n  { type: 'mrkdwn', text: '*Reading Time:*\\n' + (ai.readingTime || 'N/A') }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Tags:*\\n' + (ai.tags || []).join(', ') },\n  { type: 'mrkdwn', text: '*Status:*\\n:white_check_mark: Published' }\n] });\n\nif (ai.excerpt) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Excerpt:*\\n' + ai.excerpt.slice(0, 500) } });\n}\n\nif (row.url !== 'N/A') {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':link: <' + row.url + '|View Post>' } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI + WordPress + Google Sheets' }] });\n\nconst fallback = 'Published: ' + (ai.title || 'Blog Post') + ' - ' + row.url;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post publish notification to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,172 @@
+{
+  "key": "n8n-585-extract-text-pdf",
+  "name": "Extract text from a PDF file",
+  "description": "PDF text extraction pipeline: searches Gmail for emails with PDF attachments, extracts attachment metadata, uses Claude AI to summarize the PDF information found, and posts a formatted summary to Slack with Block Kit.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 585,
+    "url": "https://n8n.io/workflows/585",
+    "originalName": "Extract text from a PDF file",
+    "totalViews": 150680,
+    "rank": 30,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": false,
+      "default": "has:attachment filename:pdf",
+      "description": "Gmail search query to find emails with PDFs (default: 'has:attachment filename:pdf')"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Maximum number of emails to process (default: 5)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the summary"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchEmails",
+      "name": "Search Gmail for emails with PDF attachments",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "data": {},
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "q": "$.input.searchQuery",
+          "maxResults": "$.input.maxEmails"
+        }
+      }
+    },
+    {
+      "id": "extractMessageIds",
+      "name": "Extract message IDs from search results",
+      "type": "code",
+      "code": {
+        "source": "const messages = $.steps.searchEmails.response.messages || [];\nconst ids = messages.map(m => m.id).filter(Boolean).slice(0, 5);\nreturn { messageIds: ids, count: ids.length };"
+      }
+    },
+    {
+      "id": "fetchMessages",
+      "name": "Fetch full message details for each email",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractMessageIds.output.messageIds",
+        "as": "msgId",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "getMessage",
+            "name": "Get email message details",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GJ3ocvMGOS8::D__3BgQSSzWtDUoOqLuX2A",
+              "connectionKey": "$.input.gmailKey",
+              "data": {},
+              "pathVars": {
+                "userId": "me",
+                "id": "$.loop.msgId"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "extractPdfInfo",
+      "name": "Extract PDF attachment info from email messages",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.fetchMessages.response.iterations || [];\nconst emails = [];\niterations.forEach((iter) => {\n  const msg = (iter.getMessage && iter.getMessage.response) ? iter.getMessage.response : {};\n  const headers = (msg.payload && msg.payload.headers) || [];\n  const subject = (headers.find(h => h.name === 'Subject') || {}).value || 'No Subject';\n  const from = (headers.find(h => h.name === 'From') || {}).value || 'Unknown';\n  const date = (headers.find(h => h.name === 'Date') || {}).value || '';\n  const parts = (msg.payload && msg.payload.parts) || [];\n  const pdfAttachments = [];\n  parts.forEach(p => {\n    if (p.filename && p.filename.toLowerCase().endsWith('.pdf')) {\n      pdfAttachments.push({ filename: p.filename, mimeType: p.mimeType || 'application/pdf', size: p.body ? p.body.size : 0 });\n    }\n  });\n  if (pdfAttachments.length > 0) {\n    emails.push({ subject, from, date, attachments: pdfAttachments, snippet: msg.snippet || '' });\n  }\n});\nlet emailsText = '';\nemails.forEach((e, i) => {\n  emailsText += (i+1) + '. Subject: ' + e.subject + '\\n';\n  emailsText += '   From: ' + e.from + '\\n';\n  emailsText += '   Date: ' + e.date + '\\n';\n  emailsText += '   Snippet: ' + e.snippet + '\\n';\n  emailsText += '   PDF Attachments: ' + e.attachments.map(a => a.filename + ' (' + Math.round(a.size/1024) + 'KB)').join(', ') + '\\n\\n';\n});\nreturn { emails, emailsText, pdfCount: emails.reduce((s, e) => s + e.attachments.length, 0) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI summary prompt",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are a document analysis assistant. Summarize the following emails that contain PDF attachments found in a Gmail inbox.\n\nEMAILS WITH PDF ATTACHMENTS:\n${$.steps.extractPdfInfo.output.emailsText}\n\nTotal PDFs found: ${$.steps.extractPdfInfo.output.pdfCount}\n\nProvide:\n1. A summary of what types of PDFs were found (invoices, reports, contracts, etc.) based on email subjects and context\n2. Group the PDFs by category/type\n3. Highlight any that might need urgent attention\n4. Recommendations for organizing these documents\n\nReturn ONLY valid JSON:\n{\n  \"summary\": \"Overview of PDFs found\",\n  \"categories\": [\n    { \"category\": \"Category name\", \"count\": 1, \"files\": [\"filename.pdf\"], \"notes\": \"Brief note\" }\n  ],\n  \"urgent_items\": [\"Any items needing immediate attention\"],\n  \"recommendations\": [\"Organization recommendations\"]\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-585-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-585-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, categories: [], urgent_items: [], recommendations: [] }; }"
+      }
+    },
+    {
+      "id": "buildBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'PDF Attachment Summary' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.summary || 'No PDFs analyzed.' } });\nblocks.push({ type: 'divider' });\nif (ai.categories && ai.categories.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Document Categories*' } });\n  ai.categories.forEach(c => {\n    let catText = '*' + c.category + '* (' + c.count + ' files)\\n';\n    if (c.files) catText += c.files.join(', ') + '\\n';\n    if (c.notes) catText += '_' + c.notes + '_';\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: catText.slice(0, 1900) } });\n  });\n  blocks.push({ type: 'divider' });\n}\nif (ai.urgent_items && ai.urgent_items.length > 0) {\n  let urgentText = '*:rotating_light: Urgent Items*\\n';\n  ai.urgent_items.forEach((u, i) => { urgentText += (i+1) + '. ' + u + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: urgentText } });\n  blocks.push({ type: 'divider' });\n}\nif (ai.recommendations && ai.recommendations.length > 0) {\n  let recsText = '*Recommendations*\\n';\n  ai.recommendations.forEach((r, i) => { recsText += (i+1) + '. ' + r + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: recsText } });\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Total PDFs found: ' + $.steps.extractPdfInfo.output.pdfCount }] });\nreturn { blocks, fallback: 'PDF Summary: ' + $.steps.extractPdfInfo.output.pdfCount + ' PDFs found in Gmail' };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildBlocks.output.fallback",
+          "blocks": "$.steps.buildBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

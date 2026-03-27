@@ -1,0 +1,143 @@
+{
+  "key": "n8n-4709-daily-news-digest-email",
+  "name": "Daily news digest from web sources via email",
+  "description": "Searches the web for news on specified topics using Exa, uses Claude AI to summarize articles into a concise daily digest, and delivers it via Gmail.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4709,
+    "url": "https://n8n.io/workflows/4709",
+    "originalName": "Daily news digest: summarize RSS feeds with OpenAI and deliver to WhatsApp",
+    "totalViews": 25139,
+    "rank": 253,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for searching news articles",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending the digest email",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "recipientEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to send the daily digest to"
+    },
+    "topics": {
+      "type": "string",
+      "required": true,
+      "description": "Comma-separated news topics (e.g. 'AI, startups, climate tech')"
+    },
+    "maxArticles": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Maximum number of articles to include (default 10)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build Exa search queries from topics",
+      "type": "code",
+      "code": {
+        "source": "var topics = ($.input.topics || '').split(',').map(function(t) { return t.trim(); }).filter(function(t) { return t.length > 0; });\nvar query = 'Latest news about ' + topics.join(' and ');\nreturn { query: query, maxResults: $.input.maxArticles || 10 };"
+      }
+    },
+    {
+      "id": "searchNews",
+      "name": "Search for recent news articles with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery.output.query",
+          "numResults": "$.steps.buildQuery.output.maxResults",
+          "type": "auto",
+          "useAutoprompt": true,
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "extractArticles",
+      "name": "Extract article data from search results",
+      "type": "code",
+      "code": {
+        "source": "var results = $.steps.searchNews.response.results || [];\nvar articleList = '';\nresults.forEach(function(r, i) {\n  articleList += '=== ARTICLE ' + (i + 1) + ' ===\\n';\n  articleList += 'Title: ' + (r.title || 'Untitled') + '\\n';\n  articleList += 'URL: ' + (r.url || '') + '\\n';\n  articleList += 'Date: ' + (r.publishedDate || 'unknown') + '\\n';\n  articleList += 'Content:\\n' + (r.text || '').slice(0, 1500) + '\\n\\n';\n});\nreturn { articleList: articleList, articleCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for news digest generation",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.extractArticles.output;\nvar today = new Date().toISOString().split('T')[0];\nvar prompt = 'You are a news editor. Create a concise daily news digest from the following articles.\\n\\n';\nprompt += 'DATE: ' + today + '\\n';\nprompt += 'TOPICS: ' + $.input.topics + '\\n';\nprompt += 'ARTICLES (' + data.articleCount + '):\\n' + data.articleList + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Write a brief 2-3 sentence overview of the day\\'s news\\n';\nprompt += '- Summarize each article in 1-2 sentences\\n';\nprompt += '- Group articles by topic if applicable\\n';\nprompt += '- Highlight the most important story\\n';\nprompt += '- Use clean HTML formatting suitable for email\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"digestTitle\": \"Daily Digest - date\",\\n';\nprompt += '  \"overview\": \"Overall summary of today\\'s news\",\\n';\nprompt += '  \"topStory\": { \"title\": \"...\", \"summary\": \"...\", \"url\": \"...\" },\\n';\nprompt += '  \"articles\": [\\n';\nprompt += '    { \"title\": \"...\", \"summary\": \"...\", \"url\": \"...\", \"topic\": \"...\", \"importance\": \"High|Medium|Low\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"htmlBody\": \"Full HTML email body with all articles formatted nicely\"\\n';\nprompt += '}';\nreturn { prompt: prompt, today: today };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4709-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiDigest",
+      "name": "Run Claude AI to generate news digest",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4709-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiDigest.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { digestTitle: 'Daily News Digest', overview: '', topStory: {}, articles: [], htmlBody: '<p>' + raw.replace(/\\n/g, '<br>') + '</p>' }; }"
+      }
+    },
+    {
+      "id": "buildEmailBody",
+      "name": "Build email body from AI digest",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar html = ai.htmlBody || '';\nif (!html || html.length < 50) {\n  html = '<h2>' + (ai.digestTitle || 'Daily Digest') + '</h2>';\n  html += '<p>' + (ai.overview || '') + '</p>';\n  if (ai.topStory && ai.topStory.title) {\n    html += '<h3>Top Story</h3>';\n    html += '<p><strong>' + ai.topStory.title + '</strong><br>' + (ai.topStory.summary || '') + '<br><a href=\"' + (ai.topStory.url || '#') + '\">Read more</a></p>';\n  }\n  var articles = ai.articles || [];\n  if (articles.length > 0) {\n    html += '<h3>All Stories</h3><ul>';\n    articles.forEach(function(a) {\n      html += '<li><strong>' + a.title + '</strong> [' + (a.importance || '') + ']<br>' + (a.summary || '') + '<br><a href=\"' + (a.url || '#') + '\">Read more</a></li>';\n    });\n    html += '</ul>';\n  }\n  html += '<hr><p><small>Generated with Exa + Claude AI via One CLI</small></p>';\n}\nvar subject = ai.digestTitle || ('Daily News Digest - ' + $.steps.buildPrompt.output.today);\nreturn { subject: subject, htmlBody: html.slice(0, 1900) };"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send digest email via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.recipientEmail",
+          "subject": "$.steps.buildEmailBody.output.subject",
+          "body": "$.steps.buildEmailBody.output.htmlBody",
+          "isHtml": true
+        }
+      }
+    }
+  ]
+}

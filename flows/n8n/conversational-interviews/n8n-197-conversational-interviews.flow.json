@@ -1,0 +1,118 @@
+{
+  "key": "n8n-197-conversational-interviews",
+  "name": "AI conversational interview conductor",
+  "description": "Claude AI conducts a structured multi-question interview on a given topic, collects and evaluates responses, generates follow-up questions, and saves the full interview transcript with analysis to Google Sheets. Adapted from n8n's conversational interview with AI agents workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 197,
+    "url": "https://n8n.io/workflows/197",
+    "originalName": "Conversational interviews with AI agents and n8n forms",
+    "totalViews": 31165,
+    "rank": 197,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving interview data",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID to save interview results"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Interviews",
+      "description": "Sheet tab name for interview data"
+    },
+    "interviewTopic": {
+      "type": "string",
+      "required": true,
+      "description": "The topic or role for the interview (e.g., 'Senior Software Engineer', 'Product Manager candidate')"
+    },
+    "intervieweeName": {
+      "type": "string",
+      "required": true,
+      "description": "Name of the person being interviewed"
+    },
+    "numberOfQuestions": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Number of interview questions to generate (default: 5)"
+    },
+    "intervieweeResponses": {
+      "type": "string",
+      "required": true,
+      "description": "The interviewee's responses to be evaluated, or 'generate-sample' for demo mode"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildInterviewPrompt",
+      "name": "Build Claude prompt for interview generation",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.interviewTopic;\nconst name = $.input.intervieweeName;\nconst numQ = $.input.numberOfQuestions || 5;\nconst responses = $.input.intervieweeResponses;\n\nlet prompt = 'You are a skilled interviewer. Conduct a structured interview and evaluate the responses.\\n\\n';\nprompt += 'INTERVIEW TOPIC/ROLE: ' + topic + '\\n';\nprompt += 'INTERVIEWEE: ' + name + '\\n';\nprompt += 'NUMBER OF QUESTIONS: ' + numQ + '\\n\\n';\n\nif (responses === 'generate-sample') {\n  prompt += 'MODE: Generate sample questions AND realistic sample responses for demonstration.\\n\\n';\n} else {\n  prompt += 'INTERVIEWEE RESPONSES:\\n' + responses + '\\n\\n';\n}\n\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Generate ' + numQ + ' targeted interview questions for the topic\\n';\nprompt += '- For each question, evaluate the response on a 1-10 scale\\n';\nprompt += '- Provide constructive feedback for each answer\\n';\nprompt += '- Generate follow-up questions based on the responses\\n';\nprompt += '- Provide an overall interview assessment\\n';\nprompt += '- Include strengths and areas for improvement\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"interviewee\": \"' + name + '\",\\n';\nprompt += '  \"topic\": \"' + topic + '\",\\n';\nprompt += '  \"date\": \"YYYY-MM-DD\",\\n';\nprompt += '  \"questions\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"questionNumber\": 1,\\n';\nprompt += '      \"question\": \"the interview question\",\\n';\nprompt += '      \"response\": \"the interviewee response\",\\n';\nprompt += '      \"score\": 7,\\n';\nprompt += '      \"feedback\": \"evaluation feedback\",\\n';\nprompt += '      \"followUp\": \"suggested follow-up question\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"overallScore\": 7.5,\\n';\nprompt += '  \"strengths\": [\"strength 1\", \"strength 2\"],\\n';\nprompt += '  \"improvements\": [\"area 1\", \"area 2\"],\\n';\nprompt += '  \"recommendation\": \"hire|consider|pass\",\\n';\nprompt += '  \"summary\": \"overall assessment summary\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-197-prompt.txt",
+        "content": "$.steps.buildInterviewPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiInterview",
+      "name": "Run Claude AI interview conductor",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-197-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiInterview.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { interviewee: $.input.intervieweeName, topic: $.input.interviewTopic, questions: [], overallScore: 0, strengths: [], improvements: [], recommendation: 'unknown', summary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Google Sheets rows from interview data",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst questions = ai.questions || [];\n\nconst header = ['Interviewee', 'Topic', 'Date', 'Q#', 'Question', 'Response', 'Score', 'Feedback', 'Follow-Up'];\nconst rows = questions.map(q => [\n  ai.interviewee || 'Unknown',\n  ai.topic || 'Unknown',\n  ai.date || new Date().toISOString().slice(0, 10),\n  String(q.questionNumber || 0),\n  q.question || '',\n  q.response || '',\n  String(q.score || 0),\n  q.feedback || '',\n  q.followUp || ''\n]);\n\nconst summaryRow = [\n  ai.interviewee || 'Unknown',\n  ai.topic || 'Unknown',\n  ai.date || new Date().toISOString().slice(0, 10),\n  'SUMMARY',\n  'Overall Score: ' + (ai.overallScore || 0) + '/10',\n  'Recommendation: ' + (ai.recommendation || 'N/A'),\n  String(ai.overallScore || 0),\n  'Strengths: ' + (ai.strengths || []).join('; '),\n  'Improvements: ' + (ai.improvements || []).join('; ')\n];\n\nconst allRows = [header].concat(rows).concat([summaryRow]);\nreturn { values: allRows, questionCount: questions.length, overallScore: ai.overallScore || 0, recommendation: ai.recommendation || 'N/A' };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save interview data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": "$.steps.buildSheetRows.output.values",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    }
+  ]
+}

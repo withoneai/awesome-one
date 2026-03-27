@@ -1,0 +1,202 @@
+{
+  "key": "n8n-3580-linkedin-hiring-signals",
+  "name": "LinkedIn Hiring Signal Scraper & Prospecting Tool",
+  "description": "Scrapes LinkedIn job listing pages via Firecrawl, uses Claude AI to extract hiring signals and identify high-intent B2B leads, and saves structured results to Google Sheets with a prospecting summary to Slack. Adapted from n8n's LinkedIn job listings scraper with Bright Data.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3580,
+    "url": "https://n8n.io/workflows/3580",
+    "originalName": "Scrape LinkedIn job listings for hiring signals & prospecting with Bright Data",
+    "totalViews": 20418,
+    "rank": 296,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping job listings",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving results",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "searchUrls": {
+      "type": "string",
+      "required": true,
+      "description": "Comma-separated LinkedIn job search URLs or company career page URLs to scrape"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for storing job listings"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for the prospecting summary"
+    },
+    "targetRoles": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Comma-separated role keywords to filter (e.g. 'engineering manager, VP sales')"
+    },
+    "prospectingGoal": {
+      "type": "string",
+      "required": false,
+      "default": "Identify companies with high hiring intent as potential B2B leads",
+      "description": "What to look for in the hiring data"
+    }
+  },
+  "steps": [
+    {
+      "id": "parseUrls",
+      "name": "Parse search URL list",
+      "type": "code",
+      "code": {
+        "source": "const urlString = $.input.searchUrls || '';\nconst urls = urlString.split(',').map(u => u.trim()).filter(u => u.length > 0 && (u.startsWith('http://') || u.startsWith('https://')));\nreturn { urls, urlCount: urls.length };"
+      }
+    },
+    {
+      "id": "scrapeListings",
+      "name": "Scrape job listing pages with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.parseUrls.output.urls",
+        "as": "pageUrl",
+        "maxConcurrency": 2,
+        "steps": [
+          {
+            "id": "scrapePage",
+            "name": "Scrape job listing page",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.pageUrl",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileListings",
+      "name": "Compile scraped job listing data",
+      "type": "code",
+      "code": {
+        "source": "const urls = $.steps.parseUrls.output.urls;\nconst iterations = $.steps.scrapeListings.response.iterations || [];\nlet compiled = '';\nlet successCount = 0;\n\niterations.forEach((iter, i) => {\n  const url = urls[i] || '';\n  const data = (iter.scrapePage && iter.scrapePage.response && iter.scrapePage.response.data) ? iter.scrapePage.response.data : null;\n  compiled += '=== PAGE ' + (i + 1) + ' ===\\n';\n  compiled += 'URL: ' + url + '\\n';\n  if (data && data.markdown) {\n    compiled += data.markdown.slice(0, 4000) + '\\n';\n    successCount++;\n  } else {\n    compiled += 'Failed to scrape\\n';\n  }\n  compiled += '\\n';\n});\n\nreturn { compiled: compiled.slice(0, 30000), successCount, totalPages: urls.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for hiring signal analysis",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileListings.output;\nconst targetRoles = $.input.targetRoles || '';\nconst goal = $.input.prospectingGoal || 'Identify companies with high hiring intent as potential B2B leads';\n\nlet prompt = 'You are a B2B sales intelligence analyst specializing in hiring signal analysis. Extract and analyze job listings from the scraped pages to identify prospecting opportunities.\\n\\n';\nprompt += 'PROSPECTING GOAL: ' + goal + '\\n';\nif (targetRoles) prompt += 'TARGET ROLES: ' + targetRoles + '\\n';\nprompt += 'PAGES SCRAPED: ' + d.successCount + ' of ' + d.totalPages + '\\n\\n';\nprompt += d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract individual job listings with company, title, location, seniority\\n';\nprompt += '- Identify hiring signals: rapid growth, new departments, leadership changes\\n';\nprompt += '- Score each company as a prospect (1-10) based on hiring intent\\n';\nprompt += '- Group companies by hiring intensity and sector\\n';\nprompt += '- Flag companies matching target roles if specified\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"listings\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"company\": \"company name\",\\n';\nprompt += '      \"title\": \"job title\",\\n';\nprompt += '      \"location\": \"location\",\\n';\nprompt += '      \"seniority\": \"junior|mid|senior|executive\",\\n';\nprompt += '      \"department\": \"engineering|sales|marketing|ops|other\",\\n';\nprompt += '      \"matchesTarget\": false\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"companies\": [\\n';\nprompt += '    { \"name\": \"company\", \"openRoles\": 3, \"prospectScore\": 8, \"hiringSignal\": \"rapid engineering growth\", \"sector\": \"SaaS\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"summary\": \"overview of hiring landscape\",\\n';\nprompt += '  \"topProspects\": [\"company 1 - reason\", \"company 2 - reason\"],\\n';\nprompt += '  \"trendInsights\": [\"market trend from hiring data\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3580-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI hiring signal analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3580-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { listings: [], companies: [], summary: raw, topProspects: [], trendInsights: [] }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Sheets rows from listings and companies",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = new Date().toISOString().slice(0, 10);\nconst rows = [];\nrows.push(['Date', 'Company', 'Title', 'Location', 'Seniority', 'Department', 'Prospect Score', 'Hiring Signal', 'Matches Target']);\n\nconst companyMap = {};\n(ai.companies || []).forEach(c => { companyMap[c.name] = c; });\n\n(ai.listings || []).forEach(l => {\n  const company = companyMap[l.company] || {};\n  rows.push([today, l.company || '', l.title || '', l.location || '', l.seniority || '', l.department || '', String(company.prospectScore || ''), company.hiringSignal || '', l.matchesTarget ? 'YES' : '']);\n});\nreturn { rows, listingCount: rows.length - 1 };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save hiring data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "Hiring Signals",
+          "values": "$.steps.buildSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack prospecting summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst listings = $.steps.buildSheetRows.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Hiring Signal Report', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Listings Found:* ' + listings.listingCount + ' | *Companies:* ' + (ai.companies || []).length } });\nblocks.push({ type: 'divider' });\n\nif (ai.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:* ' + ai.summary.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.topProspects && ai.topProspects.length > 0) {\n  let prospectText = '*Top Prospects:*\\n';\n  ai.topProspects.slice(0, 8).forEach((p, i) => { prospectText += ':dart: ' + (i + 1) + '. ' + p + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: prospectText.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.trendInsights && ai.trendInsights.length > 0) {\n  let trendText = '*Market Trends:*\\n';\n  ai.trendInsights.forEach((t, i) => { trendText += (i + 1) + '. ' + t + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: trendText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Data saved to Google Sheets | Powered by Firecrawl + Claude AI' }] });\nconst fallback = 'Hiring Signals: ' + listings.listingCount + ' listings from ' + (ai.companies || []).length + ' companies';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post prospecting summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

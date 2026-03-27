@@ -1,0 +1,212 @@
+{
+  "key": "n8n-4849-invoice-processing",
+  "name": "Automated invoice processing with AI OCR and Google Sheets",
+  "description": "Processes invoice documents by scraping content with Firecrawl or accepting text input, uses Claude AI to extract structured invoice data (vendor, amounts, line items), logs everything to Google Sheets, and sends a confirmation summary to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4849,
+    "url": "https://n8n.io/workflows/4849",
+    "originalName": "Automated invoice processing with Telegram, GPT-4o, OCR and SAP integration",
+    "totalViews": 27491,
+    "rank": 232,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for invoice URL scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "googleSheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for invoice logging",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for processing notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "invoiceUrl": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "URL of the invoice document to process"
+    },
+    "invoiceText": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Raw invoice text if not using URL (paste invoice content)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for invoice processing notifications"
+    },
+    "spreadsheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Invoice Processing Log",
+      "description": "Name for the Google Sheets spreadsheet"
+    }
+  },
+  "steps": [
+    {
+      "id": "getInvoiceContent",
+      "name": "Get invoice content via Firecrawl or direct text",
+      "type": "code",
+      "code": {
+        "source": "const invoiceUrl = $.input.invoiceUrl || '';\nconst invoiceText = $.input.invoiceText || '';\nreturn { hasUrl: invoiceUrl.length > 0, invoiceUrl: invoiceUrl, invoiceText: invoiceText, source: invoiceUrl ? 'url' : 'text' };"
+      }
+    },
+    {
+      "id": "scrapeInvoice",
+      "name": "Scrape invoice URL with Firecrawl (if URL provided)",
+      "type": "action",
+      "onError": {
+        "strategy": "continue"
+      },
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.invoiceUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "prepareContent",
+      "name": "Prepare invoice content for AI analysis",
+      "type": "code",
+      "code": {
+        "source": "const info = $.steps.getInvoiceContent.output;\nlet content = '';\nif (info.hasUrl) {\n  const resp = $.steps.scrapeInvoice.response?.data || $.steps.scrapeInvoice.response || {};\n  content = resp.markdown || resp.content || resp.text || '';\n}\nif (!content) content = info.invoiceText || '';\nreturn { content: content.slice(0, 10000), source: info.source };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for invoice data extraction",
+      "type": "code",
+      "code": {
+        "source": "const content = $.steps.prepareContent.output.content;\n\nlet prompt = 'You are an invoice processing specialist with OCR and data extraction expertise. Extract all structured data from the following invoice.\\n\\n';\nprompt += 'INVOICE CONTENT:\\n' + content + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract all invoice header info (vendor, date, number, due date)\\n';\nprompt += '- Extract all line items with quantities, unit prices, and totals\\n';\nprompt += '- Calculate subtotals, tax, and grand total\\n';\nprompt += '- Identify payment terms and methods\\n';\nprompt += '- Flag any discrepancies or unusual items\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"vendor\": { \"name\": \"\", \"address\": \"\", \"email\": \"\", \"phone\": \"\" },\\n';\nprompt += '  \"invoiceNumber\": \"\",\\n';\nprompt += '  \"invoiceDate\": \"\",\\n';\nprompt += '  \"dueDate\": \"\",\\n';\nprompt += '  \"currency\": \"USD\",\\n';\nprompt += '  \"lineItems\": [{ \"description\": \"\", \"quantity\": 0, \"unitPrice\": 0, \"total\": 0 }],\\n';\nprompt += '  \"subtotal\": 0,\\n';\nprompt += '  \"tax\": 0,\\n';\nprompt += '  \"grandTotal\": 0,\\n';\nprompt += '  \"paymentTerms\": \"\",\\n';\nprompt += '  \"notes\": \"\",\\n';\nprompt += '  \"flags\": [],\\n';\nprompt += '  \"confidence\": \"high|medium|low\"\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4849-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExtraction",
+      "name": "Extract invoice data with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4849-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExtraction.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { vendor: { name: 'Unknown' }, invoiceNumber: '', invoiceDate: '', dueDate: '', currency: 'USD', lineItems: [], subtotal: 0, tax: 0, grandTotal: 0, paymentTerms: '', notes: raw.slice(0, 300), flags: [], confidence: 'low' }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build spreadsheet rows for invoice data",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst headerRow = [\n  ai.invoiceNumber || '',\n  ai.invoiceDate || '',\n  ai.dueDate || '',\n  ai.vendor?.name || '',\n  ai.vendor?.email || '',\n  String(ai.grandTotal || 0),\n  ai.currency || 'USD',\n  String(ai.tax || 0),\n  ai.paymentTerms || '',\n  ai.confidence || ''\n];\n\nconst lineRows = [];\nconst items = ai.lineItems || [];\nitems.forEach(function(item) {\n  lineRows.push([\n    ai.invoiceNumber || '',\n    item.description || '',\n    String(item.quantity || 0),\n    String(item.unitPrice || 0),\n    String(item.total || 0)\n  ]);\n});\n\nreturn { headerRow: [headerRow], lineRows: lineRows };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save invoice data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.googleSheetsKey",
+        "data": {
+          "title": "$.input.spreadsheetName",
+          "sheets": [
+            {
+              "title": "Invoices",
+              "headers": [
+                "Invoice #",
+                "Date",
+                "Due Date",
+                "Vendor",
+                "Vendor Email",
+                "Total",
+                "Currency",
+                "Tax",
+                "Payment Terms",
+                "Confidence"
+              ],
+              "rows": "$.steps.buildSheetRows.output.headerRow"
+            },
+            {
+              "title": "Line Items",
+              "headers": [
+                "Invoice #",
+                "Description",
+                "Qty",
+                "Unit Price",
+                "Total"
+              ],
+              "rows": "$.steps.buildSheetRows.output.lineRows"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack invoice processing notification",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Invoice Processed', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Invoice #:*\\n' + (ai.invoiceNumber || 'N/A') },\n  { type: 'mrkdwn', text: '*Vendor:*\\n' + (ai.vendor?.name || 'Unknown') }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Date:*\\n' + (ai.invoiceDate || 'N/A') },\n  { type: 'mrkdwn', text: '*Due:*\\n' + (ai.dueDate || 'N/A') }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Grand Total:*\\n' + (ai.currency || '$') + ' ' + (ai.grandTotal || 0) },\n  { type: 'mrkdwn', text: '*Confidence:*\\n' + (ai.confidence || 'N/A') }\n] });\nblocks.push({ type: 'divider' });\n\nconst items = ai.lineItems || [];\nif (items.length > 0) {\n  let itemText = '*Line Items:*\\n';\n  items.slice(0, 8).forEach(function(item) {\n    itemText += '- ' + (item.description || 'Item') + ' x' + (item.quantity || 1) + ' = ' + (ai.currency || '$') + (item.total || 0) + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: itemText.slice(0, 1800) } });\n}\n\nif (ai.flags && ai.flags.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':warning: *Flags:* ' + ai.flags.join(', ') } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Saved to Google Sheets | Powered by Claude AI OCR' }] });\nconst fallbackText = 'Invoice ' + (ai.invoiceNumber || 'N/A') + ' from ' + (ai.vendor?.name || 'Unknown') + ': ' + (ai.currency || '$') + (ai.grandTotal || 0);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post invoice notification to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

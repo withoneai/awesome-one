@@ -1,0 +1,197 @@
+{
+  "key": "n8n-2552-web-scraping-jina-sheets",
+  "name": "Web scraping to Sheets: scrape URLs, AI structures data, save to Sheets",
+  "description": "Scrapes one or more URLs using Firecrawl, uses Claude AI to extract and structure the data into a clean tabular format, and saves the results to a new Google Sheets spreadsheet.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2552,
+    "url": "https://n8n.io/workflows/2552",
+    "originalName": "AI powered web scraping with Jina, Google Sheets and OpenAI : the EASY way",
+    "totalViews": 51309,
+    "rank": 119,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for web scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving data",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for status notification",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for completion notification"
+    },
+    "urls": {
+      "type": "string",
+      "required": true,
+      "description": "Comma-separated URLs to scrape (e.g. 'https://example.com/products, https://example.com/pricing')"
+    },
+    "dataDescription": {
+      "type": "string",
+      "required": false,
+      "default": "all structured data items",
+      "description": "What data to extract (e.g. 'product names and prices', 'company names and contact info', 'article titles and dates')"
+    },
+    "sheetTitle": {
+      "type": "string",
+      "required": false,
+      "default": "Scraped Data",
+      "description": "Title for the Google Sheets spreadsheet"
+    }
+  },
+  "steps": [
+    {
+      "id": "parseUrls",
+      "name": "Parse and validate input URLs",
+      "type": "code",
+      "code": {
+        "source": "const urlString = $.input.urls || '';\nconst urls = urlString.split(',').map(u => u.trim()).filter(u => u.startsWith('http'));\nreturn { urls, urlCount: urls.length };"
+      }
+    },
+    {
+      "id": "scrapeUrls",
+      "name": "Scrape all URLs with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.parseUrls.output.urls",
+        "as": "url",
+        "maxConcurrency": 2,
+        "steps": [
+          {
+            "id": "scrapePage",
+            "name": "Scrape individual page",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.url",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileScraped",
+      "name": "Compile all scraped content",
+      "type": "code",
+      "code": {
+        "source": "const urls = $.steps.parseUrls.output.urls;\nconst iterations = $.steps.scrapeUrls.response.iterations || [];\n\nlet allContent = '';\nlet successCount = 0;\niterations.forEach((iter, i) => {\n  const url = urls[i] || 'Unknown';\n  const resp = (iter.scrapePage && iter.scrapePage.response && iter.scrapePage.response.data) ? iter.scrapePage.response.data : {};\n  const md = resp.markdown || '';\n\n  allContent += '=== PAGE ' + (i + 1) + ' ===\\n';\n  allContent += 'URL: ' + url + '\\n';\n  allContent += 'Content:\\n' + md.slice(0, 4000) + '\\n\\n';\n  if (md.length > 0) successCount++;\n});\n\nreturn { allContent, successCount, totalUrls: urls.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for structured data extraction",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileScraped.output;\nconst dataDesc = $.input.dataDescription || 'all structured data items';\n\nlet prompt = 'You are a web scraping data extraction specialist. Extract structured, tabular data from the scraped webpages below.\\n\\n';\nprompt += 'DATA TO EXTRACT: ' + dataDesc + '\\n';\nprompt += 'PAGES SCRAPED: ' + d.successCount + '/' + d.totalUrls + '\\n\\n';\nprompt += 'SCRAPED CONTENT:\\n' + d.allContent + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Identify repeating data patterns (products, listings, entries, table rows)\\n';\nprompt += '- Extract every item with all available fields\\n';\nprompt += '- Create consistent column headers across all items\\n';\nprompt += '- Normalize data types (numbers as numbers, dates in ISO format)\\n';\nprompt += '- Include the source URL for each item\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"pageTitle\": \"descriptive title for the dataset\",\\n';\nprompt += '  \"itemType\": \"what kind of items\",\\n';\nprompt += '  \"headers\": [\"Column1\", \"Column2\", \"Column3\", \"Source URL\"],\\n';\nprompt += '  \"items\": [\\n';\nprompt += '    { \"Column1\": \"val\", \"Column2\": \"val\", \"Column3\": \"val\", \"Source URL\": \"url\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"totalItems\": 0,\\n';\nprompt += '  \"summary\": \"one-line description of extracted data\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2552-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExtract",
+      "name": "Run Claude AI for data extraction",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2552-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExtract.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { pageTitle: 'Scraped Data', itemType: 'unknown', headers: ['Data'], items: [], totalItems: 0, summary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetData",
+      "name": "Format data for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst items = ai.items || [];\nconst headers = ai.headers || (items.length > 0 ? Object.keys(items[0]) : ['Data']);\n\nconst sheetData = items.map((item, i) => {\n  const row = { '#': i + 1 };\n  headers.forEach(h => { row[h] = item[h] !== undefined ? String(item[h]) : ''; });\n  return row;\n});\n\nconst date = new Date().toISOString().split('T')[0];\n\nreturn { sheetData, itemCount: items.length, pageTitle: ai.pageTitle || 'Scraped Data', summary: ai.summary || '', date };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save extracted data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "connectionKey": "$.input.sheetsKey",
+          "title": "{{$.input.sheetTitle}} - {{$.steps.buildSheetData.output.itemCount}} items - {{$.steps.buildSheetData.output.date}}",
+          "sheetTitle": "Data",
+          "data": "$.steps.buildSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack completion notification",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst d = $.steps.buildSheetData.output;\nconst scraped = $.steps.compileScraped.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Web Scraping to Sheets Complete' } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Pages Scraped:*\\n' + scraped.successCount + '/' + scraped.totalUrls },\n  { type: 'mrkdwn', text: '*Items Extracted:*\\n' + d.itemCount }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Data Type:*\\n' + (ai.itemType || 'unknown') },\n  { type: 'mrkdwn', text: '*Sheet Title:*\\n' + ($.input.sheetTitle || 'Scraped Data') }\n] });\nblocks.push({ type: 'divider' });\n\nif (d.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:* ' + d.summary } });\n}\n\nconst headers = ai.headers || [];\nif (headers.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Columns:* ' + headers.join(', ') } });\n}\n\nconst items = ai.items || [];\nif (items.length > 0) {\n  let preview = '*Preview (first 3 rows):*\\n';\n  items.slice(0, 3).forEach((item, i) => {\n    const vals = headers.slice(0, 3).map(h => h + ': ' + (item[h] || '').toString().slice(0, 40));\n    preview += (i + 1) + '. ' + vals.join(' | ') + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: preview.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Firecrawl + Claude AI + Google Sheets' }] });\n\nconst fallback = 'Scraped ' + scraped.successCount + ' pages, ' + d.itemCount + ' items saved to Sheets';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post completion notification to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

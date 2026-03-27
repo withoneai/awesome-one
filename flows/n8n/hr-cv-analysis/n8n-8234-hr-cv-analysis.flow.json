@@ -1,0 +1,131 @@
+{
+  "key": "n8n-8234-hr-cv-analysis",
+  "name": "HR CV analyzer and candidate ranker",
+  "description": "Automates HR CV analysis by listing files from a Google Drive folder, using Claude to analyze and rank candidates based on job requirements, and saving the ranked results with scores to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 8234,
+    "url": "https://n8n.io/workflows/8234",
+    "originalName": "AI automated HR workflow for CV analysis and candidate ranking",
+    "totalViews": 65576,
+    "rank": 92,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key for listing files",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving results",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "folderId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive folder ID containing CV/resume files"
+    },
+    "jobTitle": {
+      "type": "string",
+      "required": true,
+      "description": "Job title to evaluate candidates against (e.g. 'Senior Frontend Engineer')"
+    },
+    "jobRequirements": {
+      "type": "string",
+      "required": true,
+      "description": "Key job requirements (e.g. 'React, TypeScript, 5+ years experience, team leadership')"
+    }
+  },
+  "steps": [
+    {
+      "id": "listFiles",
+      "name": "List CV files from Google Drive folder",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {
+          "q": "'{{$.input.folderId}}' in parents and trashed = false",
+          "pageSize": 50,
+          "fields": "files(id, name, mimeType, webViewLink, createdTime)"
+        }
+      }
+    },
+    {
+      "id": "parseFiles",
+      "name": "Parse file list and prepare for analysis",
+      "type": "code",
+      "code": {
+        "source": "const files = $.steps.listFiles.response.files || [];\nconst cvFiles = files.filter(f => {\n  const name = (f.name || '').toLowerCase();\n  return name.includes('.pdf') || name.includes('.doc') || name.includes('.txt') || name.includes('cv') || name.includes('resume');\n});\nlet fileList = '';\ncvFiles.forEach((f, i) => {\n  fileList += (i+1) + '. Name: ' + f.name + '\\n';\n  fileList += '   ID: ' + f.id + '\\n';\n  fileList += '   Type: ' + (f.mimeType || 'unknown') + '\\n';\n  fileList += '   Link: ' + (f.webViewLink || '') + '\\n';\n  fileList += '   Created: ' + (f.createdTime || '') + '\\n\\n';\n});\nreturn { fileList, fileCount: cvFiles.length, allFileCount: files.length, fileNames: cvFiles.map(f => f.name) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for CV analysis",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are an expert HR recruiter and CV analyst. Analyze the following candidate CVs/resumes for the position described below.\\n\\nJOB TITLE: ${$.input.jobTitle}\\nJOB REQUIREMENTS: ${$.input.jobRequirements}\\n\\nFILES FOUND IN CV FOLDER (${$.steps.parseFiles.output.fileCount} CVs):\\n${$.steps.parseFiles.output.fileList}\\n\\nINSTRUCTIONS:\\n- Based on the file names and available metadata, analyze and rank the candidates\\n- Score each candidate 1-100 based on likely fit with the job requirements\\n- Extract candidate name from filename where possible\\n- Provide a brief assessment for each candidate\\n- Rank from best to worst fit\\n\\nReturn ONLY valid JSON:\\n{\\n  \"candidates\": [\\n    {\\n      \"rank\": 1,\\n      \"name\": \"<extracted name>\",\\n      \"fileName\": \"<original file name>\",\\n      \"score\": 85,\\n      \"assessment\": \"<brief assessment>\",\\n      \"strengths\": [\"<strength1>\"],\\n      \"concerns\": [\"<concern1>\"],\\n      \"recommendation\": \"Shortlist|Consider|Reject\"\\n    }\\n  ],\\n  \"totalCandidates\": 0,\\n  \"topPick\": \"<name of best candidate>\",\\n  \"summary\": \"<overall summary of candidate pool>\"\\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-8234-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for CV analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-8234-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { candidates: [], totalCandidates: 0, topPick: '', summary: raw }; }"
+      }
+    },
+    {
+      "id": "formatSheetData",
+      "name": "Format ranked candidates for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst candidates = ai.candidates || [];\nconst date = new Date().toISOString().split('T')[0];\nconst sheetData = candidates.map(c => ({\n  'Rank': c.rank || '',\n  'Candidate Name': c.name || '',\n  'File Name': c.fileName || '',\n  'Score': c.score || '',\n  'Recommendation': c.recommendation || '',\n  'Assessment': (c.assessment || '').slice(0, 200),\n  'Strengths': (c.strengths || []).join('; ').slice(0, 200),\n  'Concerns': (c.concerns || []).join('; ').slice(0, 200),\n  'Job Title': $.input.jobTitle,\n  'Date': date\n}));\nreturn { sheetData, candidateCount: candidates.length, date, topPick: ai.topPick || '' };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save ranked candidates to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "title": "CV Analysis - {{$.input.jobTitle}} - {{$.steps.formatSheetData.output.date}}",
+          "sheetTitle": "Candidates",
+          "data": "$.steps.formatSheetData.output.sheetData"
+        }
+      }
+    }
+  ]
+}

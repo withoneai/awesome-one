@@ -1,0 +1,200 @@
+{
+  "key": "n8n-1897-gmail-pdf-to-drive",
+  "name": "Send PDF Attachments from Gmail to Google Drive with AI Filtering",
+  "description": "Searches Gmail for emails with PDF attachments, uses Claude AI to classify which PDFs match a target criteria (invoices, contracts, etc.), and uploads matching attachments info to a Google Sheet for tracking with Slack notification.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1897,
+    "url": "https://n8n.io/workflows/1897",
+    "originalName": "Send specific PDF attachments from Gmail to Google Drive using OpenAI",
+    "totalViews": 21903,
+    "rank": 282,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for reading emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for tracking",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": false,
+      "default": "has:attachment filename:pdf newer_than:7d",
+      "description": "Gmail search query to find PDF emails"
+    },
+    "filterCriteria": {
+      "type": "string",
+      "required": false,
+      "default": "invoices, receipts, or financial documents",
+      "description": "What type of PDF attachments to filter for"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for attachment log"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "PDF Attachments",
+      "description": "Sheet tab name"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for notification"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchEmails",
+      "name": "Search Gmail for PDF emails",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "q": "$.input.searchQuery",
+          "maxResults": 20
+        }
+      }
+    },
+    {
+      "id": "fetchMessages",
+      "name": "Fetch message details with attachment info",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.searchEmails.response.messages",
+        "as": "msg",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "getMessage",
+            "name": "Get message with attachment metadata",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GJ3ocvMGOS8::D__3BgQSSzWtDUoOqLuX2A",
+              "connectionKey": "$.input.gmailKey",
+              "pathVars": {
+                "userId": "me",
+                "id": "$.loop.msg.id"
+              },
+              "queryParams": {
+                "format": "full"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "extractAttachments",
+      "name": "Extract email and attachment metadata",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.fetchMessages.response.iterations || [];\nlet emailsWithPdfs = [];\n\niterations.forEach(iter => {\n  const resp = iter.getMessage ? iter.getMessage.response : null;\n  if (!resp) return;\n  const headers = (resp.payload && resp.payload.headers) || [];\n  const subject = (headers.find(h => h.name === 'Subject') || {}).value || '';\n  const from = (headers.find(h => h.name === 'From') || {}).value || '';\n  const date = (headers.find(h => h.name === 'Date') || {}).value || '';\n  const parts = (resp.payload && resp.payload.parts) || [];\n  const pdfAttachments = parts.filter(p => p.filename && p.filename.toLowerCase().endsWith('.pdf')).map(p => ({\n    filename: p.filename,\n    size: p.body ? p.body.size : 0,\n    attachmentId: p.body ? p.body.attachmentId : ''\n  }));\n  if (pdfAttachments.length > 0) {\n    emailsWithPdfs.push({ subject, from, date, messageId: resp.id || '', attachments: pdfAttachments });\n  }\n});\n\nlet emailsText = '';\nemailsWithPdfs.forEach((e, i) => {\n  emailsText += (i + 1) + '. Subject: ' + e.subject + '\\n   From: ' + e.from + '\\n   PDFs: ' + e.attachments.map(a => a.filename).join(', ') + '\\n';\n});\n\nreturn { emailsWithPdfs, emailsText, totalEmails: emailsWithPdfs.length, totalPdfs: emailsWithPdfs.reduce((sum, e) => sum + e.attachments.length, 0) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for PDF classification",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.extractAttachments.output;\nconst criteria = $.input.filterCriteria;\n\nconst prompt = 'You are a document classification specialist. Review these emails with PDF attachments and determine which ones match the target criteria.\\n\\nTARGET CRITERIA: ' + criteria + '\\n\\nEMAILS WITH PDFs:\\n' + data.emailsText + '\\n\\nClassify each email. Return ONLY valid JSON:\\n{\\n  \"classifications\": [\\n    {\\n      \"emailNumber\": 1,\\n      \"matches\": true,\\n      \"confidence\": \"high/medium/low\",\\n      \"reason\": \"why it matches or doesnt\",\\n      \"documentType\": \"invoice/receipt/contract/report/other\"\\n    }\\n  ],\\n  \"matchCount\": 0,\\n  \"summary\": \"brief summary of findings\"\\n}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1897-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiClassify",
+      "name": "Classify PDFs with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1897-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiClassify.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { classifications: [], matchCount: 0, summary: raw.slice(0, 200) }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Google Sheets rows for matching PDFs",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst emails = $.steps.extractAttachments.output.emailsWithPdfs || [];\nconst classifications = ai.classifications || [];\nconst date = new Date().toISOString().split('T')[0];\nconst rows = [];\n\nclassifications.forEach(c => {\n  if (!c.matches) return;\n  const email = emails[c.emailNumber - 1];\n  if (!email) return;\n  email.attachments.forEach(att => {\n    rows.push([date, email.from, email.subject, att.filename, Math.round(att.size / 1024) + 'KB', c.documentType || '', c.confidence || '', c.reason || '']);\n  });\n});\n\nconst slackText = 'PDF scan complete: ' + emails.length + ' emails with PDFs found, ' + (ai.matchCount || rows.length) + ' match criteria \"' + $.input.filterCriteria + '\". ' + (ai.summary || '');\nreturn { rows, slackText };"
+      }
+    },
+    {
+      "id": "logToSheets",
+      "name": "Log matching PDFs to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": "$.steps.buildSheetRows.output.rows"
+        }
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Notify Slack of PDF scan results",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSheetRows.output.slackText"
+        }
+      }
+    }
+  ]
+}

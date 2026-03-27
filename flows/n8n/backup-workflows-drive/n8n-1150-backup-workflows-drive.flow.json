@@ -1,0 +1,114 @@
+{
+  "key": "n8n-1150-backup-workflows-drive",
+  "name": "Backup workflow configs to Google Drive",
+  "description": "Exports workflow configurations and settings as a JSON backup file, uploads it to a designated Google Drive folder, and posts a backup confirmation to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1150,
+    "url": "https://n8n.io/workflows/1150",
+    "originalName": "Backup n8n workflows to Google Drive",
+    "totalViews": 23556,
+    "rank": 264,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key for uploading backup files",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting backup confirmation",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for backup notifications"
+    },
+    "backupFolderId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive folder ID where backups should be stored"
+    },
+    "backupData": {
+      "type": "string",
+      "required": true,
+      "description": "JSON string of workflow configurations to backup"
+    },
+    "backupLabel": {
+      "type": "string",
+      "required": false,
+      "default": "workflow-backup",
+      "description": "Label for the backup file (e.g. 'production-workflows')"
+    }
+  },
+  "steps": [
+    {
+      "id": "prepareBackup",
+      "name": "Prepare backup file content with metadata",
+      "type": "code",
+      "code": {
+        "source": "var now = new Date();\nvar timestamp = now.toISOString().replace(/[:.]/g, '-');\nvar dateStr = now.toISOString().split('T')[0];\nvar label = $.input.backupLabel || 'workflow-backup';\nvar fileName = label + '-' + timestamp + '.json';\nvar backupContent = '';\ntry {\n  var parsed = JSON.parse($.input.backupData);\n  var wrapper = {\n    backupMetadata: {\n      label: label,\n      createdAt: now.toISOString(),\n      source: 'One CLI Backup Flow'\n    },\n    data: parsed\n  };\n  backupContent = JSON.stringify(wrapper, null, 2);\n} catch(e) {\n  backupContent = $.input.backupData;\n}\nreturn { fileName: fileName, content: backupContent, dateStr: dateStr, contentSize: backupContent.length };"
+      }
+    },
+    {
+      "id": "writeBackupFile",
+      "name": "Write backup to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1150-backup.json",
+        "content": "$.steps.prepareBackup.output.content"
+      }
+    },
+    {
+      "id": "uploadToDrive",
+      "name": "Upload backup file to Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {
+          "name": "$.steps.prepareBackup.output.fileName",
+          "parents": [
+            "$.input.backupFolderId"
+          ],
+          "mimeType": "application/json",
+          "content": "$.steps.prepareBackup.output.content"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack confirmation message",
+      "type": "code",
+      "code": {
+        "source": "var backup = $.steps.prepareBackup.output;\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Backup Complete', emoji: true } });\nvar sizeKb = Math.round(backup.contentSize / 1024);\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*File:*\\n' + backup.fileName },\n  { type: 'mrkdwn', text: '*Size:*\\n' + sizeKb + ' KB' }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Date:*\\n' + backup.dateStr },\n  { type: 'mrkdwn', text: '*Label:*\\n' + ($.input.backupLabel || 'workflow-backup') }\n] });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Backed up to Google Drive via One CLI' }] });\nvar fallback = 'Backup complete: ' + backup.fileName + ' (' + sizeKb + ' KB)';\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post backup confirmation to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

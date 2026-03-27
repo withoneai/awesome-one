@@ -1,0 +1,106 @@
+{
+  "key": "n8n-10212-comedy-script-generator",
+  "name": "Comedy Script Generator",
+  "description": "Generate comedy video scripts using Claude AI and post them to Slack. Provide a topic or trending theme, and the AI writes a punchy, ready-to-film comedy script with scene directions, dialogue, and timing notes.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 10212,
+    "url": "https://n8n.io/workflows/10212",
+    "originalName": "Generate Funny AI Videos with Sora 2 and Auto-Publish to TikTok",
+    "totalViews": 35939,
+    "rank": 172,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the comedy script"
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Comedy topic or theme (e.g. 'working from home fails', 'first date disasters')"
+    },
+    "style": {
+      "type": "string",
+      "required": false,
+      "default": "short-form sketch",
+      "description": "Script style: short-form sketch, standup bit, sitcom scene, or TikTok skit"
+    },
+    "duration": {
+      "type": "string",
+      "required": false,
+      "default": "60 seconds",
+      "description": "Target video duration (e.g. '30 seconds', '60 seconds', '2 minutes')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build comedy script prompt",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nconst topic = fb($.input.topic, 'office life');\nconst style = fb($.input.style, 'short-form sketch');\nconst duration = fb($.input.duration, '60 seconds');\n\nlet prompt = 'You are a professional comedy writer who specializes in viral video scripts. Write a ' + style + ' comedy script about: ' + topic + '\\n\\n';\nprompt += 'Target duration: ' + duration + '\\n\\n';\nprompt += 'REQUIREMENTS:\\n';\nprompt += '- Include scene directions in [brackets]\\n';\nprompt += '- Write snappy dialogue with clear character labels\\n';\nprompt += '- Include timing notes for key beats\\n';\nprompt += '- End with a strong punchline or twist\\n';\nprompt += '- Keep it family-friendly but edgy enough to be shareable\\n';\nprompt += '- Include a suggested title and 3 hashtags\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"catchy video title\",\\n';\nprompt += '  \"style\": \"script style\",\\n';\nprompt += '  \"duration\": \"estimated duration\",\\n';\nprompt += '  \"characters\": [\"Character A\", \"Character B\"],\\n';\nprompt += '  \"scenes\": [\\n';\nprompt += '    { \"sceneNumber\": 1, \"direction\": \"scene setup\", \"dialogue\": [{ \"character\": \"Name\", \"line\": \"dialogue line\", \"action\": \"optional action note\" }], \"timing\": \"0:00-0:15\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"punchline\": \"the final punchline or twist\",\\n';\nprompt += '  \"hashtags\": [\"#tag1\", \"#tag2\", \"#tag3\"],\\n';\nprompt += '  \"directorNotes\": \"brief production tips\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/comedy-script-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Generate comedy script with Claude",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/comedy-script-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse Claude response",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nlet raw = fb($.steps.aiGenerate.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'Comedy Script', scenes: [], text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nconst ai = $.steps.parseResponse.output;\nconst topic = fb($.input.topic, 'comedy');\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':clapper: ' + (fb(ai.title, 'Comedy Script')), emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Style:* ' + (fb(fb(ai.style, $.input.style), 'sketch')) + '  |  *Duration:* ' + (fb(fb(ai.duration, $.input.duration), '60s')) + '  |  *Characters:* ' + (fb(ai.characters, [])).join(', ') } });\nblocks.push({ type: 'divider' });\n\nvar scenes = fb(ai.scenes, []);\nscenes.forEach(function(scene) {\n  var sceneText = '*Scene ' + scene.sceneNumber + '* (' + (fb(scene.timing, '')) + ')\\n';\n  sceneText += '_[' + (fb(scene.direction, '')) + ']_\\n';\n  var dialogueList = fb(scene.dialogue, []);\n  dialogueList.forEach(function(d) {\n    sceneText += '*' + d.character + ':* ' + d.line;\n    if (d.action) sceneText += ' _(' + d.action + ')_';\n    sceneText += '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: sceneText } });\n});\n\nif (ai.punchline) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':tada: *Punchline:* ' + ai.punchline } });\n}\n\nif (ai.directorNotes) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':movie_camera: *Director Notes:* ' + ai.directorNotes }] });\n}\n\nvar hashtagStr = (fb(ai.hashtags, [])).join(' ');\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: hashtagStr + ' | Powered by Claude AI + One CLI' }] });\n\nvar fallback = 'Comedy Script: ' + (fb(ai.title, topic));\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post comedy script to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

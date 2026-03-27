@@ -1,0 +1,165 @@
+{
+  "key": "n8n-193-keyword-generator",
+  "name": "AI keyword generator and expander",
+  "description": "Takes a seed keyword, uses Exa to find related search terms and trending queries, Claude AI expands and categorizes the keywords by intent and volume potential, then posts the organized keyword list to Slack. Adapted from n8n's Google Autosuggest keyword generation workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 193,
+    "url": "https://n8n.io/workflows/193",
+    "originalName": "Generating Keywords using Google Autosuggest",
+    "totalViews": 31724,
+    "rank": 193,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for keyword research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting keyword results",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "seedKeyword": {
+      "type": "string",
+      "required": true,
+      "description": "The seed keyword to expand (e.g., 'project management software')"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the keyword results"
+    },
+    "industry": {
+      "type": "string",
+      "required": false,
+      "default": "general",
+      "description": "Industry or niche context for keyword generation"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery_searchRelated",
+      "name": "Build search query for searchRelated",
+      "type": "code",
+      "code": {
+        "source": "const parts = [$.input.seedKeyword];\nconst staticTerms = \"best tools comparisons reviews alternatives\";\nreturn { query: parts.filter(Boolean).join(\" \") + \" \" + staticTerms };"
+      }
+    },
+    {
+      "id": "searchRelated",
+      "name": "Search Exa for related keywords and content",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_searchRelated.output.query",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "searchQuestions",
+      "name": "Search Exa for question-based keywords",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "how to what is best way {{$.input.seedKeyword}} guide tutorial",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 800
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile search results for keyword extraction",
+      "type": "code",
+      "code": {
+        "source": "const related = $.steps.searchRelated.response.results || [];\nconst questions = $.steps.searchQuestions.response.results || [];\n\nlet sourcesText = 'RELATED CONTENT TITLES AND SNIPPETS:\\n';\nrelated.forEach((r, i) => {\n  sourcesText += (i + 1) + '. Title: ' + (r.title || '') + '\\n';\n  sourcesText += '   URL: ' + (r.url || '') + '\\n';\n  sourcesText += '   Snippet: ' + (r.text || '').slice(0, 600) + '\\n\\n';\n});\n\nsourcesText += '\\nQUESTION-BASED CONTENT:\\n';\nquestions.forEach((r, i) => {\n  sourcesText += (related.length + i + 1) + '. Title: ' + (r.title || '') + '\\n';\n  sourcesText += '   URL: ' + (r.url || '') + '\\n';\n  sourcesText += '   Snippet: ' + (r.text || '').slice(0, 600) + '\\n\\n';\n});\n\nreturn { sourcesText, totalSources: related.length + questions.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for keyword expansion",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileSources.output;\nconst seed = $.input.seedKeyword;\nconst industry = $.input.industry || 'general';\n\nlet prompt = 'You are an SEO keyword research specialist. Generate an expanded keyword list from the seed keyword and research data.\\n\\n';\nprompt += 'SEED KEYWORD: ' + seed + '\\n';\nprompt += 'INDUSTRY: ' + industry + '\\n\\n';\nprompt += 'RESEARCH DATA (' + d.totalSources + ' sources analyzed):\\n';\nprompt += d.sourcesText + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Generate 40-60 keyword variations from the seed keyword\\n';\nprompt += '- Categorize by search intent: informational, commercial, transactional, navigational\\n';\nprompt += '- Include: long-tail variations, question keywords, comparison keywords, local variations\\n';\nprompt += '- Estimate relative search volume: high, medium, low\\n';\nprompt += '- Estimate keyword difficulty: easy, medium, hard\\n';\nprompt += '- Use Slack mrkdwn for formatting. No markdown tables.\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"seedKeyword\": \"' + seed + '\",\\n';\nprompt += '  \"totalKeywords\": 0,\\n';\nprompt += '  \"categories\": {\\n';\nprompt += '    \"informational\": [{ \"keyword\": \"\", \"volume\": \"high|medium|low\", \"difficulty\": \"easy|medium|hard\" }],\\n';\nprompt += '    \"commercial\": [{ \"keyword\": \"\", \"volume\": \"high|medium|low\", \"difficulty\": \"easy|medium|hard\" }],\\n';\nprompt += '    \"transactional\": [{ \"keyword\": \"\", \"volume\": \"high|medium|low\", \"difficulty\": \"easy|medium|hard\" }],\\n';\nprompt += '    \"navigational\": [{ \"keyword\": \"\", \"volume\": \"high|medium|low\", \"difficulty\": \"easy|medium|hard\" }]\\n';\nprompt += '  },\\n';\nprompt += '  \"topOpportunities\": [\"keyword 1\", \"keyword 2\", \"keyword 3\"],\\n';\nprompt += '  \"longTailGems\": [\"long tail 1\", \"long tail 2\"],\\n';\nprompt += '  \"summary\": \"keyword research summary\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-193-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExpand",
+      "name": "Run Claude AI keyword expansion",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-193-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExpand.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { seedKeyword: $.input.seedKeyword, totalKeywords: 0, categories: {}, topOpportunities: [], longTailGems: [], summary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit keyword report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst seed = $.input.seedKeyword;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Keyword Research: ' + seed } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Seed keyword:* ' + seed + ' | *Total keywords generated:* ' + (ai.totalKeywords || 0) } });\nblocks.push({ type: 'divider' });\n\nconst cats = ai.categories || {};\nconst intentIcons = { informational: ':mag:', commercial: ':moneybag:', transactional: ':credit_card:', navigational: ':compass:' };\n\nObject.keys(cats).forEach(intent => {\n  const keywords = cats[intent] || [];\n  if (keywords.length === 0) return;\n  const icon = intentIcons[intent] || ':pushpin:';\n  let text = icon + ' *' + intent.charAt(0).toUpperCase() + intent.slice(1) + '* (' + keywords.length + ' keywords)\\n';\n  keywords.slice(0, 8).forEach(kw => {\n    const volIcon = kw.volume === 'high' ? ':arrow_up:' : kw.volume === 'low' ? ':arrow_down:' : ':arrow_right:';\n    text += volIcon + ' ' + kw.keyword + ' _(' + kw.difficulty + ')_\\n';\n  });\n  if (keywords.length > 8) text += '... and ' + (keywords.length - 8) + ' more';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 2900) } });\n  blocks.push({ type: 'divider' });\n});\n\nif (ai.topOpportunities && ai.topOpportunities.length > 0) {\n  let opText = ':star: *Top Opportunities:*\\n';\n  ai.topOpportunities.forEach((o, i) => { opText += (i + 1) + '. ' + o + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: opText } });\n}\n\nif (ai.longTailGems && ai.longTailGems.length > 0) {\n  let ltText = ':gem: *Long-Tail Gems:*\\n';\n  ai.longTailGems.forEach((g, i) => { ltText += (i + 1) + '. ' + g + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ltText } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa + Claude AI | One CLI' }] });\n\nconst fallback = 'Keyword Research: ' + (ai.totalKeywords || 0) + ' keywords generated for \"' + seed + '\"';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post keyword results to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

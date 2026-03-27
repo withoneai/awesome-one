@@ -1,0 +1,175 @@
+{
+  "key": "n8n-2420-image-validation-ai",
+  "name": "Automate image validation tasks using AI vision",
+  "description": "Downloads images from Google Drive, uses Claude AI vision to validate each image against specified criteria (passport photos, product images, document scans), logs validation results to Google Sheets, and reports to Slack with pass/fail status.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2420,
+    "url": "https://n8n.io/workflows/2420",
+    "originalName": "Automate image validation tasks using AI Vision",
+    "totalViews": 26586,
+    "rank": 238,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "googleDriveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key for listing image files",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "googleSheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for validation results",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "imageUrls": {
+      "type": "string",
+      "required": true,
+      "description": "Comma-separated list of image URLs to validate"
+    },
+    "validationType": {
+      "type": "string",
+      "required": false,
+      "default": "general",
+      "description": "Type: passport_photo, product_image, document_scan, id_card, general"
+    },
+    "validationCriteria": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Custom validation criteria (e.g. 'must show a wine bottle label clearly')"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for validation results"
+    }
+  },
+  "steps": [
+    {
+      "id": "parseImageUrls",
+      "name": "Parse image URLs into array",
+      "type": "code",
+      "code": {
+        "source": "const urlString = $.input.imageUrls || '';\nconst urls = urlString.split(',').map(function(u) { return u.trim(); }).filter(function(u) { return u.length > 0; });\nreturn { urls: urls, count: urls.length };"
+      }
+    },
+    {
+      "id": "buildValidationCriteria",
+      "name": "Build validation criteria based on type",
+      "type": "code",
+      "code": {
+        "source": "const vType = $.input.validationType || 'general';\nconst custom = $.input.validationCriteria || '';\nlet criteria = '';\n\nif (vType === 'passport_photo') {\n  criteria = 'Validate as passport/ID photo: face clearly visible and centered, neutral expression, plain background (white or light grey), no shadows on face, no glasses, proper lighting, head and shoulders only, recent photo quality.';\n} else if (vType === 'product_image') {\n  criteria = 'Validate as product photo: product clearly visible, clean background, good lighting, no blur, product fills most of frame, no distracting elements, professional quality.';\n} else if (vType === 'document_scan') {\n  criteria = 'Validate as document scan: text readable, all corners visible, no significant skew, adequate resolution, no fingers or shadows blocking content.';\n} else if (vType === 'id_card') {\n  criteria = 'Validate as ID card photo: card fully visible, all text readable, no glare or reflections, both sides if applicable, no cropping of edges.';\n} else {\n  criteria = 'General image quality validation: clear and not blurry, adequate lighting, subject clearly visible, no obvious defects.';\n}\n\nif (custom) criteria += '\\nAdditional criteria: ' + custom;\n\nreturn { criteria: criteria, validationType: vType };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude AI vision validation prompt",
+      "type": "code",
+      "code": {
+        "source": "const urls = $.steps.parseImageUrls.output.urls;\nconst criteria = $.steps.buildValidationCriteria.output;\n\nlet prompt = 'You are an image validation specialist using AI vision. Validate the following images against specific criteria.\\n\\n';\nprompt += 'VALIDATION TYPE: ' + criteria.validationType + '\\n';\nprompt += 'CRITERIA: ' + criteria.criteria + '\\n\\n';\nprompt += 'IMAGES TO VALIDATE:\\n';\nurls.forEach(function(url, i) {\n  prompt += (i + 1) + '. ' + url + '\\n';\n});\nprompt += '\\nFor each image, evaluate against all criteria points and provide a pass/fail assessment.\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"validationType\": \"' + criteria.validationType + '\",\\n';\nprompt += '  \"results\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"imageIndex\": 1,\\n';\nprompt += '      \"url\": \"\",\\n';\nprompt += '      \"status\": \"pass|fail|review\",\\n';\nprompt += '      \"score\": 0,\\n';\nprompt += '      \"criteria\": [{ \"check\": \"criteria point\", \"passed\": true, \"note\": \"\" }],\\n';\nprompt += '      \"summary\": \"\",\\n';\nprompt += '      \"suggestions\": [\"\"]\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"overallPassRate\": \"0%\",\\n';\nprompt += '  \"summary\": \"overall validation summary\"\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2420-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiValidation",
+      "name": "Validate images with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2420-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude validation output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiValidation.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { validationType: $.input.validationType || 'general', results: [], overallPassRate: '0%', summary: raw.slice(0, 300) }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build spreadsheet rows from validation results",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst rows = [];\nconst results = ai.results || [];\nresults.forEach(function(r) {\n  const criteriaText = (r.criteria || []).map(function(c) { return c.check + ': ' + (c.passed ? 'PASS' : 'FAIL'); }).join('; ');\n  rows.push([\n    String(r.imageIndex || ''),\n    r.url || '',\n    r.status || '',\n    String(r.score || 0),\n    r.summary || '',\n    criteriaText,\n    (r.suggestions || []).join(', ')\n  ]);\n});\nreturn { rows: rows };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save validation results to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.googleSheetsKey",
+        "data": {
+          "title": "Image Validation Results",
+          "sheets": [
+            {
+              "title": "Validation",
+              "headers": [
+                "#",
+                "Image URL",
+                "Status",
+                "Score",
+                "Summary",
+                "Criteria Results",
+                "Suggestions"
+              ],
+              "rows": "$.steps.buildSheetRows.output.rows"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack validation report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Image Validation Results', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Validation Type:*\\n' + (ai.validationType || 'general') },\n  { type: 'mrkdwn', text: '*Pass Rate:*\\n' + (ai.overallPassRate || 'N/A') }\n] });\nblocks.push({ type: 'divider' });\n\nconst results = ai.results || [];\nresults.slice(0, 8).forEach(function(r) {\n  let statusIcon = ':white_check_mark:';\n  if (r.status === 'fail') statusIcon = ':x:';\n  else if (r.status === 'review') statusIcon = ':warning:';\n  let text = statusIcon + ' *Image ' + (r.imageIndex || '') + ':* ' + (r.status || '').toUpperCase();\n  text += ' (Score: ' + (r.score || 0) + '/100)';\n  text += '\\n' + (r.summary || '').slice(0, 300);\n  if (r.suggestions && r.suggestions.length > 0) {\n    text += '\\n_Suggestions:_ ' + r.suggestions.slice(0, 2).join(', ');\n  }\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 1800) } });\n});\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:* ' + (ai.summary || '').slice(0, 1500) } });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Saved to Google Sheets | Powered by Claude AI Vision' }] });\nconst fallbackText = 'Image Validation: ' + (ai.overallPassRate || '?') + ' pass rate - ' + results.length + ' images';\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post validation report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

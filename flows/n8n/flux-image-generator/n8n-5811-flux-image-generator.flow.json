@@ -1,0 +1,149 @@
+{
+  "key": "n8n-5811-flux-image-generator",
+  "name": "Image generation API research and recommendations",
+  "description": "Researches image generation APIs and services using Exa search, uses Claude AI to compare providers and recommend the best tools for specific use cases, and posts the analysis to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2417,
+    "url": "https://n8n.io/workflows/2417",
+    "originalName": "Flux AI image generator",
+    "totalViews": 84767,
+    "rank": 65,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the research results"
+    },
+    "useCase": {
+      "type": "string",
+      "required": true,
+      "description": "Image generation use case to research (e.g. 'product photography', 'marketing banners', 'social media content', 'logo design')"
+    },
+    "requirements": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Specific requirements (e.g. 'must have API access', 'free tier needed', 'high resolution output')"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchImageApis",
+      "name": "Search for image generation APIs and tools with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "best AI image generation API tools 2025 2026 comparison",
+          "numResults": 8,
+          "type": "neural",
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "searchUseCase",
+      "name": "Search for use-case-specific recommendations",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.useCase",
+          "numResults": 5,
+          "type": "neural",
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile all research results",
+      "type": "code",
+      "code": {
+        "source": "const apiResp = $.steps.searchImageApis.response || {};\nconst ucResp = $.steps.searchUseCase.response || {};\n\nconst apiResults = (apiResp.data || apiResp).results || [];\nconst ucResults = (ucResp.data || ucResp).results || [];\n\nlet context = 'IMAGE GENERATION API RESEARCH:\\n';\nconst sources = [];\n\napiResults.slice(0, 8).forEach((r, i) => {\n  context += 'API SOURCE ' + (i + 1) + ': ' + (r.title || 'Untitled') + '\\n';\n  context += 'URL: ' + (r.url || '') + '\\n';\n  context += (r.text || r.snippet || '').slice(0, 1200) + '\\n\\n';\n  sources.push({ title: r.title || 'Source ' + (i + 1), url: r.url || '' });\n});\n\ncontext += '\\nUSE-CASE SPECIFIC RESEARCH:\\n';\nucResults.slice(0, 5).forEach((r, i) => {\n  context += 'UC SOURCE ' + (i + 1) + ': ' + (r.title || 'Untitled') + '\\n';\n  context += (r.text || r.snippet || '').slice(0, 800) + '\\n\\n';\n  sources.push({ title: r.title || 'UC Source', url: r.url || '' });\n});\n\nreturn { context: context.slice(0, 10000), sources, totalSources: apiResults.length + ucResults.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude recommendation prompt",
+      "type": "code",
+      "code": {
+        "source": "const useCase = $.input.useCase;\nconst requirements = $.input.requirements || 'No specific requirements';\nconst research = $.steps.compileResearch.output;\n\nlet prompt = 'You are an AI tools expert specializing in image generation. Based on the research provided, recommend the best image generation tools and APIs for the given use case.\\n\\n';\nprompt += 'USE CASE: ' + useCase + '\\n';\nprompt += 'REQUIREMENTS: ' + requirements + '\\n\\n';\nprompt += 'RESEARCH DATA:\\n' + research.context + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Recommend the top 3-5 image generation tools/APIs\\n';\nprompt += '- Compare pricing, quality, speed, and ease of integration\\n';\nprompt += '- Highlight which tool is best for the specific use case\\n';\nprompt += '- Include API access details and free tier availability\\n';\nprompt += '- Note any limitations or caveats\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"topRecommendation\": \"name of the best tool for this use case\",\\n';\nprompt += '  \"summary\": \"2-3 sentence overview\",\\n';\nprompt += '  \"tools\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"name\": \"tool name\",\\n';\nprompt += '      \"description\": \"what it does\",\\n';\nprompt += '      \"bestFor\": \"ideal use case\",\\n';\nprompt += '      \"pricing\": \"pricing info\",\\n';\nprompt += '      \"apiAccess\": true,\\n';\nprompt += '      \"freeTier\": true,\\n';\nprompt += '      \"quality\": \"high|medium|low\",\\n';\nprompt += '      \"speed\": \"fast|medium|slow\",\\n';\nprompt += '      \"pros\": [\"pro1\", \"pro2\"],\\n';\nprompt += '      \"cons\": [\"con1\"]\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"comparisonNotes\": [\"note1\", \"note2\"],\\n';\nprompt += '  \"quickStart\": \"recommended first step to get started\"\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5811-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI tool comparison",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5811-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { topRecommendation: 'See analysis', summary: raw, tools: [], comparisonNotes: [], quickStart: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit tool recommendations",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst useCase = $.input.useCase;\nconst sources = $.steps.compileResearch.output.sources;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Image Generation Tool Recommendations', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Use Case:* ' + useCase } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Top Pick:*\\n' + (ai.topRecommendation || 'N/A') },\n  { type: 'mrkdwn', text: '*Tools Compared:*\\n' + (ai.tools ? ai.tools.length : 0) }\n] });\nblocks.push({ type: 'divider' });\n\nconst summary = (ai.summary || 'No summary.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Overview:*\\n' + summary } });\n\nif (ai.tools && ai.tools.length > 0) {\n  blocks.push({ type: 'divider' });\n  ai.tools.slice(0, 5).forEach((tool, i) => {\n    let toolText = '*' + (i + 1) + '. ' + tool.name + '*';\n    if (tool.bestFor) toolText += '\\n_Best for: ' + tool.bestFor + '_';\n    if (tool.pricing) toolText += '\\nPricing: ' + tool.pricing;\n    const badges = [];\n    if (tool.apiAccess) badges.push('API');\n    if (tool.freeTier) badges.push('Free Tier');\n    if (tool.quality) badges.push('Quality: ' + tool.quality);\n    if (tool.speed) badges.push('Speed: ' + tool.speed);\n    if (badges.length > 0) toolText += '\\n' + badges.join(' | ');\n    if (tool.pros && tool.pros.length > 0) toolText += '\\nPros: ' + tool.pros.slice(0, 3).join(', ');\n    if (tool.cons && tool.cons.length > 0) toolText += '\\nCons: ' + tool.cons.slice(0, 2).join(', ');\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: toolText.slice(0, 1800) } });\n  });\n}\n\nif (ai.quickStart) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Quick Start:*\\n' + ai.quickStart.slice(0, 800) } });\n}\n\nif (ai.comparisonNotes && ai.comparisonNotes.length > 0) {\n  let noteText = ai.comparisonNotes.slice(0, 3).join(' | ');\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: noteText.slice(0, 1800) }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa Search + Claude AI' }] });\n\nconst fallbackText = 'Image Gen Tools for ' + useCase + ': Top pick = ' + (ai.topRecommendation || 'N/A');\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post tool recommendations to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "key": "n8n-2777-ai-reasoning-demo",
+  "name": "AI Reasoning Demo \u2014 Claude Chain-of-Thought to Slack",
+  "description": "Takes a question or problem, uses Claude AI with explicit chain-of-thought reasoning to work through it step by step, and posts the full reasoning process plus conclusion to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2777,
+    "url": "https://n8n.io/workflows/2777",
+    "originalName": "DeepSeek V3 chat & R1 reasoning quick start",
+    "totalViews": 40125,
+    "rank": 157,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the reasoning output"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Question or problem for chain-of-thought reasoning (e.g. 'What are the pros and cons of microservices vs monolith?')"
+    },
+    "reasoningDepth": {
+      "type": "string",
+      "required": false,
+      "default": "thorough",
+      "description": "Reasoning depth: quick, thorough, or exhaustive"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude chain-of-thought reasoning prompt",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst depth = $.input.reasoningDepth || 'thorough';\n\nconst depthGuide = {\n  quick: '3-5 reasoning steps, concise analysis',\n  thorough: '5-8 reasoning steps, detailed analysis with examples',\n  exhaustive: '8-12 reasoning steps, comprehensive analysis with counterarguments'\n};\nconst guide = depthGuide[depth] || depthGuide.thorough;\n\nlet prompt = 'You are an AI reasoning specialist. Use explicit chain-of-thought reasoning to work through the given question step by step. Show your complete thinking process.\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n';\nprompt += 'REASONING DEPTH: ' + depth + ' (' + guide + ')\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Think step by step, labeling each step clearly\\n';\nprompt += '- Consider multiple perspectives and potential counterarguments\\n';\nprompt += '- Show when you change your mind or discover new angles\\n';\nprompt += '- End with a clear conclusion supported by your reasoning\\n';\nprompt += '- Rate your confidence in the conclusion\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"question\": \"The original question\",\\n';\nprompt += '  \"reasoningSteps\": [\\n';\nprompt += '    { \"step\": 1, \"thought\": \"First, let me consider...\", \"insight\": \"key realization\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"conclusion\": \"Final answer based on reasoning\",\\n';\nprompt += '  \"confidence\": \"high/medium/low\",\\n';\nprompt += '  \"alternativeViews\": [\"other perspective worth considering\"],\\n';\nprompt += '  \"keyTakeaway\": \"One-sentence summary\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2777-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiReasoning",
+      "name": "Run Claude AI chain-of-thought reasoning",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2777-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip code fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiReasoning.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { question: $.input.question, reasoningSteps: [{ step: 1, thought: raw, insight: '' }], conclusion: '', confidence: 'medium', alternativeViews: [], keyTakeaway: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit reasoning output",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst depth = $.input.reasoningDepth || 'thorough';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'AI Chain-of-Thought Reasoning', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + (ai.question || $.input.question) } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Depth:*\\n' + depth },\n  { type: 'mrkdwn', text: '*Confidence:*\\n' + (ai.confidence || 'N/A') }\n] });\nblocks.push({ type: 'divider' });\n\nif (ai.reasoningSteps && ai.reasoningSteps.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*:brain: Reasoning Process:*' } });\n  ai.reasoningSteps.slice(0, 10).forEach(s => {\n    let stepText = '*Step ' + s.step + ':* ' + (s.thought || '').slice(0, 400);\n    if (s.insight) { stepText += '\\n:bulb: _' + s.insight + '_'; }\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: stepText } });\n  });\n}\n\nblocks.push({ type: 'divider' });\nconst conclusionText = (ai.conclusion || 'No conclusion reached.').slice(0, 2000);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*:white_check_mark: Conclusion:*\\n' + conclusionText } });\n\nif (ai.keyTakeaway) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*:dart: Key Takeaway:*\\n' + ai.keyTakeaway } });\n}\n\nif (ai.alternativeViews && ai.alternativeViews.length > 0) {\n  let altText = '*:arrows_counterclockwise: Alternative Views:*\\n';\n  ai.alternativeViews.slice(0, 3).forEach((v, i) => { altText += (i + 1) + '. ' + v + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: altText.slice(0, 1000) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI Chain-of-Thought + One CLI' }] });\n\nconst fallback = 'Reasoning: ' + (ai.keyTakeaway || ai.conclusion || '').slice(0, 150);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post reasoning output to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

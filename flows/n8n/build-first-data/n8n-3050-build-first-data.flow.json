@@ -1,0 +1,135 @@
+{
+  "key": "n8n-3050-build-first-data",
+  "name": "Build your first AI data analyst chatbot",
+  "description": "AI data analyst chatbot: takes a question about your data, fetches transactions from Google Sheets, uses Claude to analyze patterns and generate insights, then posts a formatted analysis to Slack with Block Kit.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3050,
+    "url": "https://n8n.io/workflows/3050",
+    "originalName": "Build your first AI data analyst chatbot",
+    "totalViews": 169200,
+    "rank": 27,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "googleSheetsKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID containing your data"
+    },
+    "sheetRange": {
+      "type": "string",
+      "required": false,
+      "default": "Sheet1!A:Z",
+      "description": "Range to read (default: Sheet1!A:Z)"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Your data analysis question (e.g. 'What are the top 5 products by revenue?')"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the analysis"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchData",
+      "name": "Fetch data from Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GJ30lYkSqLk::IOnDiKqfQ_2FtFCahohidA",
+        "connectionKey": "$.input.googleSheetsKey",
+        "data": {},
+        "pathVars": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetRange"
+        }
+      }
+    },
+    {
+      "id": "prepareData",
+      "name": "Format spreadsheet data for AI analysis",
+      "type": "code",
+      "code": {
+        "source": "const values = $.steps.fetchData.response.values || [];\nif (values.length === 0) return { dataText: 'No data found in spreadsheet.', rowCount: 0, colCount: 0 };\nconst headers = values[0];\nconst rows = values.slice(1);\nlet dataText = 'COLUMNS: ' + headers.join(', ') + '\\n';\ndataText += 'TOTAL ROWS: ' + rows.length + '\\n\\n';\ndataText += 'SAMPLE DATA (first 50 rows):\\n';\nrows.slice(0, 50).forEach((row, i) => {\n  const obj = {};\n  headers.forEach((h, j) => { obj[h] = row[j] || ''; });\n  dataText += JSON.stringify(obj) + '\\n';\n});\nif (rows.length > 50) dataText += '\\n... (' + (rows.length - 50) + ' more rows not shown)\\n';\nreturn { dataText, rowCount: rows.length, colCount: headers.length, headers };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI analysis prompt",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are an expert data analyst. Analyze the following dataset and answer the user's question.\n\nUSER QUESTION: ${$.input.question}\n\nDATASET:\n${$.steps.prepareData.output.dataText}\n\nProvide a thorough analysis that includes:\n1. Direct answer to the question\n2. Key data points and statistics that support your answer\n3. Any notable patterns or trends\n4. Actionable recommendations based on the data\n\nReturn ONLY valid JSON:\n{\n  \"answer\": \"Direct answer to the question\",\n  \"key_findings\": [\"finding 1\", \"finding 2\", \"finding 3\"],\n  \"statistics\": [\n    { \"metric\": \"metric name\", \"value\": \"metric value\" }\n  ],\n  \"trends\": \"Notable patterns or trends observed\",\n  \"recommendations\": [\"recommendation 1\", \"recommendation 2\"]\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3050-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3050-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, key_findings: [], statistics: [], trends: '', recommendations: [] }; }"
+      }
+    },
+    {
+      "id": "buildBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Data Analysis Report' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + $.input.question } });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Answer*\\n' + (ai.answer || 'No answer generated.') } });\nblocks.push({ type: 'divider' });\nif (ai.key_findings && ai.key_findings.length > 0) {\n  let findingsText = '*Key Findings*\\n';\n  ai.key_findings.forEach((f, i) => { findingsText += (i+1) + '. ' + f + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: findingsText } });\n}\nif (ai.statistics && ai.statistics.length > 0) {\n  const fields = ai.statistics.slice(0, 10).map(s => ({ type: 'mrkdwn', text: '*' + s.metric + '*\\n' + s.value }));\n  for (let i = 0; i < fields.length; i += 2) {\n    blocks.push({ type: 'section', fields: fields.slice(i, i + 2) });\n  }\n}\nblocks.push({ type: 'divider' });\nif (ai.trends) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Trends & Patterns*\\n' + ai.trends } });\n}\nif (ai.recommendations && ai.recommendations.length > 0) {\n  let recsText = '*Recommendations*\\n';\n  ai.recommendations.forEach((r, i) => { recsText += (i+1) + '. ' + r + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: recsText } });\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Dataset: ' + $.steps.prepareData.output.rowCount + ' rows x ' + $.steps.prepareData.output.colCount + ' columns' }] });\nconst fallback = 'Data Analysis: ' + $.input.question;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post analysis to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildBlocks.output.fallback",
+          "blocks": "$.steps.buildBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

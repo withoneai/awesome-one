@@ -1,0 +1,180 @@
+{
+  "key": "n8n-3188-youtube-video-summarizer",
+  "name": "Turn YouTube videos into summaries, transcripts, and visual insights",
+  "description": "Takes a YouTube video URL, scrapes the video page with Firecrawl, uses Claude AI to generate summaries, extract key points, identify notable scenes, and saves structured results to Google Sheets with a Slack notification.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3188,
+    "url": "https://n8n.io/workflows/3188",
+    "originalName": "Turn YouTube videos into summaries, transcripts, and visual insights",
+    "totalViews": 27896,
+    "rank": 229,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping YouTube page",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "googleSheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving results",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "youtubeUrl": {
+      "type": "string",
+      "required": true,
+      "description": "YouTube video URL to analyze (e.g. 'https://www.youtube.com/watch?v=...')"
+    },
+    "analysisType": {
+      "type": "string",
+      "required": false,
+      "default": "summary",
+      "description": "Type of analysis: summary, transcript, scenes, or all"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for video analysis results"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapeYoutube",
+      "name": "Scrape YouTube video page with Firecrawl",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.youtubeUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "extractVideoData",
+      "name": "Extract video data from scraped content",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.scrapeYoutube.response || {};\nconst data = response.data || response;\nconst markdown = (data.markdown || data.content || data.text || '').slice(0, 10000);\nconst title = data.title || data.metadata?.title || '';\nconst description = data.metadata?.description || '';\n\nreturn { markdown: markdown, title: title, description: description, url: $.input.youtubeUrl, analysisType: $.input.analysisType || 'all' };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for video analysis",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.extractVideoData.output;\nconst aType = data.analysisType;\n\nlet prompt = 'You are a video content analyst. Analyze the following YouTube video page content and provide comprehensive insights.\\n\\n';\nprompt += 'VIDEO TITLE: ' + data.title + '\\n';\nprompt += 'URL: ' + data.url + '\\n';\nprompt += 'DESCRIPTION: ' + data.description.slice(0, 500) + '\\n\\n';\nprompt += 'PAGE CONTENT:\\n' + data.markdown + '\\n\\n';\nprompt += 'ANALYSIS TYPE: ' + aType + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Provide a comprehensive summary of the video content\\n';\nprompt += '- Extract key points and takeaways\\n';\nprompt += '- Identify main topics discussed\\n';\nprompt += '- Note any notable quotes or data points\\n';\nprompt += '- Suggest potential clips or highlights for social sharing\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"video title\",\\n';\nprompt += '  \"summary\": \"3-5 sentence summary\",\\n';\nprompt += '  \"keyPoints\": [\"point 1\", \"point 2\"],\\n';\nprompt += '  \"topics\": [\"topic 1\", \"topic 2\"],\\n';\nprompt += '  \"notableQuotes\": [\"quote 1\"],\\n';\nprompt += '  \"highlights\": [{ \"topic\": \"\", \"description\": \"\", \"shareability\": \"high|medium|low\" }],\\n';\nprompt += '  \"sentiment\": \"positive|neutral|negative\",\\n';\nprompt += '  \"targetAudience\": \"who would benefit\",\\n';\nprompt += '  \"socialSnippets\": [\"tweetable quote or insight\"]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3188-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Analyze video with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3188-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: $.steps.extractVideoData.output.title || '', summary: raw.slice(0, 500), keyPoints: [], topics: [], notableQuotes: [], highlights: [], sentiment: 'neutral', targetAudience: '', socialSnippets: [] }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build spreadsheet data from analysis",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst rows = [];\nrows.push([ai.title || '', $.input.youtubeUrl, ai.summary || '', (ai.keyPoints || []).join('; '), (ai.topics || []).join(', '), ai.sentiment || '', ai.targetAudience || '']);\nreturn { rows: rows };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save video analysis to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.googleSheetsKey",
+        "data": {
+          "title": "YouTube Video Analysis",
+          "sheets": [
+            {
+              "title": "Analysis",
+              "headers": [
+                "Title",
+                "URL",
+                "Summary",
+                "Key Points",
+                "Topics",
+                "Sentiment",
+                "Target Audience"
+              ],
+              "rows": "$.steps.buildSheetRows.output.rows"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack video analysis report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'YouTube Video Analysis', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + (ai.title || 'Video') + '*\\n<' + $.input.youtubeUrl + '|Watch Video>' } });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:*\\n' + (ai.summary || '').slice(0, 1500) } });\n\nif (ai.keyPoints && ai.keyPoints.length > 0) {\n  let kpText = '*Key Points:*\\n';\n  ai.keyPoints.slice(0, 6).forEach(function(kp, i) { kpText += (i + 1) + '. ' + kp + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kpText.slice(0, 1800) } });\n}\n\nif (ai.socialSnippets && ai.socialSnippets.length > 0) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Social Snippets:*\\n' + ai.socialSnippets.slice(0, 3).map(function(s) { return '> ' + s; }).join('\\n') } });\n}\n\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Sentiment:*\\n' + (ai.sentiment || 'N/A') },\n  { type: 'mrkdwn', text: '*Audience:*\\n' + (ai.targetAudience || 'N/A') }\n] });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Saved to Google Sheets | Powered by Firecrawl + Claude AI' }] });\nconst fallbackText = 'Video Analysis: ' + (ai.title || $.input.youtubeUrl).slice(0, 80);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post video analysis to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,162 @@
+{
+  "key": "n8n-5228-veo3-video-drive-upload",
+  "name": "Generate AI Video from Prompt and Upload to Google Drive",
+  "description": "Takes a text prompt, uses Claude AI to generate an optimized video production brief, researches visual styles via Exa, and uploads a final project plan to Google Drive for production handoff.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5228,
+    "url": "https://n8n.io/workflows/5228",
+    "originalName": "Generate video from prompt using Vertex AI Veo 3 and upload to Google Drive",
+    "totalViews": 23443,
+    "rank": 266,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for visual research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for status notification",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "videoPrompt": {
+      "type": "string",
+      "required": true,
+      "description": "Text prompt describing the video to generate (e.g. 'A cinematic drone shot of a coastal sunset with gentle waves')"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for completion notification"
+    },
+    "driveFolderId": {
+      "type": "string",
+      "required": false,
+      "default": "root",
+      "description": "Google Drive folder ID to upload the production brief to"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildExaQuery",
+      "name": "Build Exa search query for visual reference",
+      "type": "code",
+      "code": {
+        "source": "const prompt = $.input.videoPrompt || '';\nconst keywords = prompt.split(' ').filter(w => w.length > 3).slice(0, 5).join(' ');\nconst query = 'AI video generation techniques ' + keywords + ' cinematic style';\nreturn { query };"
+      }
+    },
+    {
+      "id": "researchStyles",
+      "name": "Research visual styles and techniques via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildExaQuery.output.query",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for video production brief",
+      "type": "code",
+      "code": {
+        "source": "const prompt = $.input.videoPrompt;\nconst results = $.steps.researchStyles.response.results || [];\nlet references = '';\nresults.forEach((r, i) => { references += (i + 1) + '. ' + (r.title || r.url) + '\\n' + (r.text || '').slice(0, 200) + '\\n\\n'; });\n\nconst aiPrompt = 'You are an expert video production director and AI video generation specialist. Create a detailed production brief based on the following prompt.\\n\\nORIGINAL PROMPT: ' + prompt + '\\n\\nVISUAL REFERENCES:\\n' + references + '\\n\\nGenerate a comprehensive video production brief as JSON:\\n{\\n  \"title\": \"short project title\",\\n  \"optimizedPrompt\": \"enhanced prompt with cinematic details, camera movements, lighting, mood\",\\n  \"duration\": \"recommended duration in seconds\",\\n  \"aspectRatio\": \"16:9 or 9:16 or 1:1\",\\n  \"style\": \"cinematic style description\",\\n  \"cameraWork\": [\"camera movement 1\", \"camera movement 2\"],\\n  \"colorPalette\": [\"color1\", \"color2\", \"color3\"],\\n  \"mood\": \"overall mood description\",\\n  \"soundtrack\": \"music style recommendation\",\\n  \"scenes\": [{ \"sceneNumber\": 1, \"description\": \"scene detail\", \"duration\": \"2s\", \"transition\": \"cut/fade/dissolve\" }],\\n  \"technicalNotes\": [\"note1\", \"note2\"],\\n  \"references\": [\"reference insight 1\"]\\n}\\n\\nReturn ONLY valid JSON.';\n\nreturn { aiPrompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5228-prompt.txt",
+        "content": "$.steps.buildPrompt.output.aiPrompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Generate production brief with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5228-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'Video Production Brief', optimizedPrompt: raw }; }"
+      }
+    },
+    {
+      "id": "buildDocument",
+      "name": "Build production brief document",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nlet doc = 'VIDEO PRODUCTION BRIEF\\n';\ndoc += '=====================\\n\\n';\ndoc += 'Title: ' + (ai.title || 'Untitled') + '\\n';\ndoc += 'Date: ' + new Date().toISOString().split('T')[0] + '\\n';\ndoc += 'Original Prompt: ' + $.input.videoPrompt + '\\n\\n';\ndoc += 'OPTIMIZED PROMPT\\n';\ndoc += '----------------\\n';\ndoc += (ai.optimizedPrompt || '') + '\\n\\n';\ndoc += 'SPECIFICATIONS\\n';\ndoc += '--------------\\n';\ndoc += 'Duration: ' + (ai.duration || 'N/A') + '\\n';\ndoc += 'Aspect Ratio: ' + (ai.aspectRatio || '16:9') + '\\n';\ndoc += 'Style: ' + (ai.style || 'N/A') + '\\n';\ndoc += 'Mood: ' + (ai.mood || 'N/A') + '\\n';\ndoc += 'Soundtrack: ' + (ai.soundtrack || 'N/A') + '\\n\\n';\nif (ai.colorPalette) { doc += 'Color Palette: ' + ai.colorPalette.join(', ') + '\\n'; }\nif (ai.cameraWork) { doc += 'Camera Work: ' + ai.cameraWork.join(', ') + '\\n'; }\ndoc += '\\nSCENES\\n';\ndoc += '------\\n';\nif (ai.scenes) { ai.scenes.forEach(s => { doc += s.sceneNumber + '. ' + s.description + ' (' + s.duration + ', ' + s.transition + ')\\n'; }); }\nif (ai.technicalNotes) { doc += '\\nTECHNICAL NOTES\\n'; ai.technicalNotes.forEach(n => { doc += '- ' + n + '\\n'; }); }\nreturn { doc, title: ai.title || 'Video Brief', slackText: 'Video production brief ready: ' + (ai.title || 'Untitled') + ' | ' + (ai.duration || '') + ' | ' + (ai.style || '') };"
+      }
+    },
+    {
+      "id": "uploadToDrive",
+      "name": "Upload production brief to Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {
+          "name": "$.steps.buildDocument.output.title",
+          "content": "$.steps.buildDocument.output.doc",
+          "mimeType": "text/plain",
+          "parents": [
+            "$.input.driveFolderId"
+          ]
+        }
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Notify Slack of completion",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildDocument.output.slackText"
+        }
+      }
+    }
+  ]
+}

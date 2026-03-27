@@ -1,0 +1,164 @@
+{
+  "key": "n8n-2328-meeting-next-steps",
+  "name": "Meeting Next Steps Extractor",
+  "description": "Pull today's calendar events and Drive transcripts, use Claude AI to extract action items and next steps, and post a structured summary to Slack. Automates post-meeting follow-up.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2328,
+    "url": "https://n8n.io/workflows/2328",
+    "originalName": "Actioning your meeting next steps using transcripts and AI",
+    "totalViews": 34214,
+    "rank": 177,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "calendarKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "google-calendar"
+      }
+    },
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the meeting next steps"
+    },
+    "transcriptFolderQuery": {
+      "type": "string",
+      "required": false,
+      "default": "name contains 'transcript' and mimeType != 'application/vnd.google-apps.folder'",
+      "description": "Google Drive query to find transcript files"
+    }
+  },
+  "steps": [
+    {
+      "id": "getDateBounds",
+      "name": "Calculate today's date range",
+      "type": "code",
+      "code": {
+        "source": "var now = new Date();\nvar start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);\nvar end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);\nreturn { timeMin: start.toISOString(), timeMax: end.toISOString(), today: now.toISOString().split('T')[0] };"
+      }
+    },
+    {
+      "id": "listEvents",
+      "name": "Fetch today's calendar events",
+      "type": "action",
+      "action": {
+        "platform": "google-calendar",
+        "actionId": "conn_mod_def::GJ6RlnIYK20::YzuWSmaVQgurletRDNJavA",
+        "connectionKey": "$.input.calendarKey",
+        "pathVars": {
+          "calendarId": "primary"
+        },
+        "queryParams": {
+          "timeMin": "$.steps.getDateBounds.output.timeMin",
+          "timeMax": "$.steps.getDateBounds.output.timeMax",
+          "singleEvents": true,
+          "orderBy": "startTime",
+          "maxResults": 20
+        }
+      }
+    },
+    {
+      "id": "listTranscripts",
+      "name": "List transcript files from Google Drive",
+      "type": "action",
+      "onError": {
+        "strategy": "continue"
+      },
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "queryParams": {
+          "q": "$.input.transcriptFolderQuery",
+          "pageSize": 10,
+          "orderBy": "modifiedTime desc",
+          "fields": "files(id,name,mimeType,modifiedTime,webViewLink)"
+        }
+      }
+    },
+    {
+      "id": "compileMeetingData",
+      "name": "Compile meetings and transcripts",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar events = fb(fb($.steps.listEvents.response, {}).items, []);\nvar transcripts = [];\nvar transcriptResp = fb($.steps.listTranscripts, {});\nif (transcriptResp.response) {\n  transcripts = fb(transcriptResp.response.files, []);\n}\nvar today = $.steps.getDateBounds.output.today;\n\nvar meetingData = 'TODAY\\'S MEETINGS (' + today + '):\\n\\n';\nevents.forEach(function(e, i) {\n  var time = e.start ? (fb(fb(e.start.dateTime, e.start.date), '')) : '';\n  meetingData += (i + 1) + '. ' + (fb(e.summary, '(no title)')) + '\\n';\n  meetingData += '   Time: ' + time + '\\n';\n  var attendees = (fb(e.attendees, [])).map(function(a) { return a.email; }).filter(Boolean);\n  if (attendees.length > 0) meetingData += '   Attendees: ' + attendees.slice(0, 8).join(', ') + '\\n';\n  if (e.description) meetingData += '   Description: ' + e.description.slice(0, 200) + '\\n';\n  meetingData += '\\n';\n});\n\nvar transcriptData = '';\nif (transcripts.length > 0) {\n  transcriptData = 'RECENT TRANSCRIPTS:\\n\\n';\n  transcripts.forEach(function(t, i) {\n    transcriptData += (i + 1) + '. ' + t.name + ' (modified: ' + (fb(t.modifiedTime, '')) + ')\\n';\n    transcriptData += '   Link: ' + (fb(t.webViewLink, '')) + '\\n\\n';\n  });\n}\n\nreturn { meetingData: meetingData, transcriptData: transcriptData, eventCount: events.length, transcriptCount: transcripts.length, today: today };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude AI prompt for action item extraction",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileMeetingData.output;\n\nvar prompt = 'You are an executive assistant who specializes in extracting action items from meetings. Based on the calendar events and transcript information below, identify all action items, next steps, and follow-ups.\\n\\n';\nprompt += data.meetingData + '\\n';\nif (data.transcriptData) prompt += data.transcriptData + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract specific, actionable next steps for each meeting\\n';\nprompt += '- Assign owners where possible based on attendee context\\n';\nprompt += '- Set priority levels (high, medium, low)\\n';\nprompt += '- Suggest deadlines based on meeting context\\n';\nprompt += '- Group related action items together\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"summary\": \"overview of today\\'s meetings and key outcomes\",\\n';\nprompt += '  \"meetings\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"title\": \"meeting name\",\\n';\nprompt += '      \"time\": \"meeting time\",\\n';\nprompt += '      \"actionItems\": [\\n';\nprompt += '        { \"action\": \"what to do\", \"owner\": \"who should do it\", \"priority\": \"high/medium/low\", \"deadline\": \"suggested deadline\" }\\n';\nprompt += '      ],\\n';\nprompt += '      \"keyDecisions\": [\"decision 1\"],\\n';\nprompt += '      \"followUpNeeded\": true\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"topPriorities\": [\"top priority item 1\", \"top priority item 2\"],\\n';\nprompt += '  \"totalActionItems\": 0\\n';\nprompt += '}';\n\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/meeting-next-steps-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/meeting-next-steps-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse Claude response",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiAnalysis.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, meetings: [], totalActionItems: 0 }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseResponse.output;\nvar today = $.steps.compileMeetingData.output.today;\n\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':white_check_mark: Meeting Next Steps \u2014 ' + today, emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: fb(ai.summary, 'Action items extracted from today\\'s meetings.') } });\n\nvar topPriorities = fb(ai.topPriorities, []);\nif (topPriorities.length > 0) {\n  var priText = '*:rotating_light: Top Priorities*\\n';\n  topPriorities.forEach(function(p, i) { priText += (i + 1) + '. ' + p + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: priText } });\n}\n\nblocks.push({ type: 'divider' });\n\nvar meetings = fb(ai.meetings, []);\nmeetings.forEach(function(m) {\n  var mText = '*' + (fb(m.title, 'Meeting')) + '*';\n  if (m.time) mText += ' at ' + m.time;\n  mText += '\\n';\n\n  var items = fb(m.actionItems, []);\n  items.forEach(function(item) {\n    var priorityIcon = ':red_circle:';\n    if (item.priority === 'medium') priorityIcon = ':large_orange_circle:';\n    if (item.priority === 'low') priorityIcon = ':white_circle:';\n    mText += priorityIcon + ' ' + item.action;\n    if (item.owner) mText += ' \u2014 _' + item.owner + '_';\n    if (item.deadline) mText += ' (by ' + item.deadline + ')';\n    mText += '\\n';\n  });\n\n  var decisions = fb(m.keyDecisions, []);\n  if (decisions.length > 0) {\n    mText += '\\n*Decisions:*\\n';\n    decisions.forEach(function(d) { mText += '  > ' + d + '\\n'; });\n  }\n\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: mText } });\n  blocks.push({ type: 'divider' });\n});\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':memo: ' + (fb(ai.totalActionItems, 0)) + ' action items extracted | Powered by Claude AI + One CLI' }] });\n\nvar fallback = 'Meeting Next Steps \u2014 ' + today + ': ' + (fb(ai.totalActionItems, 0)) + ' action items';\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post next steps to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

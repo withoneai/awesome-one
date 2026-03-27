@@ -1,0 +1,183 @@
+{
+  "key": "n8n-7788-build-mcp-server",
+  "name": "Multi-tool research chain (Exa + Firecrawl + Claude)",
+  "description": "Chains multiple tools together: Exa searches for relevant pages, Firecrawl scrapes the top results for detailed content, and Claude AI synthesizes everything into a comprehensive research report. Posts results to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3770,
+    "url": "https://n8n.io/workflows/3770",
+    "originalName": "Build your own N8N workflows MCP server",
+    "totalViews": 91414,
+    "rank": 56,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for web scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the research report"
+    },
+    "researchQuery": {
+      "type": "string",
+      "required": true,
+      "description": "The topic or question to research"
+    },
+    "scrapeTopN": {
+      "type": "number",
+      "required": false,
+      "default": 3,
+      "description": "Number of top Exa results to deep-scrape with Firecrawl"
+    }
+  },
+  "steps": [
+    {
+      "id": "exaSearch",
+      "name": "Search for relevant pages with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.researchQuery",
+          "numResults": 8,
+          "type": "neural",
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "extractTopUrls",
+      "name": "Extract top URLs for deep scraping",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.exaSearch.response || {};\nconst data = response.data || response;\nconst results = data.results || [];\nconst topN = $.input.scrapeTopN || 3;\n\nconst urls = results.slice(0, topN).map(r => r.url).filter(u => u);\nconst exaSummaries = results.slice(0, 8).map((r, i) => ({\n  index: i + 1,\n  title: r.title || 'Untitled',\n  url: r.url || '',\n  snippet: (r.text || r.snippet || '').slice(0, 500)\n}));\n\nreturn { urls, exaSummaries, totalResults: results.length };"
+      }
+    },
+    {
+      "id": "scrapePages",
+      "name": "Deep scrape top results with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractTopUrls.output.urls",
+        "as": "pageUrl",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapePage",
+            "name": "Scrape page content",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.pageUrl",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile Exa summaries and Firecrawl deep content",
+      "type": "code",
+      "code": {
+        "source": "const exa = $.steps.extractTopUrls.output;\nconst iterations = ($.steps.scrapePages.response || {}).iterations || [];\n\nlet allContent = 'EXA SEARCH RESULTS OVERVIEW:\\n';\nexa.exaSummaries.forEach(s => {\n  allContent += s.index + '. ' + s.title + ' (' + s.url + ')\\n   ' + s.snippet.slice(0, 300) + '\\n\\n';\n});\n\nallContent += '\\nDEEP-SCRAPED CONTENT:\\n';\nconst urls = exa.urls;\niterations.forEach((iter, i) => {\n  const url = urls[i] || 'Unknown';\n  const resp = (iter.scrapePage && iter.scrapePage.response && iter.scrapePage.response.data) ? iter.scrapePage.response.data : null;\n  if (resp && resp.markdown) {\n    allContent += '=== DEEP SCRAPE ' + (i + 1) + ' ===\\n';\n    allContent += 'URL: ' + url + '\\n';\n    allContent += resp.markdown.slice(0, 3000) + '\\n\\n';\n  }\n});\n\nreturn { allContent: allContent.slice(0, 12000), sources: exa.exaSummaries };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build comprehensive research prompt",
+      "type": "code",
+      "code": {
+        "source": "const query = $.input.researchQuery;\nconst compiled = $.steps.compileResearch.output;\n\nlet prompt = 'You are a research analyst. Using the search results AND deep-scraped content below, produce a comprehensive research report on the given topic.\\n\\n';\nprompt += 'RESEARCH TOPIC: ' + query + '\\n\\n';\nprompt += 'GATHERED INTELLIGENCE:\\n' + compiled.allContent + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Synthesize insights from both Exa search summaries and deep-scraped page content\\n';\nprompt += '- Identify key themes, trends, and actionable findings\\n';\nprompt += '- Note any conflicting information between sources\\n';\nprompt += '- Provide concrete recommendations\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"Research Report Title\",\\n';\nprompt += '  \"executiveSummary\": \"3-4 sentence high-level summary\",\\n';\nprompt += '  \"keyFindings\": [\"finding1\", \"finding2\", \"finding3\"],\\n';\nprompt += '  \"detailedAnalysis\": \"400-600 word analysis\",\\n';\nprompt += '  \"recommendations\": [\"rec1\", \"rec2\"],\\n';\nprompt += '  \"sourcesQuality\": \"high|medium|low\",\\n';\nprompt += '  \"gaps\": [\"what could not be determined\"]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-7788-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI research synthesis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-7788-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'Research Report', executiveSummary: raw, keyFindings: [], detailedAnalysis: '', recommendations: [], sourcesQuality: 'unknown', gaps: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit research report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst sources = $.steps.compileResearch.output.sources;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: (ai.title || 'Research Report').slice(0, 150), emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Sources Quality:*\\n' + (ai.sourcesQuality || 'N/A') },\n  { type: 'mrkdwn', text: '*Sources Analyzed:*\\n' + (sources ? sources.length : 0) }\n] });\nblocks.push({ type: 'divider' });\n\nconst execSummary = (ai.executiveSummary || 'No summary generated.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Executive Summary:*\\n' + execSummary } });\n\nif (ai.keyFindings && ai.keyFindings.length > 0) {\n  blocks.push({ type: 'divider' });\n  let kfText = '*Key Findings:*\\n';\n  ai.keyFindings.slice(0, 6).forEach((f, i) => { kfText += (i + 1) + '. ' + f + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kfText.slice(0, 1800) } });\n}\n\nif (ai.detailedAnalysis) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Detailed Analysis:*\\n' + ai.detailedAnalysis.slice(0, 1800) } });\n}\n\nif (ai.recommendations && ai.recommendations.length > 0) {\n  blocks.push({ type: 'divider' });\n  let recText = '*Recommendations:*\\n';\n  ai.recommendations.slice(0, 5).forEach((r, i) => { recText += (i + 1) + '. ' + r + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: recText.slice(0, 1800) } });\n}\n\nif (sources && sources.length > 0) {\n  blocks.push({ type: 'divider' });\n  let srcText = '*Sources:*\\n';\n  sources.slice(0, 5).forEach((s, i) => {\n    srcText += (i + 1) + '. <' + s.url + '|' + (s.title || 'Source') + '>\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa + Firecrawl + Claude AI' }] });\n\nconst fallbackText = (ai.title || 'Research Report') + ': ' + (ai.executiveSummary || '').slice(0, 100);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post research report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,133 @@
+{
+  "key": "n8n-2164-chat-postgresql",
+  "name": "Chat with database via Claude (adapted: data analysis to Slack)",
+  "description": "Takes a natural language question about data, uses Claude AI to generate analysis insights, and posts the results to Slack. Adapted from the n8n PostgreSQL chat concept to work as an AI-powered data analysis assistant.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2859,
+    "url": "https://n8n.io/workflows/2859",
+    "originalName": "Chat with Postgresql database",
+    "totalViews": 85729,
+    "rank": 61,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web research on data topics",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the analysis"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Natural language question about data or a topic to analyze"
+    },
+    "dataContext": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Optional context data (CSV, JSON, or description of data to analyze)"
+    }
+  },
+  "steps": [
+    {
+      "id": "exaSearch",
+      "name": "Search for relevant data context with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 5,
+          "type": "neural",
+          "text": true
+        }
+      }
+    },
+    {
+      "id": "compileContext",
+      "name": "Compile data context and web research",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.exaSearch.response || {};\nconst data = response.data || response;\nconst results = data.results || [];\nconst userContext = $.input.dataContext || '';\n\nlet webContext = '';\nconst sources = [];\nresults.slice(0, 5).forEach((r, i) => {\n  webContext += 'SOURCE ' + (i + 1) + ': ' + (r.title || 'Untitled') + '\\n';\n  webContext += (r.text || r.snippet || '').slice(0, 1000) + '\\n\\n';\n  sources.push({ title: r.title || 'Source ' + (i + 1), url: r.url || '' });\n});\n\nreturn { webContext, userContext, sources, hasUserData: userContext.length > 0 };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude data analysis prompt",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst ctx = $.steps.compileContext.output;\n\nlet prompt = 'You are a data analysis assistant. The user wants to analyze data or answer a data-related question. Use all available context to provide a thorough analysis.\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n\\n';\n\nif (ctx.hasUserData) {\n  prompt += 'USER-PROVIDED DATA CONTEXT:\\n' + ctx.userContext.slice(0, 4000) + '\\n\\n';\n}\n\nprompt += 'WEB RESEARCH CONTEXT:\\n' + ctx.webContext + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Analyze the question and all available data\\n';\nprompt += '- Provide data-driven insights and trends\\n';\nprompt += '- If the user provided data, analyze patterns and anomalies\\n';\nprompt += '- Suggest follow-up queries for deeper analysis\\n';\nprompt += '- Be specific with numbers and statistics when available\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"comprehensive analysis answer (200-400 words)\",\\n';\nprompt += '  \"keyInsights\": [\"insight1\", \"insight2\", \"insight3\"],\\n';\nprompt += '  \"dataPoints\": [{ \"metric\": \"name\", \"value\": \"value\", \"context\": \"what it means\" }],\\n';\nprompt += '  \"trends\": [\"trend1\", \"trend2\"],\\n';\nprompt += '  \"followUpQueries\": [\"query1\", \"query2\"],\\n';\nprompt += '  \"confidence\": \"high|medium|low\"\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2164-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI data analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2164-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, keyInsights: [], dataPoints: [], trends: [], followUpQueries: [], confidence: 'unknown' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit data analysis report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst sources = $.steps.compileContext.output.sources;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Data Analysis Report', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Confidence:*\\n' + (ai.confidence || 'N/A') },\n  { type: 'mrkdwn', text: '*Data Sources:*\\n' + sources.length + ' web sources' }\n] });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No analysis generated.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Analysis:*\\n' + answerText } });\n\nif (ai.keyInsights && ai.keyInsights.length > 0) {\n  blocks.push({ type: 'divider' });\n  let insText = '*Key Insights:*\\n';\n  ai.keyInsights.slice(0, 5).forEach((ins, i) => { insText += (i + 1) + '. ' + ins + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: insText.slice(0, 1800) } });\n}\n\nif (ai.dataPoints && ai.dataPoints.length > 0) {\n  let dpText = '*Key Data Points:*\\n';\n  ai.dataPoints.slice(0, 5).forEach(dp => {\n    dpText += '- *' + dp.metric + ':* ' + dp.value + ' (' + (dp.context || '') + ')\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: dpText.slice(0, 1800) } });\n}\n\nif (ai.trends && ai.trends.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Trends:* ' + ai.trends.slice(0, 4).join(' | ') } });\n}\n\nif (ai.followUpQueries && ai.followUpQueries.length > 0) {\n  let fuText = '*Suggested Follow-up Queries:*\\n';\n  ai.followUpQueries.slice(0, 3).forEach((q, i) => { fuText += '- ' + q + '\\n'; });\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: fuText.slice(0, 1800) }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa Search + Claude AI' }] });\n\nconst fallbackText = 'Data Analysis: ' + question.slice(0, 50) + ' - ' + (ai.answer || '').slice(0, 80);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post data analysis to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

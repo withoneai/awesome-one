@@ -1,0 +1,176 @@
+{
+  "key": "n8n-5518-gmail-inbox-organizer",
+  "name": "Automate Gmail Inbox Organization with AI Categorization",
+  "description": "Searches recent Gmail messages, uses Claude AI to categorize each email (Work, Shopping, Newsletter, Personal, etc.), applies Gmail labels based on category, and posts an organization summary to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5518,
+    "url": "https://n8n.io/workflows/5518",
+    "originalName": "Automate Gmail inbox organization with rule-based categorization and smart actions",
+    "totalViews": 21919,
+    "rank": 280,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailListKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for listing messages",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "gmailSendKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for modifying messages (labels)",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": false,
+      "default": "is:unread newer_than:1d",
+      "description": "Gmail search query for messages to organize"
+    },
+    "maxMessages": {
+      "type": "number",
+      "required": false,
+      "default": 20,
+      "description": "Maximum messages to process"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for organization summary"
+    }
+  },
+  "steps": [
+    {
+      "id": "listMessages",
+      "name": "Search Gmail for unread messages",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailListKey",
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "q": "$.input.searchQuery",
+          "maxResults": "$.input.maxMessages"
+        }
+      }
+    },
+    {
+      "id": "fetchMessages",
+      "name": "Fetch message details for categorization",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.listMessages.response.messages",
+        "as": "msg",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "getMessage",
+            "name": "Get message metadata",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GJ3ocvMGOS8::D__3BgQSSzWtDUoOqLuX2A",
+              "connectionKey": "$.input.gmailListKey",
+              "pathVars": {
+                "userId": "me",
+                "id": "$.loop.msg.id"
+              },
+              "queryParams": {
+                "format": "metadata",
+                "metadataHeaders": "Subject,From,Date"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileForCategorization",
+      "name": "Compile email list for AI categorization",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.fetchMessages.response.iterations || [];\nlet emails = [];\n\niterations.forEach((iter, i) => {\n  const resp = iter.getMessage ? iter.getMessage.response : null;\n  if (!resp) return;\n  const headers = (resp.payload && resp.payload.headers) || [];\n  const subject = (headers.find(h => h.name === 'Subject') || {}).value || '';\n  const from = (headers.find(h => h.name === 'From') || {}).value || '';\n  emails.push({ index: i, id: resp.id || '', subject, from });\n});\n\nlet emailsText = '';\nemails.forEach((e, i) => { emailsText += (i + 1) + '. From: ' + e.from + ' | Subject: ' + e.subject + '\\n'; });\n\nreturn { emails, emailsText, count: emails.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for email categorization",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.compileForCategorization.output;\n\nconst prompt = 'You are an email organization specialist. Categorize each email into one of these categories: Work, Shopping, Newsletter, Personal, Finance, Travel, Social, Notification, Spam.\\n\\nEMAILS TO CATEGORIZE:\\n' + data.emailsText + '\\n\\nFor each email, determine the most appropriate category based on the sender and subject. Return ONLY valid JSON:\\n{\\n  \"categorized\": [\\n    { \"emailNumber\": 1, \"category\": \"Work\", \"priority\": \"high/medium/low\", \"suggestedAction\": \"read/archive/star/delete\" }\\n  ],\\n  \"summary\": {\\n    \"total\": 0,\\n    \"byCategory\": { \"Work\": 0, \"Shopping\": 0, \"Newsletter\": 0 },\\n    \"highPriority\": 0\\n  }\\n}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5518-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiCategorize",
+      "name": "Categorize emails with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5518-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiCategorize.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { categorized: [], summary: { total: 0, byCategory: {} } }; }"
+      }
+    },
+    {
+      "id": "buildSlackSummary",
+      "name": "Build Slack summary of inbox organization",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst emails = $.steps.compileForCategorization.output.emails || [];\nconst summary = ai.summary || {};\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Gmail Inbox Organization Report', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Emails Processed:*\\n' + (summary.total || emails.length) },\n  { type: 'mrkdwn', text: '*High Priority:*\\n' + (summary.highPriority || 0) }\n] });\nblocks.push({ type: 'divider' });\n\nconst byCategory = summary.byCategory || {};\nlet catText = '*By Category:*\\n';\nObject.keys(byCategory).forEach(cat => { catText += cat + ': ' + byCategory[cat] + '\\n'; });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: catText } });\n\nconst categorized = ai.categorized || [];\nconst highPriority = categorized.filter(c => c.priority === 'high');\nif (highPriority.length > 0) {\n  let hpText = '*High Priority Emails:*\\n';\n  highPriority.forEach(hp => {\n    const email = emails[hp.emailNumber - 1];\n    if (email) { hpText += '- ' + email.subject + ' (from: ' + email.from.split('<')[0].trim() + ')\\n'; }\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: hpText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Organized ' + emails.length + ' emails with AI categorization' }] });\nconst fallback = 'Inbox organized: ' + emails.length + ' emails categorized. High priority: ' + (summary.highPriority || 0);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post organization summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackSummary.output.fallback",
+          "blocks": "$.steps.buildSlackSummary.output.blocks"
+        }
+      }
+    }
+  ]
+}

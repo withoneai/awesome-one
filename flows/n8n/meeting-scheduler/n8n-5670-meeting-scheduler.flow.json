@@ -1,0 +1,139 @@
+{
+  "key": "n8n-5670-meeting-scheduler",
+  "name": "AI Meeting Scheduler \u2014 Smart Slot Suggestions to Slack",
+  "description": "Check calendar availability via Google Drive file listing, have Claude AI suggest optimal meeting slots based on preferences and constraints, and post the formatted suggestions to Slack with Block Kit.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5670,
+    "url": "https://n8n.io/workflows/5670",
+    "originalName": "Voice-based appointment booking system with ElevenLabs AI and Cal.com",
+    "totalViews": 45126,
+    "rank": 135,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "googleDriveKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post meeting slot suggestions"
+    },
+    "meetingTitle": {
+      "type": "string",
+      "required": true,
+      "description": "Title or purpose of the meeting (e.g. 'Q2 Planning Review')"
+    },
+    "duration": {
+      "type": "string",
+      "required": false,
+      "default": "30 minutes",
+      "description": "Desired meeting duration (e.g. '30 minutes', '1 hour')"
+    },
+    "preferences": {
+      "type": "string",
+      "required": false,
+      "default": "Prefer mornings, avoid Fridays",
+      "description": "Scheduling preferences or constraints"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchCalendar",
+      "name": "List calendar-related files from Google Drive",
+      "type": "action",
+      "onError": {
+        "strategy": "continue"
+      },
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.googleDriveKey",
+        "queryParams": {
+          "q": "mimeType='application/vnd.google-apps.spreadsheet' or mimeType='text/csv'",
+          "pageSize": 10,
+          "fields": "files(id,name,modifiedTime,mimeType)"
+        }
+      }
+    },
+    {
+      "id": "buildContext",
+      "name": "Build scheduling context from available data",
+      "type": "code",
+      "code": {
+        "source": "const files = ($.steps.fetchCalendar.response && $.steps.fetchCalendar.response.files) ? $.steps.fetchCalendar.response.files : [];\nconst now = new Date();\nconst dayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long' });\nconst dateStr = now.toISOString().split('T')[0];\nconst upcoming = [];\nfor (let i = 1; i <= 5; i++) {\n  const d = new Date(now);\n  d.setDate(d.getDate() + i);\n  upcoming.push(d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }));\n}\nconst fileList = files.slice(0, 5).map(f => f.name + ' (modified: ' + (f.modifiedTime || 'unknown') + ')').join('\\n');\nreturn { dayOfWeek, dateStr, upcoming, fileList, fileCount: files.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for slot suggestions",
+      "type": "code",
+      "code": {
+        "source": "const ctx = $.steps.buildContext.output;\nconst prompt = 'You are an executive scheduling assistant. Suggest optimal meeting slots for the following request.\\n\\nMEETING: ' + $.input.meetingTitle + '\\nDURATION: ' + ($.input.duration || '30 minutes') + '\\nPREFERENCES: ' + ($.input.preferences || 'No specific preferences') + '\\nTODAY: ' + ctx.dayOfWeek + ', ' + ctx.dateStr + '\\nUPCOMING DAYS: ' + ctx.upcoming.join(', ') + '\\n\\nCALENDAR FILES FOUND: ' + ctx.fileCount + '\\n' + ctx.fileList + '\\n\\nSuggest 3-5 optimal time slots across the next 5 business days. For each slot provide:\\n- Date and time\\n- Why this slot is good\\n- Confidence level (high/medium/low)\\n\\nReturn ONLY valid JSON:\\n{\\n  \"slots\": [\\n    { \"date\": \"...\", \"time\": \"...\", \"reason\": \"...\", \"confidence\": \"high\" }\\n  ],\\n  \"summary\": \"Brief scheduling recommendation\"\\n}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/one-meeting-scheduler-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiSuggest",
+      "name": "Run Claude AI for slot suggestions",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/one-meeting-scheduler-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse AI response and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiSuggest.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst title = $.input.meetingTitle;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':calendar: Meeting Scheduler: ' + title, emoji: true } });\nif (ai.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.summary } });\n}\nblocks.push({ type: 'divider' });\nconst slots = ai.slots || [];\nslots.forEach(function(slot, i) {\n  var confidence = slot.confidence || 'medium';\n  var emoji = confidence === 'high' ? ':large_green_circle:' : (confidence === 'medium' ? ':large_yellow_circle:' : ':white_circle:');\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: emoji + ' *Slot ' + (i + 1) + ': ' + (slot.date || '') + ' at ' + (slot.time || '') + '*\\n' + (slot.reason || '') } });\n});\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':robot_face: Suggested by Claude AI | Duration: ' + ($.input.duration || '30 minutes') }] });\nvar fallback = 'Meeting Scheduler: ' + title + ' - ' + slots.length + ' slots suggested';\nif (ai.text) { fallback = ai.text.slice(0, 500); }\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post meeting suggestions to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

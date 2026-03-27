@@ -1,0 +1,145 @@
+{
+  "key": "n8n-5819-interactive-agent-chat",
+  "name": "Interactive AI agent with chat and tools",
+  "description": "An AI agent with a chat interface. Takes a user question, searches the web via Exa for real-time information, uses Claude to synthesize a comprehensive answer with tool-like capabilities, and delivers the result to Slack with rich Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5819,
+    "url": "https://n8n.io/workflows/5819",
+    "originalName": "Build an interactive AI agent with chat interface and multiple tools",
+    "totalViews": 57404,
+    "rank": 104,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting results",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The user question or task for the AI agent"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the response"
+    },
+    "agentMode": {
+      "type": "string",
+      "required": false,
+      "default": "research",
+      "description": "Agent mode: research (web search + analysis), calculate (math/logic), create (content generation)"
+    }
+  },
+  "steps": [
+    {
+      "id": "classifyTask",
+      "name": "Classify the user task and determine agent strategy",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst mode = $.input.agentMode || 'research';\n\nconst needsSearch = mode === 'research' || question.toLowerCase().includes('search') || question.toLowerCase().includes('find') || question.toLowerCase().includes('what is') || question.toLowerCase().includes('who is') || question.toLowerCase().includes('latest') || question.toLowerCase().includes('current');\n\nreturn { question, mode, needsSearch, timestamp: new Date().toISOString() };"
+      }
+    },
+    {
+      "id": "webSearch",
+      "name": "Search the web via Exa for relevant information",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile search results for analysis",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.webSearch.response.results || [];\n\nlet sourcesText = '';\nresults.forEach((r, i) => {\n  sourcesText += (i + 1) + '. ' + (r.title || 'Untitled') + '\\n';\n  sourcesText += '   URL: ' + r.url + '\\n';\n  if (r.publishedDate) sourcesText += '   Published: ' + r.publishedDate + '\\n';\n  sourcesText += '   ' + (r.text || '').slice(0, 1200) + '\\n\\n';\n});\n\nreturn { sourcesText, sourceCount: results.length, topSources: results.slice(0, 5).map(r => ({ title: r.title || r.url, url: r.url })) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for agent response",
+      "type": "code",
+      "code": {
+        "source": "const mode = $.steps.classifyTask.output.mode;\nconst question = $.input.question;\nconst sources = $.steps.compileSources.output;\n\nlet prompt = 'You are an interactive AI agent with multiple capabilities. You have been given a task to complete.\\n\\n';\nprompt += 'AGENT MODE: ' + mode + '\\n';\nprompt += 'USER TASK: ' + question + '\\n\\n';\n\nif (sources.sourceCount > 0) {\n  prompt += 'WEB SEARCH RESULTS (' + sources.sourceCount + ' sources):\\n';\n  prompt += sources.sourcesText + '\\n\\n';\n}\n\nprompt += 'CAPABILITIES:\\n';\nprompt += '- Web research and fact synthesis\\n';\nprompt += '- Mathematical calculations and logic\\n';\nprompt += '- Content generation (emails, summaries, code snippets)\\n';\nprompt += '- Data analysis and comparison\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Complete the user task thoroughly using the most relevant capability\\n';\nprompt += '- Cite sources by number when using web results\\n';\nprompt += '- Show your reasoning process\\n';\nprompt += '- Use Slack mrkdwn formatting: *bold*, _italic_, > for quotes, numbered lists\\n';\nprompt += '- Slack rules: use *bold* (NOT **bold**). No markdown tables. No # headings.\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"response\": \"<detailed response in Slack mrkdwn>\",\\n';\nprompt += '  \"toolsUsed\": [\"web_search\", \"analysis\"],\\n';\nprompt += '  \"confidence\": \"high|medium|low\",\\n';\nprompt += '  \"keyFindings\": [\"<finding1>\", \"<finding2>\"],\\n';\nprompt += '  \"followUpSuggestions\": [\"<suggestion1>\", \"<suggestion2>\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5819-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI agent",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5819-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { response: raw, toolsUsed: ['analysis'], confidence: 'medium', keyFindings: [], followUpSuggestions: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst mode = $.steps.classifyTask.output.mode;\nconst sourceCount = $.steps.compileSources.output.sourceCount;\nconst topSources = $.steps.compileSources.output.topSources || [];\n\nconst confidenceEmoji = ai.confidence === 'high' ? ':large_green_circle:' : ai.confidence === 'low' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'AI Agent Response' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Task:* ' + question } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Mode:* ' + mode + ' | *Tools:* ' + (ai.toolsUsed || []).join(', ') } });\nblocks.push({ type: 'divider' });\n\nconst responseText = (ai.response || 'No response generated.').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: responseText } });\nblocks.push({ type: 'divider' });\n\nif (ai.keyFindings && ai.keyFindings.length > 0) {\n  let kfText = '*Key Findings:*\\n';\n  ai.keyFindings.forEach((f, i) => { kfText += (i + 1) + '. ' + f + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kfText.slice(0, 1800) } });\n}\n\nif (ai.followUpSuggestions && ai.followUpSuggestions.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Follow-up Ideas:*\\n' + ai.followUpSuggestions.map((s, i) => (i + 1) + '. ' + s).join('\\n') } });\n}\n\nif (topSources.length > 0) {\n  let srcText = '*Sources:*\\n';\n  topSources.slice(0, 3).forEach((s, i) => { srcText += (i + 1) + '. <' + s.url + '|' + (s.title || s.url).slice(0, 60) + '>\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: confidenceEmoji + ' Confidence: *' + (ai.confidence || 'medium') + '* | Sources: *' + sourceCount + '*' }] });\n\nconst fallback = 'AI Agent: ' + question;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post agent response to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

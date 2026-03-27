@@ -1,0 +1,112 @@
+{
+  "key": "n8n-2813-wordpress-content-generator",
+  "name": "WordPress AI content generator",
+  "description": "Uses Claude to generate a complete blog article from a topic prompt, including title, HTML content, excerpt, tags, and meta description, then publishes it to WordPress as a draft post.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2813,
+    "url": "https://n8n.io/workflows/2813",
+    "originalName": "Automate content generator for WordPress with DeepSeek R1",
+    "totalViews": 46853,
+    "rank": 130,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "wordpressKey": {
+      "type": "string",
+      "required": true,
+      "description": "WordPress connection key for publishing",
+      "connection": {
+        "platform": "word-press"
+      }
+    },
+    "site": {
+      "type": "string",
+      "required": true,
+      "description": "WordPress site ID or domain (e.g. 'mysite.wordpress.com')"
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic or prompt for the article (e.g. '10 Best Productivity Tips for Remote Workers')"
+    },
+    "tone": {
+      "type": "string",
+      "required": false,
+      "description": "Writing tone: professional, casual, authoritative, conversational",
+      "default": "professional"
+    },
+    "wordCount": {
+      "type": "number",
+      "required": false,
+      "description": "Target word count for the article",
+      "default": 1200
+    },
+    "language": {
+      "type": "string",
+      "required": false,
+      "description": "Language for the article (e.g. 'English', 'Spanish')",
+      "default": "English"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for article generation",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic;\nconst tone = $.input.tone || 'professional';\nconst wordCount = $.input.wordCount || 1200;\nconst language = $.input.language || 'English';\n\nconst prompt = `You are a professional content writer and WordPress publishing expert. Generate a complete, publish-ready blog article.\\n\\nTOPIC: ${topic}\\nTONE: ${tone}\\nTARGET WORD COUNT: ${wordCount}\\nLANGUAGE: ${language}\\n\\nINSTRUCTIONS:\\n- Write a compelling, well-structured article\\n- Use proper HTML formatting: <h2>, <h3> for headings, <p> for paragraphs, <ul>/<ol> for lists, <strong>/<em> for emphasis\\n- Include an engaging introduction that hooks the reader\\n- Break content into logical sections with descriptive headings\\n- Include practical examples, tips, or actionable advice\\n- Write a strong conclusion with a call to action\\n- Generate an SEO-friendly title\\n- Create a URL-friendly slug\\n- Write a meta description under 155 characters\\n- Suggest relevant tags and categories\\n- Write a 2-3 sentence excerpt\\n\\nReturn ONLY valid JSON:\\n{\\n  \"title\": \"<engaging article title>\",\\n  \"slug\": \"<url-friendly-slug>\",\\n  \"content\": \"<full HTML article body>\",\\n  \"excerpt\": \"<2-3 sentence excerpt>\",\\n  \"metaDescription\": \"<under 155 chars>\",\\n  \"tags\": [\"<tag1>\", \"<tag2>\", \"<tag3>\", \"<tag4>\"],\\n  \"categories\": [\"<category1>\"],\\n  \"estimatedWordCount\": ${wordCount}\\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2813-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI for article generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2813-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: $.input.topic, slug: $.input.topic.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 60), content: '<p>' + raw + '</p>', excerpt: $.input.topic, metaDescription: $.input.topic.slice(0, 155), tags: ['blog'], categories: ['Blog'], estimatedWordCount: 0 }; }"
+      }
+    },
+    {
+      "id": "publishToWordPress",
+      "name": "Publish article to WordPress as draft",
+      "type": "action",
+      "action": {
+        "platform": "word-press",
+        "actionId": "conn_mod_def::GJ8WW_SF41c::2UIlchnrQjqCWCK2VaWxwA",
+        "connectionKey": "$.input.wordpressKey",
+        "pathVariables": {
+          "site": "$.input.site"
+        },
+        "data": {
+          "title": "$.steps.parseAI.output.title",
+          "content": "$.steps.parseAI.output.content",
+          "slug": "$.steps.parseAI.output.slug",
+          "excerpt": "$.steps.parseAI.output.excerpt",
+          "status": "draft",
+          "tags": "$.steps.parseAI.output.tags",
+          "categories": "$.steps.parseAI.output.categories"
+        }
+      }
+    }
+  ]
+}

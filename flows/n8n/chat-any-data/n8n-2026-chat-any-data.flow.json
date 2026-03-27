@@ -1,0 +1,158 @@
+{
+  "key": "n8n-2026-chat-any-data",
+  "name": "Chat with Any Data \u2014 Exa Search + Firecrawl Scrape + AI",
+  "description": "Ask a question about any topic: Exa searches the web for relevant sources, Firecrawl scrapes the best result for full content, Claude AI answers the question using the gathered data, and posts the answer to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2026,
+    "url": "https://n8n.io/workflows/2026",
+    "originalName": "AI chat with any data source (using the n8n workflow tool)",
+    "totalViews": 44625,
+    "rank": 140,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The question you want answered (e.g. 'What are the latest trends in AI agents?')"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchExa",
+      "name": "Search the web for relevant sources via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.question",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "pickBestSource",
+      "name": "Pick the best source URL to scrape",
+      "type": "code",
+      "code": {
+        "source": "var results = $.steps.searchExa.response.results || [];\nvar best = results[0] || {};\nvar sources = results.slice(0, 5).map(function(r, i) { return (i + 1) + '. ' + (r.title || 'Untitled') + ' - ' + r.url + '\\n   ' + (r.text || '').slice(0, 200); });\nreturn { bestUrl: best.url || '', sources: sources.join('\\n\\n'), sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "scrapeSource",
+      "name": "Scrape the best source with Firecrawl",
+      "type": "action",
+      "onError": {
+        "strategy": "continue"
+      },
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.steps.pickBestSource.output.bestUrl",
+          "formats": [
+            {
+              "type": "markdown"
+            }
+          ],
+          "onlyMainContent": true
+        }
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt with all gathered data",
+      "type": "code",
+      "code": {
+        "source": "var scrapedMd = '';\nif ($.steps.scrapeSource.response && $.steps.scrapeSource.response.data) {\n  scrapedMd = ($.steps.scrapeSource.response.data.markdown || '').slice(0, 4000);\n}\nvar sources = $.steps.pickBestSource.output.sources;\nvar prompt = 'You are a knowledgeable research assistant. Answer the following question thoroughly using the provided sources.\\n\\nQUESTION: ' + $.input.question + '\\n\\nSEARCH RESULTS SUMMARY:\\n' + sources + '\\n\\nDETAILED CONTENT FROM TOP SOURCE:\\n' + scrapedMd + '\\n\\nProvide a comprehensive, well-structured answer. Include key facts, cite sources where relevant, and note any caveats. Return ONLY valid JSON:\\n{\\n  \"answer\": \"Your detailed answer here\",\\n  \"keyPoints\": [\"point1\", \"point2\"],\\n  \"sources\": [\"url1\", \"url2\"],\\n  \"confidence\": \"high|medium|low\"\\n}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/one-chat-any-data-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnswer",
+      "name": "Run Claude AI to answer the question",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/one-chat-any-data-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse AI response and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnswer.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':mag: Answer: ' + $.input.question.slice(0, 100), emoji: true } });\nvar confidenceEmoji = ':large_green_circle:';\nif (ai.confidence === 'medium') confidenceEmoji = ':large_yellow_circle:';\nif (ai.confidence === 'low') confidenceEmoji = ':red_circle:';\nif (ai.answer) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.answer.slice(0, 2900) } });\n}\nif (ai.keyPoints && ai.keyPoints.length > 0) {\n  blocks.push({ type: 'divider' });\n  var kpText = '*Key Points*\\n';\n  ai.keyPoints.forEach(function(p, i) { kpText += (i + 1) + '. ' + p + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kpText } });\n}\nif (ai.sources && ai.sources.length > 0) {\n  blocks.push({ type: 'divider' });\n  var srcText = '*Sources*\\n';\n  ai.sources.forEach(function(s) { srcText += '- <' + s + '>\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText } });\n}\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: confidenceEmoji + ' Confidence: ' + (ai.confidence || 'unknown') + ' | ' + $.steps.pickBestSource.output.sourceCount + ' sources analyzed' }] });\nvar fallback = ai.answer ? ai.answer.slice(0, 500) : (ai.text || '').slice(0, 500);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,219 @@
+{
+  "key": "n8n-2320-invoice-extractor",
+  "name": "AI Invoice Data Extractor",
+  "description": "Fetches emails from Gmail that contain invoices, uses Claude AI to extract structured data (amounts, dates, vendors, line items) from the email content, and saves the extracted invoice data to Google Sheets. Adapted from n8n's LlamaParse invoice extraction workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2320,
+    "url": "https://n8n.io/workflows/2320",
+    "originalName": "Invoice data extraction with LlamaParse and OpenAI",
+    "totalViews": 45567,
+    "rank": 132,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for fetching invoice emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving extracted data",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting extraction summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID to save invoice data"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Invoices",
+      "description": "Sheet/tab name within the spreadsheet (default: Invoices)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the extraction summary"
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": false,
+      "default": "subject:(invoice OR receipt OR payment) newer_than:7d",
+      "description": "Gmail search query for finding invoice emails"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Maximum number of emails to process (default: 10)"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchInvoiceEmails",
+      "name": "Fetch invoice emails from Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "data": {},
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "maxResults": "$.input.maxEmails",
+          "q": "$.input.searchQuery"
+        }
+      }
+    },
+    {
+      "id": "extractIds",
+      "name": "Extract message IDs",
+      "type": "code",
+      "code": {
+        "source": "const messages = $.steps.fetchInvoiceEmails.response.messages || [];\nreturn { messageIds: messages.map(m => m.id).filter(Boolean).slice(0, 10) };"
+      }
+    },
+    {
+      "id": "fetchDetails",
+      "name": "Fetch details for each invoice email",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractIds.output.messageIds",
+        "as": "msgId",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "getMsg",
+            "name": "Get email message",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GJ3ocvMGOS8::D__3BgQSSzWtDUoOqLuX2A",
+              "connectionKey": "$.input.gmailKey",
+              "pathVars": {
+                "userId": "me",
+                "id": "$.loop.msgId"
+              },
+              "queryParams": {
+                "format": "full"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileEmails",
+      "name": "Compile email content for invoice extraction",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.fetchDetails.response.iterations || [];\nlet compiled = '';\nlet emailCount = 0;\n\niterations.forEach((iter, i) => {\n  if (!iter.getMsg || !iter.getMsg.response) return;\n  const msg = iter.getMsg.response;\n  const headers = msg.payload ? (msg.payload.headers || []) : [];\n  const getHeader = (name) => { const h = headers.find(h => h.name.toLowerCase() === name.toLowerCase()); return h ? h.value : ''; };\n\n  const from = getHeader('From');\n  const subject = getHeader('Subject');\n  const date = getHeader('Date');\n\n  let body = '';\n  if (msg.payload && msg.payload.body && msg.payload.body.data) {\n    try { body = Buffer.from(msg.payload.body.data, 'base64').toString('utf8'); } catch(e) { body = ''; }\n  } else if (msg.payload && msg.payload.parts) {\n    const textPart = msg.payload.parts.find(p => p.mimeType === 'text/plain');\n    if (textPart && textPart.body && textPart.body.data) {\n      try { body = Buffer.from(textPart.body.data, 'base64').toString('utf8'); } catch(e) { body = ''; }\n    }\n  }\n  if (!body) body = msg.snippet || '';\n\n  compiled += '--- INVOICE EMAIL ' + (i + 1) + ' ---\\n';\n  compiled += 'From: ' + from + '\\n';\n  compiled += 'Subject: ' + subject + '\\n';\n  compiled += 'Date: ' + date + '\\n';\n  compiled += 'Body:\\n' + body.slice(0, 3000) + '\\n\\n';\n  emailCount++;\n});\n\nreturn { compiled: compiled.slice(0, 30000), emailCount };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for invoice extraction",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileEmails.output;\n\nlet prompt = 'You are an expert invoice data extractor. Extract structured invoice data from the following emails.\\n\\n';\nprompt += 'EMAILS (' + d.emailCount + ' invoice emails):\\n';\nprompt += d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract: vendor name, invoice number, date, due date, total amount, currency, line items if visible\\n';\nprompt += '- Parse amounts carefully \u2014 remove currency symbols for the numeric value but note the currency\\n';\nprompt += '- If data is ambiguous or missing, use \"N/A\"\\n';\nprompt += '- Each invoice should be a separate entry\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"invoices\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"vendor\": \"company name\",\\n';\nprompt += '      \"invoiceNumber\": \"INV-001\",\\n';\nprompt += '      \"invoiceDate\": \"YYYY-MM-DD\",\\n';\nprompt += '      \"dueDate\": \"YYYY-MM-DD\",\\n';\nprompt += '      \"totalAmount\": \"1234.56\",\\n';\nprompt += '      \"currency\": \"USD\",\\n';\nprompt += '      \"category\": \"software|services|supplies|other\",\\n';\nprompt += '      \"senderEmail\": \"email@example.com\",\\n';\nprompt += '      \"description\": \"brief description of what this invoice is for\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"totalExtracted\": 0,\\n';\nprompt += '  \"grandTotal\": \"sum of all amounts\",\\n';\nprompt += '  \"summary\": \"brief summary of all invoices\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2320-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiExtract",
+      "name": "Run Claude AI invoice extraction",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2320-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiExtract.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { invoices: [], totalExtracted: 0, grandTotal: '0', summary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Google Sheets rows from extracted invoices",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst invoices = ai.invoices || [];\n\nconst header = ['Vendor', 'Invoice Number', 'Invoice Date', 'Due Date', 'Amount', 'Currency', 'Category', 'Sender Email', 'Description'];\nconst rows = invoices.map(inv => [\n  inv.vendor || 'N/A',\n  inv.invoiceNumber || 'N/A',\n  inv.invoiceDate || 'N/A',\n  inv.dueDate || 'N/A',\n  inv.totalAmount || '0',\n  inv.currency || 'USD',\n  inv.category || 'other',\n  inv.senderEmail || 'N/A',\n  inv.description || ''\n]);\n\nconst allRows = [header].concat(rows);\nreturn { values: allRows, invoiceCount: invoices.length, grandTotal: ai.grandTotal || '0', summary: ai.summary || '' };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save invoice data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": "$.steps.buildSheetRows.output.values",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit extraction summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst d = $.steps.buildSheetRows.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Invoice Data Extraction Complete', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Invoices extracted:* ' + d.invoiceCount + ' | *Grand total:* ' + d.grandTotal } });\n\nif (d.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: d.summary.slice(0, 2900) } });\n}\nblocks.push({ type: 'divider' });\n\n(ai.invoices || []).slice(0, 10).forEach((inv, i) => {\n  let text = (i + 1) + '. *' + inv.vendor + '* - ' + inv.currency + ' ' + inv.totalAmount + '\\n';\n  text += '   Invoice: ' + inv.invoiceNumber + ' | Date: ' + inv.invoiceDate;\n  if (inv.dueDate && inv.dueDate !== 'N/A') text += ' | Due: ' + inv.dueDate;\n  text += '\\n   _' + (inv.description || 'No description') + '_';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text } });\n});\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Data saved to Google Sheets | Powered by Gmail + Claude AI | One CLI' }] });\n\nconst fallback = 'Invoice Extraction: ' + d.invoiceCount + ' invoices, total ' + d.grandTotal;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post extraction summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

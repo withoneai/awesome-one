@@ -21,6 +21,18 @@
 
 ---
 
+**[Flows](./flows/)**
+
+*218+ automation workflows rebuilt from the most popular n8n templates. Each flow connects real platforms (Gmail, Slack, Sheets, etc.) and runs with a single command. Agent-native — paste any flow's URL into Claude Code or Cursor and it sets itself up.*
+
+```bash
+one flow execute n8n-1954-ai-agent-chat --input question="What is RAG?"
+```
+
+[Browse all n8n flows →](./flows/n8n/)
+
+---
+
 **[Link](./link/)**
 
 *Drop-in connection onboarding page for agencies. Your customers connect their integrations (Gmail, Slack, etc.) through a branded card. Clone and deploy, or [paste a prompt](./link/PROMPT.md) into Lovable/Bolt/v0 to generate it instantly.*

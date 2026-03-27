@@ -1,0 +1,144 @@
+{
+  "key": "n8n-7639-talk-google-sheets",
+  "name": "Talk to your Google Sheets data using AI",
+  "description": "Reads data from a Google Sheets spreadsheet, uses Claude AI to analyze and answer questions about the data, and posts the response to Slack using Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 7639,
+    "url": "https://n8n.io/workflows/7639",
+    "originalName": "Talk to your Google Sheets using ChatGPT-5",
+    "totalViews": 114511,
+    "rank": 42,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "The ID of the Google Sheets spreadsheet to analyze"
+    },
+    "range": {
+      "type": "string",
+      "required": false,
+      "default": "Sheet1",
+      "description": "Sheet range to read (e.g. 'Sheet1' or 'Sheet1!A1:Z100')"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "Question to ask about the spreadsheet data"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the answer"
+    }
+  },
+  "steps": [
+    {
+      "id": "prepareRange",
+      "name": "Resolve sheet range with default",
+      "type": "code",
+      "code": {
+        "source": "const range = $.input.range || 'Sheet1';\nreturn { range };"
+      }
+    },
+    {
+      "id": "readSheet",
+      "name": "Read data from Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GJ30lYkSqLk::IOnDiKqfQ_2FtFCahohidA",
+        "connectionKey": "$.input.sheetsKey",
+        "pathVars": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.steps.prepareRange.output.range"
+        }
+      }
+    },
+    {
+      "id": "formatData",
+      "name": "Format spreadsheet data for AI analysis",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.readSheet.response || {};\nconst values = resp.values || [];\n\nif (values.length === 0) {\n  return { dataText: 'No data found in the spreadsheet.', headers: [], rowCount: 0, colCount: 0, hasData: false };\n}\n\nconst headers = values[0] || [];\nconst dataRows = values.slice(1);\n\nlet dataText = 'SPREADSHEET DATA\\n';\ndataText += 'Columns: ' + headers.join(', ') + '\\n';\ndataText += 'Total rows: ' + dataRows.length + '\\n\\n';\ndataText += 'HEADER ROW: ' + headers.join(' | ') + '\\n';\ndataText += '-'.repeat(60) + '\\n';\n\ndataRows.slice(0, 200).forEach((row, i) => {\n  const paddedRow = headers.map((h, j) => (row[j] !== undefined ? row[j] : ''));\n  dataText += 'Row ' + (i + 1) + ': ' + paddedRow.join(' | ') + '\\n';\n});\n\nif (dataRows.length > 200) {\n  dataText += '\\n... (' + (dataRows.length - 200) + ' more rows not shown)\\n';\n}\n\nconst colStats = headers.map((h, j) => {\n  const colValues = dataRows.map(r => r[j]).filter(v => v !== undefined && v !== '');\n  const numValues = colValues.filter(v => !isNaN(Number(v))).map(Number);\n  const stat = { column: h, nonEmpty: colValues.length, uniqueValues: new Set(colValues).size };\n  if (numValues.length > 0) {\n    stat.min = Math.min(...numValues);\n    stat.max = Math.max(...numValues);\n    stat.avg = (numValues.reduce((a, b) => a + b, 0) / numValues.length).toFixed(2);\n    stat.isNumeric = true;\n  }\n  return stat;\n});\n\ndataText += '\\nCOLUMN STATISTICS:\\n';\ncolStats.forEach(s => {\n  dataText += '- ' + s.column + ': ' + s.nonEmpty + ' values, ' + s.uniqueValues + ' unique';\n  if (s.isNumeric) dataText += ', range ' + s.min + '-' + s.max + ', avg ' + s.avg;\n  dataText += '\\n';\n});\n\nreturn { dataText, headers, rowCount: dataRows.length, colCount: headers.length, hasData: true, colStats };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for data analysis",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst data = $.steps.formatData.output;\n\nlet prompt = 'You are a data analyst assistant. A user has a Google Sheets spreadsheet and wants to ask questions about their data. Analyze the data provided and answer the question thoroughly.\\n\\n';\nprompt += 'USER QUESTION: ' + question + '\\n\\n';\nprompt += data.dataText + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Answer the question based on the actual data provided\\n';\nprompt += '- Include specific numbers, calculations, and data references\\n';\nprompt += '- If the question requires aggregation (sum, average, count, etc.), perform the calculation\\n';\nprompt += '- Mention any data quality issues or caveats\\n';\nprompt += '- Format numbers with appropriate precision\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"detailed answer to the question\",\\n';\nprompt += '  \"keyFindings\": [\"finding 1\", \"finding 2\"],\\n';\nprompt += '  \"dataPoints\": [{ \"label\": \"metric name\", \"value\": \"metric value\" }],\\n';\nprompt += '  \"chartSuggestion\": \"what kind of chart would best visualize this data (optional)\",\\n';\nprompt += '  \"summary\": \"one-line summary\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-7639-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-7639-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, keyFindings: [], dataPoints: [], summary: 'See raw answer' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst data = $.steps.formatData.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Sheets Data Analysis', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Analyzing ' + data.rowCount + ' rows x ' + data.colCount + ' columns' }] });\nblocks.push({ type: 'divider' });\n\nconst answerText = (ai.answer || 'No answer generated.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Answer:*\\n' + answerText } });\n\nif (ai.keyFindings && ai.keyFindings.length > 0) {\n  blocks.push({ type: 'divider' });\n  let findingsText = '*Key Findings:*\\n';\n  ai.keyFindings.forEach((f, i) => { findingsText += (i + 1) + '. ' + f + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: findingsText.slice(0, 1800) } });\n}\n\nif (ai.dataPoints && ai.dataPoints.length > 0) {\n  const fields = ai.dataPoints.slice(0, 10).map(dp => ({ type: 'mrkdwn', text: '*' + dp.label + '*\\n' + dp.value }));\n  while (fields.length > 0) {\n    blocks.push({ type: 'section', fields: fields.splice(0, 10) });\n  }\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Google Sheets + Claude AI' }] });\n\nconst fallbackText = 'Sheets Analysis: ' + (ai.summary || question);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post analysis to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

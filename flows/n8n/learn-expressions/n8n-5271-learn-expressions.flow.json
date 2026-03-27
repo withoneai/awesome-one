@@ -1,0 +1,77 @@
+{
+  "key": "n8n-5271-learn-expressions",
+  "name": "Data transformation tutorial: code step examples",
+  "description": "Adapted from the n8n expressions tutorial. Demonstrates various code step transformations (string manipulation, array operations, date formatting, object restructuring) and posts a comprehensive reference guide to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5271,
+    "url": "https://n8n.io/workflows/5271",
+    "originalName": "Learn n8n expressions with an interactive step-by-step tutorial for beginners",
+    "totalViews": 53301,
+    "rank": 112,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting transformation examples",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the tutorial"
+    },
+    "focusArea": {
+      "type": "string",
+      "required": false,
+      "default": "all",
+      "description": "Focus area: all, strings, arrays, dates, objects, math"
+    }
+  },
+  "steps": [
+    {
+      "id": "generateSampleData",
+      "name": "Generate sample data for transformation demos",
+      "type": "code",
+      "code": {
+        "source": "const sampleData = {\n  users: [\n    { name: 'Alice Johnson', email: 'alice@example.com', age: 30, joinDate: '2024-01-15', skills: ['JavaScript', 'Python', 'SQL'] },\n    { name: 'Bob Smith', email: 'bob@example.com', age: 25, joinDate: '2024-03-22', skills: ['React', 'TypeScript'] },\n    { name: 'Carol Williams', email: 'carol@example.com', age: 35, joinDate: '2023-11-08', skills: ['Python', 'ML', 'Data Science'] }\n  ],\n  products: [\n    { name: 'Widget A', price: 29.99, category: 'tools', stock: 150 },\n    { name: 'Widget B', price: 49.99, category: 'tools', stock: 75 },\n    { name: 'Gadget X', price: 99.99, category: 'electronics', stock: 30 }\n  ],\n  rawText: 'Hello World! This is a sample text with MIXED casing and   extra    spaces.'\n};\n\nreturn { sampleData, focusArea: $.input.focusArea || 'all' };"
+      }
+    },
+    {
+      "id": "runTransformations",
+      "name": "Execute transformation examples",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.generateSampleData.output.sampleData;\nconst focus = $.steps.generateSampleData.output.focusArea;\nconst examples = [];\n\nif (focus === 'all' || focus === 'strings') {\n  examples.push({ category: 'String Operations', name: 'Lowercase', input: data.rawText, code: 'text.toLowerCase()', output: data.rawText.toLowerCase() });\n  examples.push({ category: 'String Operations', name: 'Trim extra spaces', input: data.rawText, code: 'text.replace(/\\\\s+/g, \" \").trim()', output: data.rawText.replace(/\\s+/g, ' ').trim() });\n  examples.push({ category: 'String Operations', name: 'Extract domain from email', input: data.users[0].email, code: 'email.split(\"@\")[1]', output: data.users[0].email.split('@')[1] });\n  examples.push({ category: 'String Operations', name: 'Title case', input: 'hello world', code: 'str.split(\" \").map(w => w[0].toUpperCase() + w.slice(1)).join(\" \")', output: 'Hello World' });\n}\n\nif (focus === 'all' || focus === 'arrays') {\n  const allSkills = data.users.flatMap(u => u.skills);\n  const uniqueSkills = [...new Set(allSkills)];\n  examples.push({ category: 'Array Operations', name: 'Flatten + unique skills', input: 'users[].skills', code: '[...new Set(users.flatMap(u => u.skills))]', output: uniqueSkills.join(', ') });\n  examples.push({ category: 'Array Operations', name: 'Filter by age > 28', input: 'users[]', code: 'users.filter(u => u.age > 28).map(u => u.name)', output: data.users.filter(u => u.age > 28).map(u => u.name).join(', ') });\n  examples.push({ category: 'Array Operations', name: 'Sort products by price', input: 'products[]', code: 'products.sort((a,b) => b.price - a.price).map(p => p.name)', output: [...data.products].sort((a, b) => b.price - a.price).map(p => p.name).join(', ') });\n  const totalStock = data.products.reduce((sum, p) => sum + p.stock, 0);\n  examples.push({ category: 'Array Operations', name: 'Sum stock with reduce', input: 'products[].stock', code: 'products.reduce((sum, p) => sum + p.stock, 0)', output: String(totalStock) });\n}\n\nif (focus === 'all' || focus === 'dates') {\n  const now = new Date();\n  examples.push({ category: 'Date Operations', name: 'Format ISO to readable', input: '2024-01-15', code: 'new Date(d).toLocaleDateString(\"en-US\", {weekday: \"long\", year: \"numeric\", month: \"long\", day: \"numeric\"})', output: new Date('2024-01-15').toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) });\n  examples.push({ category: 'Date Operations', name: 'Days since join', input: data.users[0].joinDate, code: 'Math.floor((Date.now() - new Date(d)) / 86400000)', output: String(Math.floor((Date.now() - new Date(data.users[0].joinDate)) / 86400000)) + ' days' });\n}\n\nif (focus === 'all' || focus === 'objects') {\n  const grouped = {};\n  data.products.forEach(p => { if (!grouped[p.category]) grouped[p.category] = []; grouped[p.category].push(p.name); });\n  examples.push({ category: 'Object Operations', name: 'Group products by category', input: 'products[]', code: 'products.reduce into grouped object', output: JSON.stringify(grouped) });\n  examples.push({ category: 'Object Operations', name: 'Pick specific fields', input: 'user object', code: '({ name, email } = user)', output: JSON.stringify({ name: data.users[0].name, email: data.users[0].email }) });\n}\n\nif (focus === 'all' || focus === 'math') {\n  const avg = data.products.reduce((s, p) => s + p.price, 0) / data.products.length;\n  examples.push({ category: 'Math Operations', name: 'Average price', input: 'products[].price', code: 'arr.reduce((s,p) => s + p.price, 0) / arr.length', output: '$' + avg.toFixed(2) });\n  const max = Math.max(...data.products.map(p => p.price));\n  examples.push({ category: 'Math Operations', name: 'Max price', input: 'products[].price', code: 'Math.max(...products.map(p => p.price))', output: '$' + max.toFixed(2) });\n}\n\nreturn { examples, totalExamples: examples.length };"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit tutorial message",
+      "type": "code",
+      "code": {
+        "source": "const examples = $.steps.runTransformations.output.examples || [];\nconst focus = $.steps.generateSampleData.output.focusArea;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Data Transformation Reference Guide' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Focus:* ' + focus + ' | *Examples:* ' + examples.length } });\nblocks.push({ type: 'divider' });\n\nlet currentCategory = '';\nexamples.forEach((ex, i) => {\n  if (ex.category !== currentCategory) {\n    currentCategory = ex.category;\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*:bookmark: ' + currentCategory + '*' } });\n  }\n\n  let exText = '*' + ex.name + '*\\n';\n  exText += '```' + ex.code + '```\\n';\n  exText += ':arrow_right: Result: `' + String(ex.output).slice(0, 200) + '`';\n\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: exText.slice(0, 1800) } });\n});\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Data Transformation Tutorial | Powered by One CLI code steps' }] });\n\nconst fallback = 'Data transformation guide: ' + examples.length + ' examples';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post tutorial to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

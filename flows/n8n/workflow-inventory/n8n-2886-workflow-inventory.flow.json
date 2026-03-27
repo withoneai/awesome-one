@@ -1,0 +1,160 @@
+{
+  "key": "n8n-2886-workflow-inventory",
+  "name": "Workflow Inventory to Google Drive",
+  "description": "Lists all One CLI flow files from the local flows directory, uses Claude AI to summarize and categorize each workflow, and saves a structured inventory report as a file to Google Drive. Adapted from n8n's backup-all-workflows-to-Google-Drive workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2886,
+    "url": "https://n8n.io/workflows/2886",
+    "originalName": "Backup all n8n workflows to Google Drive every 4 hours",
+    "totalViews": 44903,
+    "rank": 138,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "googleDriveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key for uploading the inventory",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting notification",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the inventory notification"
+    },
+    "flowsDirectory": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Path to the One CLI flows directory (defaults to .one/flows/)"
+    },
+    "driveFolderId": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Google Drive folder ID to save the inventory (optional \u2014 saves to root if omitted)"
+    }
+  },
+  "steps": [
+    {
+      "id": "listFlows",
+      "name": "List all One CLI flow files",
+      "type": "bash",
+      "bash": {
+        "command": "ls -la ~/.one/flows/*.flow.json 2>/dev/null; echo '---SEPARATOR---'; for f in ~/.one/flows/*.flow.json; do if [ -f \"$f\" ]; then python3 -c \"import json,sys; d=json.load(open('$f')); print(json.dumps({'file':sys.argv[1],'key':d.get('key',''),'name':d.get('name',''),'description':d.get('description','')[:200],'version':d.get('version',''),'source':d.get('source',{}),'stepCount':len(d.get('steps',[])),'inputCount':len(d.get('inputs',{}))},ensure_ascii=False))\" \"$(basename $f)\" 2>/dev/null; fi; done",
+        "timeout": 30000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseFlowList",
+      "name": "Parse flow listing into structured data",
+      "type": "code",
+      "code": {
+        "source": "const raw = $.steps.listFlows.output || '';\nconst parts = raw.split('---SEPARATOR---');\nconst flowLines = (parts[1] || '').trim().split('\\n').filter(Boolean);\n\nconst flows = [];\nflowLines.forEach(line => {\n  try {\n    const f = JSON.parse(line);\n    flows.push(f);\n  } catch(e) {}\n});\n\nlet summary = '';\nflows.forEach((f, i) => {\n  summary += (i + 1) + '. ' + (f.name || f.key || f.file) + '\\n';\n  summary += '   Key: ' + (f.key || 'N/A') + '\\n';\n  summary += '   Steps: ' + (f.stepCount || 0) + ' | Inputs: ' + (f.inputCount || 0) + '\\n';\n  if (f.description) summary += '   ' + f.description.slice(0, 150) + '\\n';\n  if (f.source && f.source.platform) summary += '   Source: ' + f.source.platform + ' #' + (f.source.id || '') + '\\n';\n  summary += '\\n';\n});\n\nreturn { flows, flowCount: flows.length, summary: summary.slice(0, 25000) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for inventory categorization",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.parseFlowList.output;\nconst now = new Date().toISOString().split('T')[0];\n\nlet prompt = 'You are a workflow analyst. Categorize and summarize the following One CLI workflow inventory.\\n\\n';\nprompt += 'DATE: ' + now + '\\n';\nprompt += 'TOTAL WORKFLOWS: ' + d.flowCount + '\\n\\n';\nprompt += 'WORKFLOWS:\\n' + d.summary + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Categorize each workflow (e.g., AI/Research, Email/Communication, Data/Analytics, Development, Social Media, etc.)\\n';\nprompt += '- Identify any duplicate or overlapping workflows\\n';\nprompt += '- Suggest gaps \u2014 useful workflows that are missing\\n';\nprompt += '- Provide overall inventory health assessment\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"categories\": [{ \"name\": \"Category\", \"count\": 0, \"workflows\": [\"workflow name\"] }],\\n';\nprompt += '  \"duplicates\": [{ \"workflows\": [\"name1\", \"name2\"], \"reason\": \"why similar\" }],\\n';\nprompt += '  \"gaps\": [\"suggested workflow 1\"],\\n';\nprompt += '  \"healthScore\": \"excellent|good|fair|needs-attention\",\\n';\nprompt += '  \"summary\": \"2-3 sentence inventory overview\",\\n';\nprompt += '  \"stats\": { \"totalWorkflows\": 0, \"categories\": 0, \"avgStepsPerFlow\": 0 }\\n';\nprompt += '}';\n\nreturn { prompt, date: now };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2886-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI inventory analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2886-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { categories: [], duplicates: [], gaps: [], healthScore: 'unknown', summary: raw, stats: {} }; }"
+      }
+    },
+    {
+      "id": "buildInventoryFile",
+      "name": "Build inventory report content for Drive upload",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst d = $.steps.parseFlowList.output;\nconst date = $.steps.buildPrompt.output.date;\n\nlet report = 'ONE CLI WORKFLOW INVENTORY\\n';\nreport += '========================\\n';\nreport += 'Date: ' + date + '\\n';\nreport += 'Total Workflows: ' + d.flowCount + '\\n';\nreport += 'Health Score: ' + (ai.healthScore || 'N/A') + '\\n\\n';\n\nif (ai.summary) {\n  report += 'SUMMARY\\n-------\\n' + ai.summary + '\\n\\n';\n}\n\nif (ai.categories && ai.categories.length > 0) {\n  report += 'CATEGORIES\\n----------\\n';\n  ai.categories.forEach(cat => {\n    report += '\\n' + cat.name + ' (' + cat.count + ' workflows):\\n';\n    (cat.workflows || []).forEach(w => { report += '  - ' + w + '\\n'; });\n  });\n  report += '\\n';\n}\n\nif (ai.duplicates && ai.duplicates.length > 0) {\n  report += 'POTENTIAL DUPLICATES\\n-------------------\\n';\n  ai.duplicates.forEach((d, i) => {\n    report += (i + 1) + '. ' + (d.workflows || []).join(' / ') + '\\n';\n    report += '   Reason: ' + d.reason + '\\n';\n  });\n  report += '\\n';\n}\n\nif (ai.gaps && ai.gaps.length > 0) {\n  report += 'SUGGESTED GAPS\\n--------------\\n';\n  ai.gaps.forEach((g, i) => { report += (i + 1) + '. ' + g + '\\n'; });\n  report += '\\n';\n}\n\nreport += 'FULL WORKFLOW LISTING\\n--------------------\\n';\nreport += d.summary;\n\nreturn { report, fileName: 'one-cli-inventory-' + date + '.txt' };"
+      }
+    },
+    {
+      "id": "saveReportFile",
+      "name": "Save inventory report to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2886-inventory.txt",
+        "content": "$.steps.buildInventoryFile.output.report"
+      }
+    },
+    {
+      "id": "uploadToDrive",
+      "name": "Upload inventory to Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.googleDriveKey",
+        "data": {
+          "name": "$.steps.buildInventoryFile.output.fileName",
+          "mimeType": "text/plain",
+          "q": "name = '$.steps.buildInventoryFile.output.fileName'"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit inventory notification",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst d = $.steps.parseFlowList.output;\nconst date = $.steps.buildPrompt.output.date;\n\nconst healthEmoji = { excellent: ':star:', good: ':white_check_mark:', fair: ':ok:', 'needs-attention': ':warning:' };\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Workflow Inventory Report', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Date:* ' + date + ' | *Total workflows:* ' + d.flowCount + ' | *Health:* ' + (healthEmoji[ai.healthScore] || '') + ' ' + (ai.healthScore || 'unknown') } });\nblocks.push({ type: 'divider' });\n\nif (ai.summary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.summary.slice(0, 2900) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.categories && ai.categories.length > 0) {\n  let catText = '*Categories:*\\n';\n  ai.categories.forEach(cat => {\n    catText += '*' + cat.name + '*: ' + cat.count + ' workflows\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: catText.slice(0, 2900) } });\n}\n\nif (ai.gaps && ai.gaps.length > 0) {\n  let gapText = ':bulb: *Suggested additions:*\\n';\n  ai.gaps.slice(0, 5).forEach((g, i) => { gapText += (i + 1) + '. ' + g + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: gapText } });\n}\n\nif (ai.duplicates && ai.duplicates.length > 0) {\n  let dupText = ':warning: *Potential duplicates:*\\n';\n  ai.duplicates.slice(0, 3).forEach((d, i) => {\n    dupText += (i + 1) + '. ' + (d.workflows || []).join(' / ') + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: dupText } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Inventory saved to Google Drive | Powered by Claude AI | One CLI' }] });\n\nconst fallback = 'Workflow Inventory: ' + d.flowCount + ' workflows - Health: ' + (ai.healthScore || 'unknown');\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post inventory notification to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

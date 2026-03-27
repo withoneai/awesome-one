@@ -1,0 +1,160 @@
+{
+  "key": "n8n-4485-graphrag-research-agent",
+  "name": "Multi-Source Research Agent with Knowledge Synthesis",
+  "description": "Takes a research question, queries multiple knowledge domains via Exa search, uses Claude AI to synthesize findings with cross-referencing like a GraphRAG knowledge base, and posts a comprehensive answer with sources to Slack. Adapted from n8n's InfraNodus GraphRAG chatbot agent.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4485,
+    "url": "https://n8n.io/workflows/4485",
+    "originalName": "Telegram AI chatbot agent with InfraNodus GraphRAG knowledge base",
+    "totalViews": 21013,
+    "rank": 288,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for multi-domain web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the synthesized answer",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The research question to investigate across multiple knowledge domains"
+    },
+    "domains": {
+      "type": "string",
+      "required": false,
+      "default": "academic, industry, news",
+      "description": "Comma-separated knowledge domains to search (e.g. academic, industry, news, technical)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the research findings"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQueries",
+      "name": "Build domain-specific search queries",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst domains = ($.input.domains || 'academic, industry, news').split(',').map(d => d.trim()).filter(Boolean);\nconst queries = domains.map(domain => {\n  let prefix = '';\n  if (domain === 'academic') prefix = 'research paper findings about ';\n  else if (domain === 'industry') prefix = 'industry analysis and business perspective on ';\n  else if (domain === 'news') prefix = 'latest news and developments about ';\n  else if (domain === 'technical') prefix = 'technical documentation and implementation of ';\n  else prefix = domain + ' perspective on ';\n  return { domain, query: prefix + question };\n});\nreturn { queries, domainCount: queries.length };"
+      }
+    },
+    {
+      "id": "searchDomains",
+      "name": "Search across all knowledge domains via Exa",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.buildQueries.output.queries",
+        "as": "queryItem",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "searchDomain",
+            "name": "Search one knowledge domain",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "exa",
+              "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+              "connectionKey": "$.input.exaKey",
+              "data": {
+                "query": "$.loop.queryItem.query",
+                "numResults": 5,
+                "type": "auto",
+                "contents": {
+                  "text": {
+                    "maxCharacters": 1500
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile all domain search results into knowledge base",
+      "type": "code",
+      "code": {
+        "source": "const queries = $.steps.buildQueries.output.queries;\nconst iterations = $.steps.searchDomains.response.iterations || [];\n\nlet compiled = '';\nlet totalSources = 0;\nconst domainResults = [];\n\nqueries.forEach((q, i) => {\n  const iter = iterations[i];\n  const results = (iter && iter.searchDomain && iter.searchDomain.response && iter.searchDomain.response.results) ? iter.searchDomain.response.results : [];\n  compiled += '=== DOMAIN: ' + q.domain.toUpperCase() + ' (' + results.length + ' sources) ===\\n';\n  results.forEach((r, j) => {\n    compiled += (j + 1) + '. ' + (r.title || 'Untitled') + '\\n';\n    compiled += '   URL: ' + (r.url || '') + '\\n';\n    compiled += '   ' + (r.text || '').slice(0, 1200) + '\\n\\n';\n    totalSources++;\n  });\n  compiled += '\\n';\n  domainResults.push({ domain: q.domain, sourceCount: results.length });\n});\n\nreturn { compiled: compiled.slice(0, 30000), totalSources, domainResults };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for knowledge synthesis",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileSources.output;\nconst question = $.input.question;\n\nlet prompt = 'You are an expert research synthesizer that combines information from multiple knowledge domains (like a GraphRAG system). Your job is to cross-reference findings across domains to produce a comprehensive, well-sourced answer.\\n\\n';\nprompt += 'RESEARCH QUESTION: ' + question + '\\n\\n';\nprompt += 'KNOWLEDGE BASE (' + d.totalSources + ' sources across ' + d.domainResults.length + ' domains):\\n';\nprompt += d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Synthesize findings across all domains into a coherent answer\\n';\nprompt += '- Identify where domains agree, disagree, or complement each other\\n';\nprompt += '- Cite sources by [Domain: Source #] notation\\n';\nprompt += '- Highlight cross-domain connections and insights\\n';\nprompt += '- Flag any gaps or areas needing further research\\n';\nprompt += '- Use Slack mrkdwn: *bold* (NOT **bold**), _italic_, numbered lists\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"synthesizedAnswer\": \"comprehensive answer citing [Domain: #] sources in Slack mrkdwn\",\\n';\nprompt += '  \"confidence\": \"high|medium|low\",\\n';\nprompt += '  \"domainBreakdown\": [{ \"domain\": \"name\", \"keyFindings\": [\"finding1\"], \"reliability\": \"high|medium|low\" }],\\n';\nprompt += '  \"crossDomainInsights\": [\"insight where multiple domains intersect\"],\\n';\nprompt += '  \"knowledgeGaps\": [\"areas where more research is needed\"],\\n';\nprompt += '  \"followUpQuestions\": [\"suggested next question\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4485-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiSynthesis",
+      "name": "Run Claude AI knowledge synthesis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4485-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiSynthesis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { synthesizedAnswer: raw, confidence: 'medium', domainBreakdown: [], crossDomainInsights: [], knowledgeGaps: [], followUpQuestions: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit research report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst d = $.steps.compileSources.output;\nconst confidenceEmoji = ai.confidence === 'high' ? ':large_green_circle:' : ai.confidence === 'low' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Multi-Domain Research Report', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + $.input.question } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: confidenceEmoji + ' *Confidence:* ' + (ai.confidence || 'medium') + ' | *Sources:* ' + d.totalSources + ' across ' + d.domainResults.length + ' domains' } });\nblocks.push({ type: 'divider' });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: (ai.synthesizedAnswer || 'No synthesis generated.').slice(0, 2900) } });\nblocks.push({ type: 'divider' });\n\nif (ai.crossDomainInsights && ai.crossDomainInsights.length > 0) {\n  let crossText = '*Cross-Domain Insights:*\\n';\n  ai.crossDomainInsights.forEach((ins, i) => { crossText += (i + 1) + '. ' + ins + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: crossText.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.knowledgeGaps && ai.knowledgeGaps.length > 0) {\n  let gapText = '*Knowledge Gaps:*\\n';\n  ai.knowledgeGaps.forEach((g, i) => { gapText += (i + 1) + '. ' + g + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: gapText.slice(0, 1800) } });\n}\n\nif (ai.followUpQuestions && ai.followUpQuestions.length > 0) {\n  let fqText = '*Suggested Follow-ups:*\\n';\n  ai.followUpQuestions.forEach((q, i) => { fqText += (i + 1) + '. ' + q + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: fqText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa Multi-Domain Search + Claude AI | One CLI' }] });\nconst fallback = 'Research Report: ' + (ai.synthesizedAnswer || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post research report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

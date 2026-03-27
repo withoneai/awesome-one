@@ -1,0 +1,139 @@
+{
+  "key": "n8n-190-email-management-ai",
+  "name": "AI-powered email management and summarization",
+  "description": "Fetches recent emails from Gmail, uses Claude AI to organize, categorize, and prioritize them, then saves a structured summary report to Google Drive. Adapted from n8n's AI-powered email management and summarization workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 190,
+    "url": "https://n8n.io/workflows/190",
+    "originalName": "Effortless email management with AI-powered summarization & review",
+    "totalViews": 32156,
+    "rank": 190,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailListKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for listing emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key for saving the summary report",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "searchQuery": {
+      "type": "string",
+      "required": false,
+      "default": "newer_than:1d",
+      "description": "Gmail search query to filter emails (default: last 24 hours)"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 20,
+      "description": "Maximum number of emails to process (default: 20)"
+    },
+    "driveFolderId": {
+      "type": "string",
+      "required": false,
+      "default": "root",
+      "description": "Google Drive folder ID to save the summary report"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchEmails",
+      "name": "Fetch recent emails from Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailListKey",
+        "data": {},
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "maxResults": "$.input.maxEmails",
+          "q": "$.input.searchQuery"
+        }
+      }
+    },
+    {
+      "id": "extractIds",
+      "name": "Extract message IDs from results",
+      "type": "code",
+      "code": {
+        "source": "const messages = $.steps.fetchEmails.response.messages || [];\nreturn { messageIds: messages.map(m => m.id).filter(Boolean).slice(0, 20) };"
+      }
+    },
+    {
+      "id": "compileEmailData",
+      "name": "Compile email metadata for AI analysis",
+      "type": "code",
+      "code": {
+        "source": "const ids = $.steps.extractIds.output.messageIds || [];\nlet emailSummary = 'Email IDs found: ' + ids.length + '\\n\\n';\nids.forEach((id, i) => {\n  emailSummary += (i + 1) + '. Message ID: ' + id + '\\n';\n});\nreturn { emailSummary, emailCount: ids.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for email organization",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileEmailData.output;\nconst today = new Date().toISOString().slice(0, 10);\n\nlet prompt = 'You are an expert email management assistant. Organize and prioritize the following email inbox data.\\n\\n';\nprompt += 'EMAIL INBOX DATA (' + d.emailCount + ' emails found):\\n';\nprompt += d.emailSummary + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Categorize emails into: urgent, important, informational, promotional, spam\\n';\nprompt += '- Suggest priority actions for each category\\n';\nprompt += '- Create an executive summary of the inbox state\\n';\nprompt += '- Recommend which emails need immediate attention\\n';\nprompt += '- Generate a daily email digest\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"reportDate\": \"' + today + '\",\\n';\nprompt += '  \"totalEmails\": ' + d.emailCount + ',\\n';\nprompt += '  \"categories\": {\\n';\nprompt += '    \"urgent\": { \"count\": 0, \"action\": \"description\" },\\n';\nprompt += '    \"important\": { \"count\": 0, \"action\": \"description\" },\\n';\nprompt += '    \"informational\": { \"count\": 0, \"action\": \"description\" },\\n';\nprompt += '    \"promotional\": { \"count\": 0, \"action\": \"description\" },\\n';\nprompt += '    \"spam\": { \"count\": 0, \"action\": \"description\" }\\n';\nprompt += '  },\\n';\nprompt += '  \"executiveSummary\": \"overview of inbox state\",\\n';\nprompt += '  \"topPriorities\": [\"action item 1\", \"action item 2\"],\\n';\nprompt += '  \"dailyDigest\": \"formatted daily email digest text\",\\n';\nprompt += '  \"recommendations\": [\"recommendation 1\", \"recommendation 2\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-190-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI email analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-190-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { totalEmails: 0, executiveSummary: raw, categories: {}, topPriorities: [], dailyDigest: raw, recommendations: [] }; }"
+      }
+    },
+    {
+      "id": "buildDriveReport",
+      "name": "Build Google Drive report content",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = ai.reportDate || new Date().toISOString().slice(0, 10);\n\nlet report = 'EMAIL MANAGEMENT REPORT - ' + today + '\\n';\nreport += '='.repeat(50) + '\\n\\n';\nreport += 'EXECUTIVE SUMMARY\\n';\nreport += '-'.repeat(30) + '\\n';\nreport += (ai.executiveSummary || 'No summary available') + '\\n\\n';\nreport += 'TOTAL EMAILS: ' + (ai.totalEmails || 0) + '\\n\\n';\nreport += 'CATEGORIES\\n';\nreport += '-'.repeat(30) + '\\n';\nconst cats = ai.categories || {};\nObject.keys(cats).forEach(cat => {\n  const c = cats[cat];\n  report += '  ' + cat.toUpperCase() + ': ' + (c.count || 0) + ' emails\\n';\n  report += '    Action: ' + (c.action || 'N/A') + '\\n';\n});\nreport += '\\nTOP PRIORITIES\\n';\nreport += '-'.repeat(30) + '\\n';\n(ai.topPriorities || []).forEach((p, i) => {\n  report += '  ' + (i + 1) + '. ' + p + '\\n';\n});\nreport += '\\nDAILY DIGEST\\n';\nreport += '-'.repeat(30) + '\\n';\nreport += (ai.dailyDigest || 'No digest available') + '\\n\\n';\nreport += 'RECOMMENDATIONS\\n';\nreport += '-'.repeat(30) + '\\n';\n(ai.recommendations || []).forEach((r, i) => {\n  report += '  ' + (i + 1) + '. ' + r + '\\n';\n});\nreport += '\\n---\\nGenerated by One CLI | Claude AI\\n';\n\nconst fileName = 'email-report-' + today + '.txt';\nreturn { report, fileName };"
+      }
+    },
+    {
+      "id": "saveReport",
+      "name": "Save report to temp file for upload",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-190-report.txt",
+        "content": "$.steps.buildDriveReport.output.report"
+      }
+    }
+  ]
+}

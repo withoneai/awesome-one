@@ -1,0 +1,135 @@
+{
+  "key": "n8n-2440-movie-rag-chatbot",
+  "name": "Movie RAG Chatbot \u2014 Exa Search + Claude Recommendations to Slack",
+  "description": "Takes a movie preference or question, uses Exa search to find relevant movie data and reviews, uses Claude AI as a recommendation engine to suggest movies with explanations, and posts results to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2440,
+    "url": "https://n8n.io/workflows/2440",
+    "originalName": "Building RAG chatbot for movie recommendations with Qdrant and Open AI",
+    "totalViews": 35974,
+    "rank": 171,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for movie search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post recommendations"
+    },
+    "query": {
+      "type": "string",
+      "required": true,
+      "description": "Movie preference or question (e.g. 'A movie about wizards but not Harry Potter' or 'Best sci-fi movies like Blade Runner')"
+    },
+    "maxRecommendations": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Number of movie recommendations to generate"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchMovies",
+      "name": "Search for relevant movie data with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.query",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": true
+          }
+        }
+      }
+    },
+    {
+      "id": "parseMovieData",
+      "name": "Parse Exa results into movie context",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.searchMovies.response || {};\nconst data = resp.data || resp;\nconst results = data.results || [];\n\nlet movieContext = '';\nconst sources = [];\n\nresults.slice(0, 8).forEach((r, i) => {\n  const title = r.title || 'Untitled';\n  const url = r.url || '';\n  const text = (r.text || '').slice(0, 1500);\n  movieContext += 'Source ' + (i + 1) + ': ' + title + '\\n' + text + '\\n\\n';\n  sources.push({ title, url });\n});\n\nreturn { movieContext, sources, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude movie recommendation prompt",
+      "type": "code",
+      "code": {
+        "source": "const query = $.input.query;\nconst maxRecs = $.input.maxRecommendations || 5;\nconst movieData = $.steps.parseMovieData.output;\n\nlet prompt = 'You are a passionate cinephile and movie recommendation expert. Use the research data to provide personalized movie recommendations.\\n\\n';\nprompt += 'USER REQUEST: ' + query + '\\n';\nprompt += 'NUMBER OF RECOMMENDATIONS: ' + maxRecs + '\\n\\n';\nprompt += 'MOVIE DATA FROM SEARCH:\\n' + movieData.movieContext + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Recommend exactly ' + maxRecs + ' movies that match the request\\n';\nprompt += '- For each movie, explain WHY it matches what the user wants\\n';\nprompt += '- Include movie year, genre, director, and a brief plot (no spoilers!)\\n';\nprompt += '- Rate how well each movie matches the request (1-5 stars)\\n';\nprompt += '- Include a \"watch if you like\" note for each\\n';\nprompt += '- Order by best match first\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"recommendations\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"title\": \"Movie Title\",\\n';\nprompt += '      \"year\": 2024,\\n';\nprompt += '      \"genre\": \"Genre\",\\n';\nprompt += '      \"director\": \"Director Name\",\\n';\nprompt += '      \"matchRating\": 5,\\n';\nprompt += '      \"whyWatch\": \"Why this matches your request\",\\n';\nprompt += '      \"plotTeaser\": \"Brief non-spoiler plot description\",\\n';\nprompt += '      \"watchIfYouLike\": \"Similar movies/shows\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"userPreferenceSummary\": \"What we understood you want\",\\n';\nprompt += '  \"bonusPick\": \"One surprise wildcard recommendation with reason\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2440-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiRecommend",
+      "name": "Run Claude AI movie recommendation engine",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2440-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip code fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiRecommend.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { recommendations: [], userPreferenceSummary: raw, bonusPick: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit movie recommendations",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst query = $.input.query;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Movie Recommendations', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Your request:* ' + query } });\n\nif (ai.userPreferenceSummary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':mag: _' + ai.userPreferenceSummary + '_' } });\n}\nblocks.push({ type: 'divider' });\n\nif (ai.recommendations && ai.recommendations.length > 0) {\n  ai.recommendations.forEach((rec, i) => {\n    const stars = ':star:'.repeat(Math.min(rec.matchRating || 0, 5));\n    let text = '*' + (i + 1) + '. ' + (rec.title || 'Unknown') + '* (' + (rec.year || 'N/A') + ')';\n    text += '\\n:movie_camera: ' + (rec.genre || 'N/A') + ' | :clapper: ' + (rec.director || 'Unknown');\n    text += '\\n' + stars;\n    text += '\\n\\n' + (rec.plotTeaser || '').slice(0, 300);\n    text += '\\n\\n:point_right: *Why:* ' + (rec.whyWatch || '').slice(0, 200);\n    if (rec.watchIfYouLike) {\n      text += '\\n:heart: Watch if you like: _' + rec.watchIfYouLike + '_';\n    }\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 2000) } });\n    if (i < ai.recommendations.length - 1) {\n      blocks.push({ type: 'divider' });\n    }\n  });\n}\n\nif (ai.bonusPick) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':gift: *Bonus Wildcard Pick:*\\n' + ai.bonusPick } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa Search + Claude AI + One CLI' }] });\n\nconst titles = (ai.recommendations || []).slice(0, 3).map(r => r.title).join(', ');\nconst fallback = 'Movie Recs: ' + titles;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post movie recommendations to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

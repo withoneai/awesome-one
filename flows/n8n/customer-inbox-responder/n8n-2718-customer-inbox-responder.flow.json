@@ -1,0 +1,182 @@
+{
+  "key": "n8n-2718-customer-inbox-responder",
+  "name": "AI Customer Inbox Responder",
+  "description": "Fetches recent unread emails from Gmail, uses Claude AI to analyze each message and draft contextually appropriate reply suggestions, and posts the drafted replies to Slack for human review. Adapted from n8n's Instagram DM agent workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2718,
+    "url": "https://n8n.io/workflows/2718",
+    "originalName": "AI agent for Instagram DM/inbox. Manychat + Open AI integration",
+    "totalViews": 47128,
+    "rank": 129,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for reading inbox",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting draft replies",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the draft replies for review"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Maximum number of unread emails to process (default: 10)"
+    },
+    "replyTone": {
+      "type": "string",
+      "required": false,
+      "default": "professional and friendly",
+      "description": "Tone for draft replies (e.g. professional, casual, formal)"
+    },
+    "companyContext": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Brief company/product context for more relevant replies"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchEmails",
+      "name": "Fetch unread emails from Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "data": {},
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "maxResults": "$.input.maxEmails",
+          "q": "in:inbox is:unread"
+        }
+      }
+    },
+    {
+      "id": "extractIds",
+      "name": "Extract message IDs from email list",
+      "type": "code",
+      "code": {
+        "source": "const messages = $.steps.fetchEmails.response.messages || [];\nconst maxEmails = $.input.maxEmails || 10;\nreturn { messageIds: messages.map(m => m.id).filter(Boolean).slice(0, maxEmails) };"
+      }
+    },
+    {
+      "id": "fetchDetails",
+      "name": "Fetch details for each email",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractIds.output.messageIds",
+        "as": "msgId",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "getMsg",
+            "name": "Get email message details",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GJ3ocvMGOS8::D__3BgQSSzWtDUoOqLuX2A",
+              "connectionKey": "$.input.gmailKey",
+              "pathVars": {
+                "userId": "me",
+                "id": "$.loop.msgId"
+              },
+              "queryParams": {
+                "format": "full"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileEmails",
+      "name": "Compile email details for AI analysis",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.fetchDetails.response.iterations || [];\nlet compiled = '';\nlet emailCount = 0;\n\niterations.forEach((iter, i) => {\n  if (!iter.getMsg || !iter.getMsg.response) return;\n  const msg = iter.getMsg.response;\n  const headers = msg.payload ? (msg.payload.headers || []) : [];\n  const getHeader = (name) => { const h = headers.find(h => h.name.toLowerCase() === name.toLowerCase()); return h ? h.value : ''; };\n\n  const from = getHeader('From');\n  const subject = getHeader('Subject');\n  const date = getHeader('Date');\n\n  let body = '';\n  if (msg.payload && msg.payload.body && msg.payload.body.data) {\n    try { body = Buffer.from(msg.payload.body.data, 'base64').toString('utf8'); } catch(e) { body = ''; }\n  } else if (msg.payload && msg.payload.parts) {\n    const textPart = msg.payload.parts.find(p => p.mimeType === 'text/plain');\n    if (textPart && textPart.body && textPart.body.data) {\n      try { body = Buffer.from(textPart.body.data, 'base64').toString('utf8'); } catch(e) { body = ''; }\n    }\n  }\n  if (!body) body = msg.snippet || '';\n\n  compiled += '--- EMAIL ' + (i + 1) + ' ---\\n';\n  compiled += 'From: ' + from + '\\n';\n  compiled += 'Subject: ' + subject + '\\n';\n  compiled += 'Date: ' + date + '\\n';\n  compiled += 'Body: ' + body.slice(0, 2000) + '\\n\\n';\n  emailCount++;\n});\n\nreturn { compiled: compiled.slice(0, 25000), emailCount };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for reply drafting",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileEmails.output;\nconst tone = $.input.replyTone || 'professional and friendly';\nconst context = $.input.companyContext || '';\n\nlet prompt = 'You are a customer communication specialist. Draft reply suggestions for each of the following emails.\\n\\n';\nprompt += 'REPLY TONE: ' + tone + '\\n';\nif (context) prompt += 'COMPANY CONTEXT: ' + context + '\\n';\nprompt += '\\nEMAILS TO REPLY TO (' + d.emailCount + ' emails):\\n';\nprompt += d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Draft a concise, helpful reply for each email\\n';\nprompt += '- Match the specified tone\\n';\nprompt += '- Categorize each email: inquiry, complaint, request, FYI, spam\\n';\nprompt += '- Rate urgency: high, medium, low\\n';\nprompt += '- For spam or newsletters, suggest \"no reply needed\"\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"replies\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"emailNumber\": 1,\\n';\nprompt += '      \"from\": \"sender\",\\n';\nprompt += '      \"subject\": \"subject line\",\\n';\nprompt += '      \"category\": \"inquiry|complaint|request|fyi|spam\",\\n';\nprompt += '      \"urgency\": \"high|medium|low\",\\n';\nprompt += '      \"draftReply\": \"the suggested reply text\",\\n';\nprompt += '      \"replyNeeded\": true\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"summary\": \"brief summary of inbox status\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2718-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI reply drafting",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2718-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { replies: [], summary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit draft replies",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst emailCount = $.steps.compileEmails.output.emailCount;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Inbox Reply Drafts', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Emails processed:* ' + emailCount + (ai.summary ? '\\n' + ai.summary : '') } });\nblocks.push({ type: 'divider' });\n\n(ai.replies || []).forEach((r, i) => {\n  const urgencyIcon = r.urgency === 'high' ? ':red_circle:' : r.urgency === 'low' ? ':white_circle:' : ':large_yellow_circle:';\n  const catIcon = r.category === 'complaint' ? ':warning:' : r.category === 'spam' ? ':no_entry:' : r.category === 'request' ? ':raising_hand:' : ':email:';\n\n  let text = urgencyIcon + ' ' + catIcon + ' *Email ' + r.emailNumber + ': ' + (r.subject || 'No subject') + '*\\n';\n  text += '_From:_ ' + (r.from || 'Unknown') + ' | _Category:_ ' + (r.category || 'unknown') + ' | _Urgency:_ ' + (r.urgency || 'medium') + '\\n\\n';\n\n  if (r.replyNeeded === false) {\n    text += ':no_bell: No reply needed';\n  } else {\n    text += '*Suggested Reply:*\\n> ' + (r.draftReply || 'No draft generated').split('\\n').join('\\n> ');\n  }\n\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 2900) } });\n  blocks.push({ type: 'divider' });\n});\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Draft replies for review | Powered by Gmail + Claude AI | One CLI' }] });\n\nconst fallback = 'Inbox Drafts: ' + emailCount + ' emails processed - ' + (ai.summary || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post draft replies to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

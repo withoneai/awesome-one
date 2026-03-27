@@ -1,0 +1,145 @@
+{
+  "key": "n8n-2729-private-ai-assistant",
+  "name": "AI research assistant with Exa and Claude",
+  "description": "A private AI research assistant that takes a topic, searches for relevant sources via Exa, uses Claude for deep analysis and synthesis, and posts a comprehensive research summary to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2729,
+    "url": "https://n8n.io/workflows/2729",
+    "originalName": "Private & local Ollama self-hosted AI assistant",
+    "totalViews": 62965,
+    "rank": 96,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web research",
+      "default": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting results",
+      "default": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "The research topic or question to investigate"
+    },
+    "depth": {
+      "type": "string",
+      "required": false,
+      "description": "Research depth: 'quick' (5 sources), 'standard' (10), or 'deep' (15)",
+      "default": "standard"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the research summary"
+    },
+    "numResults": {
+      "type": "number",
+      "required": false,
+      "description": "Number of Exa search results to fetch",
+      "default": 10
+    }
+  },
+  "steps": [
+    {
+      "id": "webResearch",
+      "name": "Search for research sources via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.topic",
+          "numResults": "{{$.input.numResults}}",
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileSources",
+      "name": "Compile research sources into text",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.webResearch.response.results || [];\nlet sourcesText = '';\nresults.forEach((r, i) => {\n  sourcesText += (i+1) + '. ' + (r.title || 'Untitled') + '\\n';\n  sourcesText += '   URL: ' + r.url + '\\n';\n  if (r.publishedDate) sourcesText += '   Published: ' + r.publishedDate + '\\n';\n  sourcesText += '   ' + (r.text || '').slice(0, 1200) + '\\n\\n';\n});\nreturn { sourcesText, sourceCount: results.length, topSources: results.slice(0, 5).map(r => ({ title: r.title || 'Untitled', url: r.url })) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for deep research analysis",
+      "type": "code",
+      "code": {
+        "source": "const depth = $.input.depth || 'standard';\nconst prompt = `You are an expert research analyst. Conduct a ${depth}-depth analysis on the following topic using the provided sources.\\n\\nRESEARCH TOPIC: ${$.input.topic}\\n\\nSOURCES (${$.steps.compileSources.output.sourceCount} found):\\n${$.steps.compileSources.output.sourcesText}\\n\\nINSTRUCTIONS:\\n- Provide a comprehensive research summary\\n- Identify key findings, trends, and insights\\n- Note any conflicting information between sources\\n- Cite sources by number [1], [2], etc.\\n- Include actionable takeaways\\n- Use Slack mrkdwn formatting: *bold*, _italic_, numbered lists\\n- Slack rules: use *bold* (NOT **bold**). No markdown tables. No # headings.\\n\\nReturn ONLY valid JSON:\\n{\\n  \"summary\": \"<research summary in Slack mrkdwn>\",\\n  \"keyFindings\": [\"<finding1>\", \"<finding2>\"],\\n  \"trends\": [\"<trend1>\", \"<trend2>\"],\\n  \"takeaways\": [\"<actionable takeaway1>\", \"<takeaway2>\"],\\n  \"confidence\": \"high|medium|low\",\\n  \"gapsIdentified\": [\"<what needs more research>\"]\\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2729-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for research analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2729-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, keyFindings: [], trends: [], takeaways: [], confidence: 'medium', gapsIdentified: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit research report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst topic = $.input.topic;\nconst confidenceEmoji = ai.confidence === 'high' ? ':large_green_circle:' : ai.confidence === 'low' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Research Report' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Topic:* ' + topic } });\nblocks.push({ type: 'divider' });\n\nconst summaryText = (ai.summary || 'No summary generated.').slice(0, 1900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: summaryText } });\nblocks.push({ type: 'divider' });\n\nif (ai.keyFindings && ai.keyFindings.length > 0) {\n  let kfText = '*Key Findings:*\\n';\n  ai.keyFindings.forEach((f, i) => { kfText += (i+1) + '. ' + f + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kfText.slice(0, 1900) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.takeaways && ai.takeaways.length > 0) {\n  let taText = '*Actionable Takeaways:*\\n';\n  ai.takeaways.forEach((t, i) => { taText += (i+1) + '. ' + t + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: taText.slice(0, 1900) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: confidenceEmoji + ' Confidence: *' + (ai.confidence || 'medium') + '* | Sources: *' + $.steps.compileSources.output.sourceCount + '* | Depth: *' + ($.input.depth || 'standard') + '*' }] });\n\nconst fallback = 'Research report on: ' + topic;\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post research report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

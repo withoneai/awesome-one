@@ -1,0 +1,222 @@
+{
+  "key": "n8n-3336-blog-content-creation",
+  "name": "Automate blog content creation with AI, Exa research, Gmail and Slack",
+  "description": "Researches a topic using Exa web search, generates an SEO-optimized blog article with Claude AI, sends the article via Gmail, notifies a Slack channel, and logs the content in a Notion database page.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3336,
+    "url": "https://n8n.io/workflows/3336",
+    "originalName": "Automate blog content creation with GPT-4, Perplexity & WordPress",
+    "totalViews": 28798,
+    "rank": 216,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending the article",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "notionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Notion connection key for logging articles",
+      "connection": {
+        "platform": "notion"
+      }
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Blog topic or research query (e.g. 'AI automation trends 2026')"
+    },
+    "recipientEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to send the finished article to"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for publish notifications"
+    },
+    "notionParentPageId": {
+      "type": "string",
+      "required": true,
+      "description": "Notion parent page ID to store the article under"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildExaQuery",
+      "name": "Build Exa search query from topic",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic || 'AI automation';\nconst query = 'Latest insights and research about ' + topic + ' with expert analysis and data';\nreturn { query, topic };"
+      }
+    },
+    {
+      "id": "exaSearch",
+      "name": "Search the web for topic research with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildExaQuery.output.query",
+          "type": "auto",
+          "numResults": 5,
+          "contents": {
+            "text": {
+              "maxCharacters": 3000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile Exa research results",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.exaSearch.response || {};\nconst results = response.data?.results || response.results || [];\nlet research = '';\nresults.forEach(function(r, i) {\n  research += '=== SOURCE ' + (i + 1) + ' ===\\n';\n  research += 'Title: ' + (r.title || 'Untitled') + '\\n';\n  research += 'URL: ' + (r.url || '') + '\\n';\n  research += 'Content: ' + (r.text || '').slice(0, 2000) + '\\n\\n';\n});\nreturn { research: research, sourceCount: results.length, topic: $.input.topic };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for blog article generation",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.compileResearch.output;\n\nlet prompt = 'You are an expert SEO content writer. Create a comprehensive, SEO-optimized blog article based on the research provided.\\n\\n';\nprompt += 'TOPIC: ' + data.topic + '\\n';\nprompt += 'SOURCES RESEARCHED: ' + data.sourceCount + '\\n\\n';\nprompt += 'RESEARCH CONTENT:\\n' + data.research + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Write a 600-800 word blog article with proper H1, H2 structure\\n';\nprompt += '- Include a compelling meta description (under 160 chars)\\n';\nprompt += '- Use data and insights from the research sources\\n';\nprompt += '- Keep tone professional but engaging\\n';\nprompt += '- Include a conclusion with actionable takeaways\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"SEO-optimized article title\",\\n';\nprompt += '  \"metaDescription\": \"under 160 char meta description\",\\n';\nprompt += '  \"article\": \"full HTML article with h1, h2, p tags\",\\n';\nprompt += '  \"summary\": \"2-3 sentence summary\",\\n';\nprompt += '  \"keywords\": [\"keyword1\", \"keyword2\", \"keyword3\"]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3336-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Generate blog article with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3336-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: $.input.topic, metaDescription: '', article: raw, summary: raw.slice(0, 200), keywords: [] }; }"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send blog article via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.recipientEmail",
+          "subject": "$.steps.parseAI.output.title",
+          "body": "$.steps.parseAI.output.article"
+        }
+      }
+    },
+    {
+      "id": "createNotionPage",
+      "name": "Log article to Notion",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5EnlW1AEk::mEAQjNttT1GjVqNeMTvDiw",
+        "connectionKey": "$.input.notionKey",
+        "data": {
+          "parent": {
+            "page_id": "$.input.notionParentPageId"
+          },
+          "properties": {
+            "title": {
+              "title": [
+                {
+                  "text": {
+                    "content": "$.steps.parseAI.output.title"
+                  }
+                }
+              ]
+            }
+          },
+          "children": [
+            {
+              "object": "block",
+              "type": "paragraph",
+              "paragraph": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "$.steps.parseAI.output.summary"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack notification for published article",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'New Blog Article Published', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + (ai.title || 'New Article') + '*' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: (ai.summary || '').slice(0, 1500) } });\nblocks.push({ type: 'divider' });\nif (ai.keywords && ai.keywords.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Keywords:* ' + ai.keywords.join(', ') } });\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Sent via Gmail | Logged in Notion | Powered by Exa + Claude AI' }] });\nconst fallbackText = 'New blog article: ' + (ai.title || $.input.topic);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "notifySlack",
+      "name": "Notify Slack about published article",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

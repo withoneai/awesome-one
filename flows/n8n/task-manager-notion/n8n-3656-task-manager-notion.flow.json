@@ -1,0 +1,170 @@
+{
+  "key": "n8n-3656-task-manager-notion",
+  "name": "AI Task Manager with Notion",
+  "description": "Reads tasks from a Notion database, uses Claude AI to prioritize, organize, and suggest optimizations for the task list, updates the prioritized plan back to Google Sheets, and posts a daily task brief to Slack. Adapted from n8n's AI-powered Telegram task manager with MCP server.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3656,
+    "url": "https://n8n.io/workflows/3656",
+    "originalName": "Ai-powered Telegram task manager with MCP server",
+    "totalViews": 20280,
+    "rank": 298,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "notionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Notion connection key for reading tasks",
+      "connection": {
+        "platform": "notion"
+      }
+    },
+    "notionDatabaseId": {
+      "type": "string",
+      "required": true,
+      "description": "Notion database ID containing tasks"
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving prioritized plan",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for the task plan"
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for the daily brief",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for the task brief"
+    },
+    "focusAreas": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Comma-separated focus areas or goals for today (e.g. 'shipping feature X, client deliverable')"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchTasks",
+      "name": "Fetch tasks from Notion database",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5EnlW1AEk::mEAQjNttT1GjVqNeMTvDiw",
+        "connectionKey": "$.input.notionKey",
+        "pathVars": {
+          "blockId": "$.input.notionDatabaseId"
+        },
+        "queryParams": {
+          "page_size": 100
+        }
+      }
+    },
+    {
+      "id": "extractTasks",
+      "name": "Extract task data from Notion blocks",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.fetchTasks.response.results || [];\nconst tasks = [];\nresults.forEach((block, i) => {\n  const type = block.type || '';\n  let text = '';\n  if (block[type] && block[type].rich_text) {\n    text = block[type].rich_text.map(t => t.plain_text || '').join('');\n  }\n  if (text.trim().length > 3) {\n    const isDone = type === 'to_do' && block[type] && block[type].checked;\n    tasks.push({ index: i + 1, text: text.trim().slice(0, 300), type: type, done: isDone || false });\n  }\n});\n\nlet taskSummary = '';\nconst pending = tasks.filter(t => !t.done);\nconst completed = tasks.filter(t => t.done);\npending.forEach(t => { taskSummary += '[ ] ' + t.text + '\\n'; });\ncompleted.forEach(t => { taskSummary += '[x] ' + t.text + '\\n'; });\n\nreturn { tasks, taskSummary, pendingCount: pending.length, completedCount: completed.length, totalCount: tasks.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for task prioritization",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.extractTasks.output;\nconst focusAreas = $.input.focusAreas || '';\nconst today = new Date().toISOString().slice(0, 10);\nconst dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });\n\nlet prompt = 'You are a productivity and task management AI assistant. Analyze the task list and create an optimized daily plan.\\n\\n';\nprompt += 'DATE: ' + dayName + ', ' + today + '\\n';\nprompt += 'TASKS: ' + d.pendingCount + ' pending, ' + d.completedCount + ' completed\\n';\nif (focusAreas) prompt += 'FOCUS AREAS: ' + focusAreas + '\\n';\nprompt += '\\nTASK LIST:\\n' + d.taskSummary + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Prioritize pending tasks using Eisenhower Matrix (urgent/important)\\n';\nprompt += '- Group related tasks into work blocks\\n';\nprompt += '- Estimate time for each task\\n';\nprompt += '- Suggest a time-blocked daily schedule\\n';\nprompt += '- Identify tasks that can be delegated or deferred\\n';\nprompt += '- Highlight tasks aligned with focus areas\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"dailyPlan\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"timeBlock\": \"9:00-10:00\",\\n';\nprompt += '      \"task\": \"task description\",\\n';\nprompt += '      \"priority\": \"urgent-important|important|urgent|low\",\\n';\nprompt += '      \"estimatedMinutes\": 30,\\n';\nprompt += '      \"category\": \"deep-work|admin|communication|planning\",\\n';\nprompt += '      \"alignsWithFocus\": true\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"executiveSummary\": \"overview of the day ahead\",\\n';\nprompt += '  \"topPriorities\": [\"most critical task 1\", \"most critical task 2\", \"most critical task 3\"],\\n';\nprompt += '  \"deferrable\": [\"task that can wait\"],\\n';\nprompt += '  \"delegatable\": [\"task that could be delegated\"],\\n';\nprompt += '  \"productivityTips\": [\"tip for today\"],\\n';\nprompt += '  \"completionProgress\": \"percentage of overall task completion\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3656-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI task prioritization",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3656-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { dailyPlan: [], executiveSummary: raw, topPriorities: [], deferrable: [], delegatable: [], productivityTips: [], completionProgress: '' }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Sheets rows from daily plan",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = new Date().toISOString().slice(0, 10);\nconst rows = [];\nrows.push(['Date', 'Time Block', 'Task', 'Priority', 'Est. Minutes', 'Category', 'Aligns with Focus', 'Status']);\n(ai.dailyPlan || []).forEach(p => {\n  rows.push([today, p.timeBlock || '', p.task || '', p.priority || '', String(p.estimatedMinutes || ''), p.category || '', p.alignsWithFocus ? 'Yes' : 'No', 'Planned']);\n});\nreturn { rows, taskCount: rows.length - 1 };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save daily plan to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "Daily Plan",
+          "values": "$.steps.buildSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack daily task brief",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst d = $.steps.extractTasks.output;\nconst tasks = $.steps.buildSheetRows.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Daily Task Brief', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Pending:* ' + d.pendingCount + ' | *Completed:* ' + d.completedCount + ' | *Progress:* ' + (ai.completionProgress || 'N/A') } });\nblocks.push({ type: 'divider' });\n\nif (ai.executiveSummary) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ai.executiveSummary.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\nif (ai.topPriorities && ai.topPriorities.length > 0) {\n  let priText = '*Top Priorities:*\\n';\n  ai.topPriorities.forEach((p, i) => { priText += ':red_circle: ' + (i + 1) + '. ' + p + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: priText.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\nlet scheduleText = '*Today\\'s Schedule:*\\n';\n(ai.dailyPlan || []).slice(0, 8).forEach(p => {\n  const icon = p.priority === 'urgent-important' ? ':rotating_light:' : p.priority === 'important' ? ':star:' : p.priority === 'urgent' ? ':zap:' : ':white_circle:';\n  scheduleText += icon + ' *' + p.timeBlock + '* ' + p.task + ' (' + (p.estimatedMinutes || '?') + 'min)\\n';\n});\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: scheduleText.slice(0, 1800) } });\n\nif (ai.productivityTips && ai.productivityTips.length > 0) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':bulb: *Tip:* ' + ai.productivityTips[0] } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Plan saved to Sheets | Powered by Notion + Claude AI' }] });\nconst fallback = 'Task Brief: ' + d.pendingCount + ' pending, top 3: ' + (ai.topPriorities || []).slice(0, 3).join(', ');\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post daily task brief to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

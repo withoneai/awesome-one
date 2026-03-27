@@ -1,0 +1,219 @@
+{
+  "key": "n8n-4005-linkedin-posts-ai",
+  "name": "AI LinkedIn Posts \u2014 Research, Generate, Publish, Track & Email",
+  "description": "Uses Exa to research a topic, Claude AI generates an engaging LinkedIn post, publishes it via LinkedIn API, logs the post to Google Sheets for tracking, and sends an email summary via Gmail.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4005,
+    "url": "https://n8n.io/workflows/4005",
+    "originalName": "AI-generated LinkedIn posts with OpenAI, Google Sheets & email approval workflow",
+    "totalViews": 43579,
+    "rank": 145,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "linkedinKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "linked-in"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic for the LinkedIn post (e.g. 'AI agents transforming customer service')"
+    },
+    "authorUrn": {
+      "type": "string",
+      "required": true,
+      "description": "LinkedIn author URN (e.g. 'urn:li:person:abc123' or 'urn:li:organization:12345')"
+    },
+    "emailTo": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to send the post summary to"
+    },
+    "tone": {
+      "type": "string",
+      "required": false,
+      "default": "professional yet conversational",
+      "description": "Desired tone for the post (e.g. 'thought leadership', 'casual', 'data-driven')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery_researchTopic",
+      "name": "Build search query for researchTopic",
+      "type": "code",
+      "code": {
+        "source": "const parts = [$.input.topic];\nconst staticTerms = \"{{}} insights trends linkedin\";\nreturn { query: parts.filter(Boolean).join(\" \") + \" \" + staticTerms };"
+      }
+    },
+    {
+      "id": "researchTopic",
+      "name": "Research the topic via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_researchTopic.output.query",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 400
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile research into context",
+      "type": "code",
+      "code": {
+        "source": "var results = $.steps.researchTopic.response.results || [];\nvar context = '';\nresults.slice(0, 8).forEach(function(r, i) {\n  context += (i + 1) + '. ' + (r.title || 'Untitled') + '\\n   ' + r.url + '\\n   ' + (r.text || '').slice(0, 300) + '\\n\\n';\n});\nreturn { context: context, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for LinkedIn post generation",
+      "type": "code",
+      "code": {
+        "source": "var ctx = $.steps.compileResearch.output;\nvar prompt = 'You are an expert LinkedIn content creator. Generate a compelling LinkedIn post about the following topic, using the research data provided.\\n\\nTOPIC: ' + $.input.topic + '\\nTONE: ' + ($.input.tone || 'professional yet conversational') + '\\n\\nRESEARCH:\\n' + ctx.context + '\\n\\nGuidelines:\\n- Start with a strong hook (first 2 lines are critical for engagement)\\n- Use short paragraphs and line breaks for readability\\n- Include 2-3 specific data points or insights from the research\\n- End with a question or call-to-action to drive engagement\\n- Add 3-5 relevant hashtags at the end\\n- Keep under 1300 characters for optimal engagement\\n- Do NOT use emojis excessively (max 2-3)\\n\\nReturn ONLY valid JSON:\\n{\\n  \"postText\": \"The full LinkedIn post text\",\\n  \"hook\": \"The opening hook line\",\\n  \"hashtags\": [\"#hashtag1\", \"#hashtag2\"],\\n  \"estimatedReadTime\": \"X min\"\\n}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/one-linkedin-post-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to generate the post",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/one-linkedin-post-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse AI response and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { text: raw }; }"
+      }
+    },
+    {
+      "id": "publishToLinkedIn",
+      "name": "Publish post to LinkedIn",
+      "type": "action",
+      "onError": {
+        "strategy": "continue"
+      },
+      "action": {
+        "platform": "linked-in",
+        "actionId": "conn_mod_def::GJ4wZURE9ys::0YrIvVNvTYWu_1Z8pze-Ww",
+        "connectionKey": "$.input.linkedinKey",
+        "data": {
+          "author": "$.input.authorUrn",
+          "commentary": "$.steps.parseAI.output.postText",
+          "visibility": "PUBLIC",
+          "lifecycleState": "PUBLISHED",
+          "distribution": {
+            "feedDistribution": "MAIN_FEED",
+            "targetEntities": [],
+            "thirdPartyDistributionChannels": []
+          }
+        }
+      }
+    },
+    {
+      "id": "buildTrackingData",
+      "name": "Build tracking data for Sheets",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar now = new Date().toISOString();\nvar postText = ai.postText || ai.text || '';\nvar sheetData = [{\n  date: now.split('T')[0],\n  topic: $.input.topic,\n  hook: ai.hook || postText.split('\\n')[0] || '',\n  postLength: postText.length,\n  hashtags: (ai.hashtags || []).join(', '),\n  status: 'Published',\n  fullPost: postText.slice(0, 500)\n}];\nreturn { sheetData: sheetData, postText: postText };"
+      }
+    },
+    {
+      "id": "logToSheets",
+      "name": "Log post to Google Sheets",
+      "type": "action",
+      "onError": {
+        "strategy": "continue"
+      },
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "connectionKey": "$.input.sheetsKey",
+          "title": "LinkedIn Posts Tracker",
+          "sheetTitle": "Posts",
+          "data": "$.steps.buildTrackingData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "buildEmailBody",
+      "name": "Build email summary",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar postText = ai.postText || ai.text || '';\nvar body = 'LinkedIn Post Published\\n\\nTopic: ' + $.input.topic + '\\nDate: ' + new Date().toISOString().split('T')[0] + '\\n\\n--- POST CONTENT ---\\n\\n' + postText + '\\n\\n--- END ---\\n\\nHashtags: ' + (ai.hashtags || []).join(', ') + '\\nEstimated read time: ' + (ai.estimatedReadTime || 'N/A') + '\\nSources researched: ' + $.steps.compileResearch.output.sourceCount + '\\n\\nThis post was generated and published automatically via One CLI.';\nreturn { subject: 'LinkedIn Post Published: ' + $.input.topic, body: body };"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send email summary via Gmail",
+      "type": "action",
+      "onError": {
+        "strategy": "continue"
+      },
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "pathVars": {
+          "userId": "me"
+        },
+        "data": {
+          "to": "$.input.emailTo",
+          "subject": "$.steps.buildEmailBody.output.subject",
+          "body": "$.steps.buildEmailBody.output.body"
+        }
+      }
+    }
+  ]
+}

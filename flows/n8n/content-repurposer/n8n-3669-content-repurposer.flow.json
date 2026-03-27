@@ -1,0 +1,112 @@
+{
+  "key": "n8n-3669-content-repurposer",
+  "name": "Multi-Format Content Repurposer",
+  "description": "Take one piece of content and use Claude AI to adapt it for multiple social media formats (Twitter thread, LinkedIn post, Instagram caption, blog excerpt, email newsletter). Posts the repurposed content bundle to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3669,
+    "url": "https://n8n.io/workflows/3669",
+    "originalName": "Publish image & video to multiple social media (X, Instagram, Facebook and more)",
+    "totalViews": 32655,
+    "rank": 188,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the repurposed content"
+    },
+    "originalContent": {
+      "type": "string",
+      "required": true,
+      "description": "The original content to repurpose (blog post, article, notes, etc.)"
+    },
+    "contentTitle": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Title of the original content"
+    },
+    "targetPlatforms": {
+      "type": "string",
+      "required": false,
+      "default": "twitter,linkedin,instagram,blog,email",
+      "description": "Comma-separated target platforms"
+    },
+    "brandVoice": {
+      "type": "string",
+      "required": false,
+      "default": "professional yet approachable",
+      "description": "Brand voice or tone guidelines"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build content repurposing prompt",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar content = fb($.input.originalContent, '');\nvar title = fb($.input.contentTitle, '');\nvar platforms = fb($.input.targetPlatforms, 'twitter,linkedin,instagram,blog,email');\nvar voice = fb($.input.brandVoice, 'professional yet approachable');\n\nvar prompt = 'You are a social media strategist and content repurposing expert. Take the following content and adapt it for multiple platforms, optimizing for each platform\\'s unique format and audience.\\n\\n';\nif (title) prompt += 'CONTENT TITLE: ' + title + '\\n';\nprompt += 'BRAND VOICE: ' + voice + '\\n';\nprompt += 'TARGET PLATFORMS: ' + platforms + '\\n\\n';\nprompt += 'ORIGINAL CONTENT:\\n' + content.slice(0, 5000) + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Adapt tone and length for each platform\\n';\nprompt += '- Twitter: Thread format, punchy hooks, use line breaks\\n';\nprompt += '- LinkedIn: Professional, story-driven, with a CTA\\n';\nprompt += '- Instagram: Visual-friendly caption with emojis and hashtags\\n';\nprompt += '- Blog: SEO excerpt with compelling hook\\n';\nprompt += '- Email: Newsletter-style with subject line and preview text\\n';\nprompt += '- Include relevant hashtags per platform\\n';\nprompt += '- Maintain core message across all formats\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"coreTakeaway\": \"the central message in one sentence\",\\n';\nprompt += '  \"platforms\": {\\n';\nprompt += '    \"twitter\": { \"thread\": [\"tweet 1\", \"tweet 2\", \"tweet 3\"], \"hashtags\": [\"#tag\"], \"hookScore\": \"1-10\" },\\n';\nprompt += '    \"linkedin\": { \"post\": \"full linkedin post\", \"hashtags\": [\"#tag\"], \"cta\": \"call to action\" },\\n';\nprompt += '    \"instagram\": { \"caption\": \"instagram caption\", \"hashtags\": [\"#tag\"], \"suggestedVisual\": \"image description\" },\\n';\nprompt += '    \"blog\": { \"excerpt\": \"blog excerpt\", \"metaDescription\": \"SEO meta\", \"suggestedTitle\": \"blog title\" },\\n';\nprompt += '    \"email\": { \"subjectLine\": \"email subject\", \"previewText\": \"preview text\", \"body\": \"email body\" }\\n';\nprompt += '  },\\n';\nprompt += '  \"publishingOrder\": [\"recommended order of posting\"],\\n';\nprompt += '  \"bestTimeToPost\": { \"twitter\": \"time\", \"linkedin\": \"time\", \"instagram\": \"time\" },\\n';\nprompt += '  \"contentCalendarNote\": \"suggestion for follow-up content\"\\n';\nprompt += '}';\n\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/content-repurpose-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiRepurpose",
+      "name": "Repurpose content with Claude",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/content-repurpose-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse Claude response",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiRepurpose.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { coreTakeaway: raw, platforms: {}, publishingOrder: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseResponse.output;\nvar title = fb($.input.contentTitle, 'Content');\n\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':mega: Content Repurposed: ' + title, emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Core Takeaway:* ' + (fb(ai.coreTakeaway, '')) } });\nblocks.push({ type: 'divider' });\n\nvar platforms = fb(ai.platforms, {});\n\nif (platforms.twitter) {\n  var tw = platforms.twitter;\n  var threadText = '*:bird: Twitter Thread* (Hook: ' + (fb(tw.hookScore, '?')) + '/10)\\n';\n  var thread = fb(tw.thread, []);\n  thread.forEach(function(tweet, i) { threadText += (i + 1) + '. ' + tweet + '\\n'; });\n  var twTags = (fb(tw.hashtags, [])).join(' ');\n  if (twTags) threadText += '\\n' + twTags;\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: threadText } });\n  blocks.push({ type: 'divider' });\n}\n\nif (platforms.linkedin) {\n  var li = platforms.linkedin;\n  var liText = '*:briefcase: LinkedIn Post*\\n';\n  liText += (fb(li.post, '')).slice(0, 600);\n  if (li.cta) liText += '\\n\\n*CTA:* ' + li.cta;\n  var liTags = (fb(li.hashtags, [])).join(' ');\n  if (liTags) liText += '\\n' + liTags;\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: liText } });\n  blocks.push({ type: 'divider' });\n}\n\nif (platforms.instagram) {\n  var ig = platforms.instagram;\n  var igText = '*:camera: Instagram Caption*\\n';\n  igText += (fb(ig.caption, '')).slice(0, 400);\n  var igTags = (fb(ig.hashtags, [])).join(' ');\n  if (igTags) igText += '\\n' + igTags;\n  if (ig.suggestedVisual) igText += '\\n_Visual idea:_ ' + ig.suggestedVisual;\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: igText } });\n  blocks.push({ type: 'divider' });\n}\n\nif (platforms.blog) {\n  var blog = platforms.blog;\n  var blogText = '*:newspaper: Blog Excerpt*\\n';\n  if (blog.suggestedTitle) blogText += '*Title:* ' + blog.suggestedTitle + '\\n';\n  blogText += (fb(blog.excerpt, '')).slice(0, 400);\n  if (blog.metaDescription) blogText += '\\n_Meta:_ ' + blog.metaDescription;\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: blogText } });\n  blocks.push({ type: 'divider' });\n}\n\nif (platforms.email) {\n  var em = platforms.email;\n  var emText = '*:envelope: Email Newsletter*\\n';\n  emText += '*Subject:* ' + (fb(em.subjectLine, '')) + '\\n';\n  emText += '*Preview:* ' + (fb(em.previewText, '')) + '\\n';\n  emText += (fb(em.body, '')).slice(0, 400);\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: emText } });\n  blocks.push({ type: 'divider' });\n}\n\nvar order = fb(ai.publishingOrder, []);\nif (order.length > 0) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':clock1: *Posting order:* ' + order.join(' -> ') }] });\n}\n\nif (ai.contentCalendarNote) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':calendar: ' + ai.contentCalendarNote }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI + One CLI' }] });\n\nvar fallback = 'Content Repurposed: ' + title + ' for ' + Object.keys(platforms).length + ' platforms';\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post repurposed content to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

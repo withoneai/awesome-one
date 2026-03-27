@@ -1,0 +1,223 @@
+{
+  "key": "n8n-2878-deep-research-agent",
+  "name": "AI Deep Research Agent",
+  "description": "Performs multi-query Exa search for comprehensive research, deep scrapes top results with Firecrawl, Claude AI synthesizes a structured research report with executive summary, key findings, and data points, then saves the report to Notion with content split into blocks of 1900 characters or fewer.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2878,
+    "url": "https://n8n.io/workflows/2878",
+    "originalName": "Host your own AI deep research agent with n8n, Apify and OpenAI o3",
+    "totalViews": 76640,
+    "rank": 75,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for web search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for deep scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "notionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Notion connection key for saving research report",
+      "connection": {
+        "platform": "notion"
+      }
+    },
+    "notionParentPageId": {
+      "type": "string",
+      "required": true,
+      "description": "Notion parent page ID where the research report will be created"
+    },
+    "researchTopic": {
+      "type": "string",
+      "required": true,
+      "description": "Research topic or question (e.g. 'State of AI agents in enterprise 2025')"
+    },
+    "depth": {
+      "type": "string",
+      "required": false,
+      "default": "comprehensive",
+      "description": "Research depth: 'quick' (3 queries), 'standard' (5 queries), 'comprehensive' (8 queries)"
+    }
+  },
+  "steps": [
+    {
+      "id": "generateQueries",
+      "name": "Generate multiple search queries for deep research",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.researchTopic;\nconst depth = $.input.depth || 'comprehensive';\nconst maxQueries = depth === 'quick' ? 3 : depth === 'standard' ? 5 : 8;\n\nconst baseQueries = [\n  topic + ' overview comprehensive analysis',\n  topic + ' latest developments ' + new Date().getFullYear(),\n  topic + ' expert opinions research findings',\n  topic + ' market trends data statistics',\n  topic + ' challenges problems limitations',\n  topic + ' future predictions outlook',\n  topic + ' case studies examples real-world',\n  topic + ' comparison alternatives landscape'\n];\n\nconst queries = baseQueries.slice(0, maxQueries);\nreturn { queries, queryCount: queries.length, topic, today: new Date().toISOString().split('T')[0] };"
+      }
+    },
+    {
+      "id": "searchAll",
+      "name": "Execute all Exa searches",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.generateQueries.output.queries",
+        "as": "query",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "searchExa",
+            "name": "Search Exa for query",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "exa",
+              "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+              "connectionKey": "$.input.exaKey",
+              "data": {
+                "query": "$.loop.query",
+                "numResults": 5,
+                "type": "neural",
+                "useAutoprompt": true,
+                "contents": {
+                  "text": {
+                    "maxCharacters": 2000
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "collectTopUrls",
+      "name": "Collect top URLs for deep scraping",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.searchAll.response.iterations || [];\nconst allResults = [];\nconst seenUrls = new Set();\n\niterations.forEach(iter => {\n  const results = (iter.searchExa && iter.searchExa.response) ? (iter.searchExa.response.results || iter.searchExa.response.data || []) : [];\n  results.forEach(r => {\n    if (r.url && !seenUrls.has(r.url)) {\n      seenUrls.add(r.url);\n      allResults.push({ url: r.url, title: r.title || '', text: (r.text || r.content || '').slice(0, 2000) });\n    }\n  });\n});\n\nconst topUrls = allResults.slice(0, 5).map(r => r.url);\nlet searchContent = '';\nallResults.slice(0, 20).forEach((r, i) => {\n  searchContent += 'SOURCE ' + (i + 1) + ': ' + r.title + '\\n';\n  searchContent += 'URL: ' + r.url + '\\n';\n  searchContent += r.text.slice(0, 1500) + '\\n\\n';\n});\n\nreturn { topUrls, searchContent, totalResults: allResults.length };"
+      }
+    },
+    {
+      "id": "deepScrape",
+      "name": "Deep scrape top results with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.collectTopUrls.output.topUrls",
+        "as": "pageUrl",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrape",
+            "name": "Scrape page with Firecrawl",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.pageUrl",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileAllResearch",
+      "name": "Compile all research data",
+      "type": "code",
+      "code": {
+        "source": "let compiled = $.steps.collectTopUrls.output.searchContent;\n\nconst topUrls = $.steps.collectTopUrls.output.topUrls;\nconst scrapeIters = $.steps.deepScrape.response.iterations || [];\n\ncompiled += '\\n=== DEEP SCRAPED CONTENT ===\\n\\n';\nscrapeIters.forEach((iter, i) => {\n  const resp = (iter.scrape && iter.scrape.response && iter.scrape.response.data) ? iter.scrape.response.data : null;\n  if (resp && resp.markdown) {\n    compiled += 'DEEP SOURCE ' + (i + 1) + ' (' + (topUrls[i] || 'unknown') + '):\\n';\n    compiled += resp.markdown.slice(0, 3000) + '\\n\\n';\n  }\n});\n\nreturn { compiled: compiled.slice(0, 25000), totalSources: $.steps.collectTopUrls.output.totalResults };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for research synthesis",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileAllResearch.output;\nconst q = $.steps.generateQueries.output;\n\nlet prompt = 'You are a senior research analyst. Synthesize the following research data into a comprehensive, well-structured report on: ' + q.topic + '\\n\\n';\nprompt += 'DATE: ' + q.today + '\\n';\nprompt += 'TOTAL SOURCES ANALYZED: ' + d.totalSources + '\\n\\n';\nprompt += 'RESEARCH DATA:\\n' + d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Create a thorough, well-structured research report\\n';\nprompt += '- Include an executive summary, key findings, detailed analysis, and conclusions\\n';\nprompt += '- Cite sources where possible\\n';\nprompt += '- Include data points, statistics, and evidence\\n';\nprompt += '- Identify knowledge gaps and areas for further research\\n';\nprompt += '- Be objective and balanced\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"Research Report: ' + q.topic + '\",\\n';\nprompt += '  \"executiveSummary\": \"3-5 sentence overview\",\\n';\nprompt += '  \"keyFindings\": [\"finding 1\", \"finding 2\", \"finding 3\"],\\n';\nprompt += '  \"sections\": [\\n';\nprompt += '    { \"heading\": \"Section Title\", \"content\": \"detailed content with evidence\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"dataPoints\": [{ \"stat\": \"number or fact\", \"source\": \"where from\" }],\\n';\nprompt += '  \"conclusions\": [\"conclusion 1\"],\\n';\nprompt += '  \"futureOutlook\": \"predictions and trends\",\\n';\nprompt += '  \"knowledgeGaps\": [\"gap 1\"],\\n';\nprompt += '  \"sources\": [\"url1\", \"url2\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2878-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI research synthesis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2878-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude AI output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'Research Report', executiveSummary: raw.slice(0, 500), keyFindings: [], sections: [{ heading: 'Report', content: raw }], dataPoints: [], conclusions: [], futureOutlook: '', knowledgeGaps: [], sources: [] }; }"
+      }
+    },
+    {
+      "id": "buildNotionBlocks",
+      "name": "Build Notion page content with blocks <=1900 chars",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst MAX_BLOCK = 1900;\n\nfunction splitText(text, max) {\n  const chunks = [];\n  let remaining = text || '';\n  while (remaining.length > 0) {\n    if (remaining.length <= max) { chunks.push(remaining); break; }\n    let splitAt = remaining.lastIndexOf('. ', max);\n    if (splitAt < max * 0.5) splitAt = remaining.lastIndexOf(' ', max);\n    if (splitAt < max * 0.3) splitAt = max;\n    chunks.push(remaining.slice(0, splitAt + 1).trim());\n    remaining = remaining.slice(splitAt + 1).trim();\n  }\n  return chunks;\n}\n\nconst children = [];\n\nchildren.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: [{ type: 'text', text: { content: 'Executive Summary' } }] } });\nsplitText(ai.executiveSummary || '', MAX_BLOCK).forEach(chunk => {\n  children.push({ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: chunk } }] } });\n});\n\nif (ai.keyFindings && ai.keyFindings.length > 0) {\n  children.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: [{ type: 'text', text: { content: 'Key Findings' } }] } });\n  ai.keyFindings.forEach(f => {\n    children.push({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: [{ type: 'text', text: { content: f.slice(0, MAX_BLOCK) } }] } });\n  });\n}\n\nif (ai.sections && ai.sections.length > 0) {\n  ai.sections.forEach(section => {\n    children.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: [{ type: 'text', text: { content: (section.heading || 'Section').slice(0, MAX_BLOCK) } }] } });\n    splitText(section.content || '', MAX_BLOCK).forEach(chunk => {\n      children.push({ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: chunk } }] } });\n    });\n  });\n}\n\nif (ai.dataPoints && ai.dataPoints.length > 0) {\n  children.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: [{ type: 'text', text: { content: 'Key Data Points' } }] } });\n  ai.dataPoints.forEach(dp => {\n    const text = (dp.stat || '') + (dp.source ? ' (Source: ' + dp.source + ')' : '');\n    children.push({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: [{ type: 'text', text: { content: text.slice(0, MAX_BLOCK) } }] } });\n  });\n}\n\nif (ai.conclusions && ai.conclusions.length > 0) {\n  children.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: [{ type: 'text', text: { content: 'Conclusions' } }] } });\n  ai.conclusions.forEach(c => {\n    children.push({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: [{ type: 'text', text: { content: c.slice(0, MAX_BLOCK) } }] } });\n  });\n}\n\nif (ai.futureOutlook) {\n  children.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: [{ type: 'text', text: { content: 'Future Outlook' } }] } });\n  splitText(ai.futureOutlook, MAX_BLOCK).forEach(chunk => {\n    children.push({ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: chunk } }] } });\n  });\n}\n\nif (ai.knowledgeGaps && ai.knowledgeGaps.length > 0) {\n  children.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: [{ type: 'text', text: { content: 'Knowledge Gaps' } }] } });\n  ai.knowledgeGaps.forEach(g => {\n    children.push({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: [{ type: 'text', text: { content: g.slice(0, MAX_BLOCK) } }] } });\n  });\n}\n\nif (ai.sources && ai.sources.length > 0) {\n  children.push({ object: 'block', type: 'heading_2', heading_2: { rich_text: [{ type: 'text', text: { content: 'Sources' } }] } });\n  ai.sources.forEach(s => {\n    children.push({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: [{ type: 'text', text: { content: s.slice(0, MAX_BLOCK) } }] } });\n  });\n}\n\nreturn { title: ai.title || 'Research Report', children: children.slice(0, 100) };"
+      }
+    },
+    {
+      "id": "createNotionPage",
+      "name": "Create Notion page with research report",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5EnlW1AEk::mEAQjNttT1GjVqNeMTvDiw",
+        "connectionKey": "$.input.notionKey",
+        "data": {
+          "parent": {
+            "page_id": "$.input.notionParentPageId"
+          },
+          "properties": {
+            "title": {
+              "title": [
+                {
+                  "text": {
+                    "content": "$.steps.buildNotionBlocks.output.title"
+                  }
+                }
+              ]
+            }
+          },
+          "children": "$.steps.buildNotionBlocks.output.children"
+        }
+      }
+    }
+  ]
+}

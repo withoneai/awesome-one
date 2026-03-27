@@ -1,0 +1,100 @@
+{
+  "key": "n8n-5024-workflow-advisor",
+  "name": "Workflow Advisor",
+  "description": "Describe any business task and Claude AI will design a complete automation workflow for it, recommending tools, steps, and integrations. The workflow blueprint is posted to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5024,
+    "url": "https://n8n.io/workflows/5024",
+    "originalName": "Build custom workflows automatically with GPT-4o, RAG, and web search",
+    "totalViews": 33042,
+    "rank": 183,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the workflow design"
+    },
+    "taskDescription": {
+      "type": "string",
+      "required": true,
+      "description": "Describe the task you want to automate (e.g. 'When a new lead fills out a form, enrich their data, score them, and notify sales on Slack')"
+    },
+    "constraints": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Any constraints or preferences (e.g. 'must use Google Sheets', 'budget-friendly tools only')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build workflow design prompt",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar task = fb($.input.taskDescription, '');\nvar constraints = fb($.input.constraints, '');\n\nvar prompt = 'You are an automation architect and workflow design expert. Design a complete, production-ready automation workflow for the following task.\\n\\n';\nprompt += 'TASK: ' + task + '\\n';\nif (constraints) prompt += 'CONSTRAINTS: ' + constraints + '\\n';\nprompt += '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Design a step-by-step workflow\\n';\nprompt += '- Recommend specific tools and integrations\\n';\nprompt += '- Include error handling and edge cases\\n';\nprompt += '- Estimate complexity and implementation time\\n';\nprompt += '- Note any prerequisites or setup needed\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"workflowName\": \"descriptive name\",\\n';\nprompt += '  \"summary\": \"2-3 sentence overview of the automation\",\\n';\nprompt += '  \"trigger\": { \"type\": \"how the workflow starts\", \"details\": \"specifics\" },\\n';\nprompt += '  \"steps\": [\\n';\nprompt += '    { \"order\": 1, \"name\": \"step name\", \"tool\": \"tool or service\", \"action\": \"what it does\", \"inputsNeeded\": [\"input 1\"], \"outputsProduced\": [\"output 1\"], \"errorHandling\": \"what to do on failure\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"integrations\": [{ \"name\": \"tool name\", \"purpose\": \"why its needed\", \"alternatives\": [\"alt 1\"] }],\\n';\nprompt += '  \"errorHandling\": { \"strategy\": \"overall strategy\", \"retryPolicy\": \"description\", \"notifications\": \"how to alert on failure\" },\\n';\nprompt += '  \"complexity\": \"simple/moderate/complex\",\\n';\nprompt += '  \"estimatedBuildTime\": \"time to implement\",\\n';\nprompt += '  \"prerequisites\": [\"prereq 1\"],\\n';\nprompt += '  \"tips\": [\"implementation tip 1\"]\\n';\nprompt += '}';\n\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/workflow-advisor-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiDesign",
+      "name": "Design workflow with Claude",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/workflow-advisor-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse Claude response",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiDesign.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { workflowName: 'Custom Workflow', summary: raw, steps: [], integrations: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseResponse.output;\n\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':gear: Workflow Blueprint: ' + (fb(ai.workflowName, 'Custom Workflow')), emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: fb(ai.summary, 'Workflow designed.') } });\n\nvar complexityIcon = ':large_green_circle:';\nif (ai.complexity === 'moderate') complexityIcon = ':large_orange_circle:';\nif (ai.complexity === 'complex') complexityIcon = ':red_circle:';\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: complexityIcon + ' *Complexity:* ' + (fb(ai.complexity, 'N/A')) + '  |  :clock1: *Build Time:* ' + (fb(ai.estimatedBuildTime, 'N/A')) }] });\nblocks.push({ type: 'divider' });\n\nvar trigger = fb(ai.trigger, {});\nif (trigger.type) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':zap: *Trigger:* ' + trigger.type + '\\n' + (fb(trigger.details, '')) } });\n  blocks.push({ type: 'divider' });\n}\n\nvar steps = fb(ai.steps, []);\nif (steps.length > 0) {\n  var stepsText = '*:clipboard: Workflow Steps*\\n';\n  steps.forEach(function(step) {\n    stepsText += '*' + step.order + '. ' + step.name + '* (' + (fb(step.tool, 'N/A')) + ')\\n';\n    stepsText += '   ' + (fb(step.action, '')) + '\\n';\n    if (step.errorHandling) stepsText += '   _On error:_ ' + step.errorHandling + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: stepsText } });\n}\n\nvar integrations = fb(ai.integrations, []);\nif (integrations.length > 0) {\n  blocks.push({ type: 'divider' });\n  var intText = '*:link: Required Integrations*\\n';\n  integrations.forEach(function(intg) {\n    intText += '- *' + intg.name + '*: ' + (fb(intg.purpose, ''));\n    var alts = fb(intg.alternatives, []);\n    if (alts.length > 0) intText += ' (alt: ' + alts.join(', ') + ')';\n    intText += '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: intText } });\n}\n\nvar prereqs = fb(ai.prerequisites, []);\nif (prereqs.length > 0) {\n  blocks.push({ type: 'divider' });\n  var preText = '*:pushpin: Prerequisites*\\n';\n  prereqs.forEach(function(p, i) { preText += (i + 1) + '. ' + p + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: preText } });\n}\n\nvar tips = fb(ai.tips, []);\nif (tips.length > 0) {\n  var tipText = '*:bulb: Tips*\\n';\n  tips.forEach(function(t) { tipText += '- ' + t + '\\n'; });\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: tipText }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI + One CLI' }] });\n\nvar fallback = 'Workflow Blueprint: ' + (fb(ai.workflowName, 'Custom Workflow'));\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post workflow design to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

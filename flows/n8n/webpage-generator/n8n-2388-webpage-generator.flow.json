@@ -1,0 +1,108 @@
+{
+  "key": "n8n-2388-webpage-generator",
+  "name": "Webpage Generator \u2014 Claude AI Creates HTML, Posts to Slack",
+  "description": "Takes a description of a desired webpage, uses Claude AI to generate a complete, styled HTML page, and posts the code to Slack for review and use.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2388,
+    "url": "https://n8n.io/workflows/2388",
+    "originalName": "Dynamically generate a webpage from user request using OpenAI structured output",
+    "totalViews": 43350,
+    "rank": 147,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the generated HTML"
+    },
+    "pageDescription": {
+      "type": "string",
+      "required": true,
+      "description": "Description of the webpage to generate (e.g. 'A landing page for an AI productivity tool with hero section, features, and pricing')"
+    },
+    "style": {
+      "type": "string",
+      "required": false,
+      "default": "modern, clean, responsive",
+      "description": "Visual style preferences (e.g. 'dark theme, minimalist', 'colorful, playful')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for webpage generation",
+      "type": "code",
+      "code": {
+        "source": "var prompt = 'You are an expert web developer. Generate a complete, single-file HTML page based on the following description.\\n\\nPAGE DESCRIPTION: ' + $.input.pageDescription + '\\nSTYLE: ' + ($.input.style || 'modern, clean, responsive') + '\\n\\nRequirements:\\n- Single HTML file with embedded CSS (in <style> tags) and JS (in <script> tags)\\n- Responsive design that works on mobile and desktop\\n- Modern CSS (flexbox/grid, custom properties)\\n- Semantic HTML5 elements\\n- Accessible (proper headings, alt text, ARIA labels)\\n- Professional typography and spacing\\n- Include realistic placeholder content (not lorem ipsum)\\n- Use a cohesive color scheme\\n\\nReturn ONLY valid JSON:\\n{\\n  \"html\": \"The complete HTML code\",\\n  \"title\": \"Page title\",\\n  \"description\": \"Brief description of what was generated\",\\n  \"features\": [\"feature1\", \"feature2\"],\\n  \"lineCount\": 0\\n}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/one-webpage-gen-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to generate the webpage",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/one-webpage-gen-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse AI response and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { text: raw }; }"
+      }
+    },
+    {
+      "id": "prepareOutput",
+      "name": "Prepare HTML and summary for Slack",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar html = ai.html || ai.text || '';\nvar lineCount = html.split('\\n').length;\nvar title = ai.title || 'Generated Webpage';\nvar desc = ai.description || $.input.pageDescription;\nvar features = ai.features || [];\nvar htmlPreview = html.slice(0, 2800);\nvar truncated = html.length > 2800;\nreturn { html: html, htmlPreview: htmlPreview, truncated: truncated, lineCount: lineCount, title: title, description: desc, features: features };"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message with HTML code",
+      "type": "code",
+      "code": {
+        "source": "var out = $.steps.prepareOutput.output;\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':globe_with_meridians: Generated Webpage: ' + out.title, emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: out.description } });\nif (out.features.length > 0) {\n  var featText = '*Features:*\\n';\n  out.features.forEach(function(f) { featText += ':white_check_mark: ' + f + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: featText } });\n}\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':page_facing_up: *HTML Code* (' + out.lineCount + ' lines)' } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '```' + out.htmlPreview + '```' } });\nif (out.truncated) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: '_Code truncated. Full HTML is ' + out.html.length + ' characters._' }] });\n}\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':robot_face: Generated by Claude AI via One CLI' }] });\nvar fallback = 'Webpage Generated: ' + out.title + ' (' + out.lineCount + ' lines of HTML)';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post HTML code to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

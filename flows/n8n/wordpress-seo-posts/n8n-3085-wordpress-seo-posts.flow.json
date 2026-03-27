@@ -1,0 +1,155 @@
+{
+  "key": "n8n-3085-wordpress-seo-posts",
+  "name": "WordPress SEO-optimized post generator",
+  "description": "Researches a keyword using Exa, uses Claude to write an SEO-optimized blog post with title, meta description, and structured content, then publishes it to WordPress as a draft post.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3085,
+    "url": "https://n8n.io/workflows/3085",
+    "originalName": "Automate SEO-Optimized WordPress posts with AI & Google Sheets",
+    "totalViews": 56792,
+    "rank": 105,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for keyword research",
+      "default": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "wordpressKey": {
+      "type": "string",
+      "required": true,
+      "description": "WordPress connection key for publishing",
+      "connection": {
+        "platform": "word-press"
+      }
+    },
+    "site": {
+      "type": "string",
+      "required": true,
+      "description": "WordPress site ID or domain (e.g. 'mysite.wordpress.com')"
+    },
+    "keyword": {
+      "type": "string",
+      "required": true,
+      "description": "Target SEO keyword or topic for the blog post"
+    },
+    "tone": {
+      "type": "string",
+      "required": false,
+      "description": "Writing tone: professional, casual, authoritative, friendly",
+      "default": "professional"
+    },
+    "wordCount": {
+      "type": "number",
+      "required": false,
+      "description": "Target word count for the article",
+      "default": 1500
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery_keywordResearch",
+      "name": "Build search query for keywordResearch",
+      "type": "code",
+      "code": {
+        "source": "const parts = [$.input.keyword];\nconst staticTerms = \"{{}} best guide comprehensive\";\nreturn { query: parts.filter(Boolean).join(\" \") + \" \" + staticTerms };"
+      }
+    },
+    {
+      "id": "keywordResearch",
+      "name": "Research keyword and top-ranking content via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_keywordResearch.output.query",
+          "numResults": 8,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 1500
+            },
+            "highlights": {
+              "numSentences": 3,
+              "highlightsPerUrl": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile research into reference material",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.keywordResearch.response.results || [];\nlet researchText = '';\nresults.forEach((r, i) => {\n  researchText += (i+1) + '. ' + (r.title || 'Untitled') + '\\n';\n  researchText += '   URL: ' + r.url + '\\n';\n  if (r.highlights && r.highlights.length > 0) {\n    researchText += '   Key points: ' + r.highlights.join(' | ') + '\\n';\n  }\n  researchText += '   Content: ' + (r.text || '').slice(0, 800) + '\\n\\n';\n});\nreturn { researchText, sourceCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for SEO blog post",
+      "type": "code",
+      "code": {
+        "source": "const keyword = $.input.keyword;\nconst tone = $.input.tone || 'professional';\nconst wordCount = $.input.wordCount || 1500;\nconst research = $.steps.compileResearch.output.researchText;\n\nconst prompt = `You are an expert SEO content writer. Write a comprehensive, SEO-optimized blog post based on the following keyword and research.\\n\\nTARGET KEYWORD: ${keyword}\\nTONE: ${tone}\\nTARGET WORD COUNT: ${wordCount}\\n\\nCOMPETITOR RESEARCH (${$.steps.compileResearch.output.sourceCount} top-ranking pages analyzed):\\n${research}\\n\\nINSTRUCTIONS:\\n- Write an engaging, original article that outperforms the competition\\n- Include the target keyword naturally in the title, first paragraph, headings, and throughout\\n- Use proper HTML heading tags (h2, h3) for structure\\n- Write the content body in HTML (paragraphs with <p>, lists with <ul>/<ol>, bold with <strong>)\\n- Include a compelling introduction and conclusion\\n- Add internal linking suggestions where relevant\\n- Optimize for featured snippets where possible\\n\\nReturn ONLY valid JSON:\\n{\\n  \"title\": \"<SEO-optimized title with keyword>\",\\n  \"slug\": \"<url-friendly-slug>\",\\n  \"metaDescription\": \"<155 char meta description with keyword>\",\\n  \"content\": \"<full HTML article body>\",\\n  \"tags\": [\"<tag1>\", \"<tag2>\", \"<tag3>\"],\\n  \"categories\": [\"<category1>\"],\\n  \"excerpt\": \"<2-3 sentence excerpt>\",\\n  \"estimatedWordCount\": ${wordCount},\\n  \"keywordDensity\": \"<percentage>\"\\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3085-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI for SEO blog post generation",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3085-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: $.input.keyword + ' - Complete Guide', slug: $.input.keyword.toLowerCase().replace(/[^a-z0-9]+/g, '-'), metaDescription: 'A comprehensive guide about ' + $.input.keyword, content: '<p>' + raw + '</p>', tags: [$.input.keyword], categories: ['Blog'], excerpt: 'A guide about ' + $.input.keyword }; }"
+      }
+    },
+    {
+      "id": "publishToWordPress",
+      "name": "Publish SEO post to WordPress as draft",
+      "type": "action",
+      "action": {
+        "platform": "word-press",
+        "actionId": "conn_mod_def::GJ8WW_SF41c::2UIlchnrQjqCWCK2VaWxwA",
+        "connectionKey": "$.input.wordpressKey",
+        "pathVariables": {
+          "site": "$.input.site"
+        },
+        "data": {
+          "title": "$.steps.parseAI.output.title",
+          "content": "$.steps.parseAI.output.content",
+          "slug": "$.steps.parseAI.output.slug",
+          "excerpt": "$.steps.parseAI.output.excerpt",
+          "status": "draft",
+          "tags": "$.steps.parseAI.output.tags",
+          "categories": "$.steps.parseAI.output.categories"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,183 @@
+{
+  "key": "n8n-2374-community-insights-qdrant",
+  "name": "Community insights: search, analyze sentiment, save to Sheets",
+  "description": "Searches community discussions via Exa, uses Claude AI to analyze sentiment, identify themes, and extract key insights from community conversations, then saves the structured analysis to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2374,
+    "url": "https://n8n.io/workflows/2374",
+    "originalName": "Community insights using Qdrant, Python and Information Extractor",
+    "totalViews": 56078,
+    "rank": 107,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for community discussion search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving insights",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for insights summary"
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic to analyze community discussions about (e.g. 'AI code assistants', 'remote work tools', 'electric vehicles')"
+    },
+    "communitySource": {
+      "type": "string",
+      "required": false,
+      "default": "Reddit, Hacker News, forums",
+      "description": "Community sources to focus on (e.g. 'Reddit', 'Hacker News', 'Stack Overflow')"
+    },
+    "maxDiscussions": {
+      "type": "string",
+      "required": false,
+      "default": "15",
+      "description": "Maximum number of discussions to analyze"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery_searchCommunity",
+      "name": "Build search query for searchCommunity",
+      "type": "code",
+      "code": {
+        "source": "const parts = [$.input.topic, $.input.communitySource];\nconst staticTerms = \"{{}} discussion opinions {{}}\";\nreturn { query: parts.filter(Boolean).join(\" \") + \" \" + staticTerms };"
+      }
+    },
+    {
+      "id": "searchCommunity",
+      "name": "Search community discussions via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildQuery_searchCommunity.output.query",
+          "numResults": 20,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 2000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "compileDiscussions",
+      "name": "Compile community discussions for analysis",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchCommunity.response.results || [];\nconst maxD = parseInt($.input.maxDiscussions || '15', 10);\nconst selected = results.slice(0, maxD);\n\nlet discussionText = '';\nselected.forEach((r, i) => {\n  discussionText += '=== DISCUSSION ' + (i + 1) + ' ===\\n';\n  discussionText += 'Title: ' + (r.title || 'Untitled') + '\\n';\n  discussionText += 'URL: ' + r.url + '\\n';\n  if (r.publishedDate) discussionText += 'Date: ' + r.publishedDate + '\\n';\n  discussionText += 'Content:\\n' + (r.text || '').slice(0, 1500) + '\\n\\n';\n});\n\nreturn { discussionText, discussionCount: selected.length, sources: selected.map(r => ({ title: r.title || r.url, url: r.url })) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for community sentiment analysis",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileDiscussions.output;\nconst topic = $.input.topic;\n\nlet prompt = 'You are a community insights analyst. Analyze the following community discussions about \"' + topic + '\" and extract structured insights.\\n\\n';\nprompt += 'TOPIC: ' + topic + '\\n';\nprompt += 'DISCUSSIONS ANALYZED: ' + d.discussionCount + '\\n\\n';\nprompt += 'COMMUNITY DISCUSSIONS:\\n' + d.discussionText + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '1. Identify the top 3-5 recurring themes across discussions\\n';\nprompt += '2. Analyze overall sentiment (positive, neutral, negative) with a score 0-100\\n';\nprompt += '3. Extract specific pain points and feature requests mentioned\\n';\nprompt += '4. Identify key influencers or frequently cited opinions\\n';\nprompt += '5. Note any emerging trends or shifts in community opinion\\n';\nprompt += '6. Create per-discussion sentiment breakdown\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"overallSentiment\": { \"label\": \"positive|neutral|negative|mixed\", \"score\": 65 },\\n';\nprompt += '  \"themes\": [\\n';\nprompt += '    { \"name\": \"theme name\", \"frequency\": \"high|medium|low\", \"sentiment\": \"positive|neutral|negative\", \"description\": \"brief description\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"painPoints\": [\"pain point 1\", \"pain point 2\"],\\n';\nprompt += '  \"featureRequests\": [\"request 1\", \"request 2\"],\\n';\nprompt += '  \"emergingTrends\": [\"trend 1\", \"trend 2\"],\\n';\nprompt += '  \"discussions\": [\\n';\nprompt += '    { \"index\": 1, \"title\": \"title\", \"sentiment\": \"positive|neutral|negative\", \"keyTakeaway\": \"one line summary\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"executiveSummary\": \"2-3 sentence overview of community sentiment\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2374-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for sentiment analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2374-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { overallSentiment: { label: 'unknown', score: 0 }, themes: [], painPoints: [], featureRequests: [], emergingTrends: [], discussions: [], executiveSummary: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetData",
+      "name": "Build Google Sheets data from insights",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst date = new Date().toISOString().split('T')[0];\n\nconst themeRows = (ai.themes || []).map((t, i) => ({\n  '#': i + 1,\n  'Type': 'Theme',\n  'Name': t.name || '',\n  'Frequency': t.frequency || '',\n  'Sentiment': t.sentiment || '',\n  'Description': t.description || '',\n  'Date': date\n}));\n\nconst painRows = (ai.painPoints || []).map((p, i) => ({\n  '#': themeRows.length + i + 1,\n  'Type': 'Pain Point',\n  'Name': p,\n  'Frequency': '',\n  'Sentiment': 'negative',\n  'Description': '',\n  'Date': date\n}));\n\nconst requestRows = (ai.featureRequests || []).map((r, i) => ({\n  '#': themeRows.length + painRows.length + i + 1,\n  'Type': 'Feature Request',\n  'Name': r,\n  'Frequency': '',\n  'Sentiment': 'neutral',\n  'Description': '',\n  'Date': date\n}));\n\nconst trendRows = (ai.emergingTrends || []).map((t, i) => ({\n  '#': themeRows.length + painRows.length + requestRows.length + i + 1,\n  'Type': 'Trend',\n  'Name': t,\n  'Frequency': '',\n  'Sentiment': '',\n  'Description': '',\n  'Date': date\n}));\n\nconst sheetData = themeRows.concat(painRows).concat(requestRows).concat(trendRows);\n\nreturn { sheetData, summary: ai.overallSentiment || {}, executiveSummary: ai.executiveSummary || '' };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save community insights to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "connectionKey": "$.input.sheetsKey",
+          "title": "Community Insights - {{$.input.topic}} - {{$.steps.compileDiscussions.output.discussionCount}} discussions",
+          "sheetTitle": "Insights",
+          "data": "$.steps.buildSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack summary with Block Kit",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst topic = $.input.topic;\nconst dCount = $.steps.compileDiscussions.output.discussionCount;\nconst sentiment = ai.overallSentiment || {};\n\nconst sentEmoji = sentiment.label === 'positive' ? ':large_green_circle:' : sentiment.label === 'negative' ? ':red_circle:' : sentiment.label === 'mixed' ? ':large_orange_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Community Insights Report' } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Topic:*\\n' + topic },\n  { type: 'mrkdwn', text: '*Discussions Analyzed:*\\n' + dCount }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Overall Sentiment:*\\n' + sentEmoji + ' ' + (sentiment.label || 'unknown') },\n  { type: 'mrkdwn', text: '*Sentiment Score:*\\n' + (sentiment.score || 0) + '/100' }\n] });\nblocks.push({ type: 'divider' });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Executive Summary:*\\n' + (ai.executiveSummary || 'No summary available.').slice(0, 1800) } });\nblocks.push({ type: 'divider' });\n\nif (ai.themes && ai.themes.length > 0) {\n  let themeText = '*Key Themes:*\\n';\n  ai.themes.slice(0, 5).forEach((t, i) => { themeText += (i + 1) + '. *' + t.name + '* (' + t.frequency + ', ' + t.sentiment + ') - ' + (t.description || '').slice(0, 100) + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: themeText.slice(0, 1800) } });\n}\n\nif (ai.painPoints && ai.painPoints.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Pain Points:*\\n' + ai.painPoints.slice(0, 5).map((p, i) => (i + 1) + '. ' + p).join('\\n') } });\n}\n\nif (ai.emergingTrends && ai.emergingTrends.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Emerging Trends:*\\n' + ai.emergingTrends.slice(0, 3).map((t, i) => (i + 1) + '. ' + t).join('\\n') } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa + Claude AI + Google Sheets' }] });\n\nconst fallback = 'Community insights for ' + topic + ': ' + (sentiment.label || 'unknown') + ' sentiment (' + dCount + ' discussions)';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post insights summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

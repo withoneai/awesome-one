@@ -1,0 +1,256 @@
+{
+  "key": "n8n-2354-competitor-research",
+  "name": "Automate competitor research with Exa AI, Notion and multi-agent analysis",
+  "description": "Searches for competitors of a given company using Exa web search, scrapes each competitor website with Firecrawl, runs multi-agent AI analysis for company overview, product offerings, and reviews, then saves structured profiles to Notion and reports to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2354,
+    "url": "https://n8n.io/workflows/2354",
+    "originalName": "Automate competitor research with Exa.ai, Notion and AI agents",
+    "totalViews": 28507,
+    "rank": 219,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for competitor search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping competitor websites",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "notionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Notion connection key for saving competitor profiles",
+      "connection": {
+        "platform": "notion"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for report delivery",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "sourceCompany": {
+      "type": "string",
+      "required": true,
+      "description": "Company name to find competitors for (e.g. 'Stripe')"
+    },
+    "sourceCompanyUrl": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Company website URL (optional, helps with better search)"
+    },
+    "notionParentPageId": {
+      "type": "string",
+      "required": true,
+      "description": "Notion parent page ID to store competitor profiles"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for competitor research report"
+    },
+    "maxCompetitors": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Maximum number of competitors to analyze"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildExaQuery",
+      "name": "Build Exa query to find competitors",
+      "type": "code",
+      "code": {
+        "source": "const company = $.input.sourceCompany || '';\nconst url = $.input.sourceCompanyUrl || '';\nconst query = 'Companies that compete with ' + company + ' in the same market and industry, alternatives to ' + company;\nreturn { query, company, url };"
+      }
+    },
+    {
+      "id": "exaSearch",
+      "name": "Search for competitors with Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.steps.buildExaQuery.output.query",
+          "type": "auto",
+          "numResults": "$.input.maxCompetitors",
+          "contents": {
+            "text": {
+              "maxCharacters": 2000
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "parseCompetitors",
+      "name": "Parse competitor list from Exa results",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.exaSearch.response || {};\nconst results = response.data?.results || response.results || [];\nconst sourceCompany = $.input.sourceCompany.toLowerCase();\nconst competitors = [];\nconst seen = {};\n\nresults.forEach(function(r) {\n  const url = r.url || '';\n  const domain = url.replace(/https?:\\/\\//, '').replace(/www\\./, '').split('/')[0];\n  if (domain && !seen[domain] && domain.indexOf(sourceCompany.replace(/\\s/g, '')) < 0) {\n    seen[domain] = true;\n    competitors.push({\n      name: r.title || domain,\n      url: 'https://' + domain,\n      snippet: (r.text || '').slice(0, 500)\n    });\n  }\n});\n\nreturn { competitors: competitors.slice(0, $.input.maxCompetitors || 5), count: competitors.length };"
+      }
+    },
+    {
+      "id": "scrapeCompetitors",
+      "name": "Scrape each competitor website",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.parseCompetitors.output.competitors",
+        "as": "competitor",
+        "maxConcurrency": 2,
+        "steps": [
+          {
+            "id": "scrapeWebsite",
+            "name": "Scrape competitor website",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.competitor.url",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileAllData",
+      "name": "Compile all competitor data for analysis",
+      "type": "code",
+      "code": {
+        "source": "const competitors = $.steps.parseCompetitors.output.competitors;\nconst iterations = $.steps.scrapeCompetitors.response?.iterations || [];\nlet allData = '';\n\ncompetitors.forEach(function(comp, i) {\n  const iter = iterations[i] || {};\n  const resp = iter.scrapeWebsite?.response?.data || iter.scrapeWebsite?.response || {};\n  const content = (resp.markdown || resp.content || comp.snippet || '').slice(0, 3000);\n  allData += '=== COMPETITOR ' + (i + 1) + ': ' + comp.name + ' ===\\n';\n  allData += 'URL: ' + comp.url + '\\n';\n  allData += 'Content:\\n' + content + '\\n\\n';\n});\n\nreturn { allData: allData, source: $.input.sourceCompany, competitorCount: competitors.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for multi-agent competitor analysis",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.compileAllData.output;\n\nlet prompt = 'You are a competitive intelligence analyst. Analyze the following competitors of ' + data.source + '. For each competitor, act as three specialized agents:\\n';\nprompt += '1. Company Overview Agent - extract company basics, market, size, funding\\n';\nprompt += '2. Product Offering Agent - identify products, features, pricing tiers\\n';\nprompt += '3. Market Position Agent - analyze strengths, weaknesses, differentiation\\n\\n';\nprompt += 'COMPETITORS DATA:\\n' + data.allData + '\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"sourceCompany\": \"' + data.source + '\",\\n';\nprompt += '  \"competitors\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"name\": \"company name\",\\n';\nprompt += '      \"url\": \"website url\",\\n';\nprompt += '      \"overview\": { \"industry\": \"\", \"market\": \"B2B/B2C\", \"founded\": \"\", \"size\": \"\", \"summary\": \"\" },\\n';\nprompt += '      \"products\": { \"mainProducts\": [\"\"], \"features\": [\"\"], \"pricing\": \"\" },\\n';\nprompt += '      \"position\": { \"strengths\": [\"\"], \"weaknesses\": [\"\"], \"differentiation\": \"\" }\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"marketInsights\": \"overall competitive landscape summary\",\\n';\nprompt += '  \"opportunities\": [\"opportunity for source company\"]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2354-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude multi-agent competitor analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2354-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { sourceCompany: $.input.sourceCompany, competitors: [], marketInsights: raw.slice(0, 500), opportunities: [] }; }"
+      }
+    },
+    {
+      "id": "saveToNotion",
+      "name": "Save competitor research to Notion",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5EnlW1AEk::mEAQjNttT1GjVqNeMTvDiw",
+        "connectionKey": "$.input.notionKey",
+        "data": {
+          "parent": {
+            "page_id": "$.input.notionParentPageId"
+          },
+          "properties": {
+            "title": {
+              "title": [
+                {
+                  "text": {
+                    "content": "$.steps.parseAI.output.sourceCompany"
+                  }
+                }
+              ]
+            }
+          },
+          "children": [
+            {
+              "object": "block",
+              "type": "paragraph",
+              "paragraph": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "$.steps.parseAI.output.marketInsights"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit competitor report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Competitor Research: ' + (ai.sourceCompany || $.input.sourceCompany), emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Competitors Found:* ' + ((ai.competitors || []).length) } });\nblocks.push({ type: 'divider' });\n\nconst comps = ai.competitors || [];\ncomps.slice(0, 5).forEach(function(c) {\n  let text = '*' + (c.name || 'Unknown') + '* - <' + (c.url || '#') + '|Website>\\n';\n  if (c.overview) text += c.overview.summary + '\\n';\n  if (c.position && c.position.differentiation) text += '_Differentiation:_ ' + c.position.differentiation + '\\n';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 1800) } });\n});\n\nblocks.push({ type: 'divider' });\nif (ai.marketInsights) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Market Insights:*\\n' + ai.marketInsights.slice(0, 1500) } });\n}\nif (ai.opportunities && ai.opportunities.length > 0) {\n  let oppText = '*Opportunities:*\\n';\n  ai.opportunities.slice(0, 5).forEach(function(o, i) { oppText += (i + 1) + '. ' + o + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: oppText.slice(0, 1800) } });\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Saved to Notion | Powered by Exa + Firecrawl + Claude AI' }] });\nconst fallbackText = 'Competitor Research for ' + (ai.sourceCompany || $.input.sourceCompany) + ': ' + comps.length + ' competitors analyzed';\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post competitor report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

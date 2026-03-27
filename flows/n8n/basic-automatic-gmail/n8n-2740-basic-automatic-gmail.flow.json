@@ -1,0 +1,166 @@
+{
+  "key": "n8n-2740-basic-automatic-gmail",
+  "name": "Basic automatic Gmail email labelling with OpenAI and Gmail API",
+  "description": "Gmail auto-categorizer: fetches recent emails from Gmail, uses Claude AI to categorize each by urgency and type, and posts a structured categorized summary to Slack using Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2740,
+    "url": "https://n8n.io/workflows/2740",
+    "originalName": "Basic automatic Gmail email labelling with OpenAI and Gmail API",
+    "totalViews": 127871,
+    "rank": 36,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Maximum number of recent emails to categorize (default: 10)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the categorized summary"
+    }
+  },
+  "steps": [
+    {
+      "id": "listEmails",
+      "name": "Fetch recent emails from Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "data": {},
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "maxResults": "$.input.maxEmails",
+          "q": "in:inbox is:unread"
+        }
+      }
+    },
+    {
+      "id": "extractIds",
+      "name": "Extract message IDs",
+      "type": "code",
+      "code": {
+        "source": "const messages = $.steps.listEmails.response.messages || [];\nreturn { messageIds: messages.map(m => m.id).filter(Boolean).slice(0, 10) };"
+      }
+    },
+    {
+      "id": "fetchDetails",
+      "name": "Fetch details for each email",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractIds.output.messageIds",
+        "as": "msgId",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "getMsg",
+            "name": "Get email message",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GJ3ocvMGOS8::D__3BgQSSzWtDUoOqLuX2A",
+              "connectionKey": "$.input.gmailKey",
+              "data": {},
+              "pathVars": {
+                "userId": "me",
+                "id": "$.loop.msgId"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileEmails",
+      "name": "Compile email data for categorization",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.fetchDetails.response.iterations || [];\nconst emails = [];\niterations.forEach((iter) => {\n  const msg = (iter.getMsg && iter.getMsg.response) ? iter.getMsg.response : {};\n  const headers = (msg.payload && msg.payload.headers) || [];\n  const subject = (headers.find(h => h.name === 'Subject') || {}).value || 'No Subject';\n  const from = (headers.find(h => h.name === 'From') || {}).value || 'Unknown';\n  const date = (headers.find(h => h.name === 'Date') || {}).value || '';\n  const snippet = msg.snippet || '';\n  emails.push({ id: msg.id || '', subject, from, date, snippet });\n});\nlet emailsText = '';\nemails.forEach((e, i) => {\n  emailsText += (i+1) + '. Subject: ' + e.subject + '\\n';\n  emailsText += '   From: ' + e.from + '\\n';\n  emailsText += '   Date: ' + e.date + '\\n';\n  emailsText += '   Preview: ' + e.snippet.slice(0, 300) + '\\n\\n';\n});\nreturn { emails, emailsText, count: emails.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build categorization prompt",
+      "type": "code",
+      "code": {
+        "source": "const prompt = `You are an email triage assistant. Categorize each of the following emails by urgency and type.\n\nEMAILS:\n${$.steps.compileEmails.output.emailsText}\n\nFor each email, assign:\n- urgency: \"urgent\", \"important\", \"normal\", or \"low\"\n- type: one of \"action_required\", \"meeting\", \"newsletter\", \"notification\", \"personal\", \"promotion\", \"billing\", \"support\", \"other\"\n- brief_summary: 1-sentence summary of what the email is about\n- recommended_action: what the user should do (reply, read later, archive, etc.)\n\nReturn ONLY valid JSON:\n{\n  \"categorized_emails\": [\n    {\n      \"index\": 1,\n      \"subject\": \"...\",\n      \"from\": \"...\",\n      \"urgency\": \"...\",\n      \"type\": \"...\",\n      \"brief_summary\": \"...\",\n      \"recommended_action\": \"...\"\n    }\n  ],\n  \"stats\": {\n    \"total\": 0,\n    \"urgent\": 0,\n    \"important\": 0,\n    \"normal\": 0,\n    \"low\": 0\n  },\n  \"top_priority\": \"Which email should be dealt with first and why\"\n}`;\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2740-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiCategorize",
+      "name": "Run Claude AI categorization",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2740-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiCategorize.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { categorized_emails: [], stats: { total: 0 }, top_priority: raw.slice(0, 500) }; }"
+      }
+    },
+    {
+      "id": "buildBlocks",
+      "name": "Build Slack Block Kit categorized summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output || {};\nconst stats = ai.stats || {};\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Gmail Inbox Categorization' } });\nconst urgencyEmoji = { urgent: ':rotating_light:', important: ':warning:', normal: ':large_blue_circle:', low: ':white_circle:' };\nconst statsText = (urgencyEmoji.urgent + ' Urgent: *' + (stats.urgent || 0) + '* | ' + urgencyEmoji.important + ' Important: *' + (stats.important || 0) + '* | ' + urgencyEmoji.normal + ' Normal: *' + (stats.normal || 0) + '* | ' + urgencyEmoji.low + ' Low: *' + (stats.low || 0) + '*');\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: statsText } });\nblocks.push({ type: 'divider' });\nif (ai.top_priority) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*:star: Top Priority*\\n' + ai.top_priority } });\n  blocks.push({ type: 'divider' });\n}\nconst grouped = { urgent: [], important: [], normal: [], low: [] };\n(ai.categorized_emails || []).forEach(e => {\n  const key = e.urgency || 'normal';\n  if (grouped[key]) grouped[key].push(e);\n  else grouped.normal.push(e);\n});\n['urgent', 'important', 'normal', 'low'].forEach(level => {\n  if (grouped[level].length === 0) return;\n  const emoji = urgencyEmoji[level] || '';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: emoji + ' *' + level.charAt(0).toUpperCase() + level.slice(1) + ' (' + grouped[level].length + ')*' } });\n  grouped[level].forEach(e => {\n    let itemText = '*' + (e.subject || 'No Subject') + '*\\n';\n    itemText += '_From: ' + (e.from || 'Unknown') + '_ | Type: `' + (e.type || 'other') + '`\\n';\n    itemText += e.brief_summary + '\\n';\n    itemText += ':point_right: ' + (e.recommended_action || 'Review');\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: itemText.slice(0, 1900) } });\n  });\n  blocks.push({ type: 'divider' });\n});\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Categorized ' + (stats.total || $.steps.compileEmails.output.count) + ' emails from Gmail inbox' }] });\nreturn { blocks, fallback: 'Gmail Categorization: ' + (stats.urgent || 0) + ' urgent, ' + (stats.important || 0) + ' important' };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post categorized summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildBlocks.output.fallback",
+          "blocks": "$.steps.buildBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

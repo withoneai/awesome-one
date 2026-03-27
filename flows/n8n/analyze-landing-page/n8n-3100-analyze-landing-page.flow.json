@@ -1,0 +1,142 @@
+{
+  "key": "n8n-3100-analyze-landing-page",
+  "name": "AI Landing Page Analyzer",
+  "description": "Takes a URL, scrapes the landing page with Firecrawl (HTML + markdown + links), then uses Claude AI to perform a deep conversion rate optimization analysis covering copy, CTAs, UX, trust signals, mobile experience, and page structure. Outputs a detailed report to Slack using Block Kit.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3100,
+    "url": "https://n8n.io/workflows/3100",
+    "originalName": "Analyze Landing Page with OpenAI and Get Optimization Tips",
+    "totalViews": 204648,
+    "rank": 20,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "Landing page URL to analyze (e.g. 'https://example.com/pricing')"
+    },
+    "businessContext": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Optional context about the business or product (helps AI give more relevant advice)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the analysis report"
+    }
+  },
+  "steps": [
+    {
+      "id": "scrapePage",
+      "name": "Scrape landing page with Firecrawl (HTML + markdown + links)",
+      "type": "action",
+      "action": {
+        "platform": "firecrawl",
+        "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+        "connectionKey": "$.input.firecrawlKey",
+        "data": {
+          "url": "$.input.url",
+          "formats": [
+            {
+              "type": "markdown"
+            },
+            {
+              "type": "html"
+            },
+            {
+              "type": "links"
+            }
+          ],
+          "onlyMainContent": false
+        }
+      }
+    },
+    {
+      "id": "extractPageData",
+      "name": "Extract technical signals from scraped page",
+      "type": "code",
+      "code": {
+        "source": "const resp = ($.steps.scrapePage.response && $.steps.scrapePage.response.data) ? $.steps.scrapePage.response.data : {};\nconst html = resp.html || resp.rawHtml || '';\nconst md = resp.markdown || '';\nconst links = resp.links || [];\n\n// Technical extraction\nconst titleMatch = html.match(/<title[^>]*>([^<]+)<\\/title>/i);\nconst metaDescMatch = html.match(/<meta[^>]*name=[\"']description[\"'][^>]*content=[\"']([^\"']+)[\"']/i);\nconst h1s = md.match(/^# .+$/gm) || [];\nconst h2s = md.match(/^## .+$/gm) || [];\nconst h3s = md.match(/^### .+$/gm) || [];\nconst imgCount = (html.match(/<img /gi) || []).length;\nconst imgNoAlt = (html.match(/<img(?![^>]*alt=[\"'][^\"']+[\"'])[^>]*>/gi) || []).length;\nconst formCount = (html.match(/<form/gi) || []).length;\nconst buttonCount = (html.match(/<button/gi) || []).length;\nconst inputCount = (html.match(/<input/gi) || []).length;\nconst videoCount = (html.match(/<video|youtube|vimeo/gi) || []).length;\nconst wordCount = md.split(/\\s+/).length;\nconst hasSchema = html.includes('application/ld+json');\nconst hasViewport = html.includes('viewport');\nconst hasHttps = $.input.url.startsWith('https');\nconst hasSocialProof = /testimonial|review|rating|trust|customer|client/i.test(md);\nconst hasPricing = /pricing|price|\\$|cost|plan|tier/i.test(md);\nconst hasFAQ = /faq|frequently asked|common questions/i.test(md);\nconst hostname = new URL($.input.url).hostname;\nconst internalLinks = links.filter(l => { try { return new URL(l).hostname === hostname; } catch(e) { return false; } }).length;\nconst externalLinks = links.length - internalLinks;\n\nconst ctaPatterns = md.match(/(?:get started|sign up|try free|start free|book a demo|schedule|contact us|buy now|add to cart|subscribe|download|learn more|request|claim)/gi) || [];\n\nreturn {\n  title: titleMatch ? titleMatch[1].trim() : '(missing)',\n  metaDescription: metaDescMatch ? metaDescMatch[1].trim() : '(missing)',\n  h1s: h1s.map(h => h.replace(/^# /, '')),\n  h2s: h2s.map(h => h.replace(/^## /, '')),\n  h3Count: h3s.length,\n  wordCount,\n  images: imgCount,\n  imagesNoAlt: imgNoAlt,\n  forms: formCount,\n  buttons: buttonCount,\n  inputs: inputCount,\n  videos: videoCount,\n  totalLinks: links.length,\n  internalLinks,\n  externalLinks,\n  hasSchema,\n  hasViewport,\n  hasHttps,\n  hasSocialProof,\n  hasPricing,\n  hasFAQ,\n  ctaCount: ctaPatterns.length,\n  ctaTexts: [...new Set(ctaPatterns.map(c => c.toLowerCase()))],\n  contentPreview: md.slice(0, 3000)\n};"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for landing page CRO analysis",
+      "type": "code",
+      "code": {
+        "source": "const p = $.steps.extractPageData.output;\nconst url = $.input.url;\nconst context = $.input.businessContext || '';\n\nlet prompt = 'You are a senior conversion rate optimization (CRO) consultant. Perform a comprehensive landing page audit of the page data below. Be specific, actionable, and reference actual elements from the page.\\n\\n';\nprompt += 'PAGE URL: ' + url + '\\n';\nif (context) prompt += 'BUSINESS CONTEXT: ' + context + '\\n';\nprompt += '\\n';\n\nprompt += '=== TECHNICAL PROFILE ===\\n';\nprompt += 'Title: ' + p.title + '\\n';\nprompt += 'Meta description: ' + p.metaDescription + '\\n';\nprompt += 'H1 tags: ' + (p.h1s.length ? p.h1s.join(' | ') : '(none)') + '\\n';\nprompt += 'H2 tags: ' + (p.h2s.length ? p.h2s.join(' | ') : '(none)') + '\\n';\nprompt += 'H3 count: ' + p.h3Count + '\\n';\nprompt += 'Word count: ' + p.wordCount + '\\n';\nprompt += 'Images: ' + p.images + ' total, ' + p.imagesNoAlt + ' missing alt\\n';\nprompt += 'Forms: ' + p.forms + ' | Buttons: ' + p.buttons + ' | Input fields: ' + p.inputs + '\\n';\nprompt += 'Videos: ' + p.videos + '\\n';\nprompt += 'Links: ' + p.totalLinks + ' (' + p.internalLinks + ' internal, ' + p.externalLinks + ' external)\\n';\nprompt += 'CTA count: ' + p.ctaCount + ' | CTA texts found: ' + p.ctaTexts.join(', ') + '\\n';\nprompt += 'Schema markup: ' + (p.hasSchema ? 'Yes' : 'No') + '\\n';\nprompt += 'Mobile viewport: ' + (p.hasViewport ? 'Yes' : 'No') + '\\n';\nprompt += 'HTTPS: ' + (p.hasHttps ? 'Yes' : 'No') + '\\n';\nprompt += 'Social proof present: ' + (p.hasSocialProof ? 'Yes' : 'No') + '\\n';\nprompt += 'Pricing visible: ' + (p.hasPricing ? 'Yes' : 'No') + '\\n';\nprompt += 'FAQ section: ' + (p.hasFAQ ? 'Yes' : 'No') + '\\n\\n';\n\nprompt += '=== PAGE CONTENT ===\\n';\nprompt += p.contentPreview + '\\n\\n';\n\nprompt += '=== INSTRUCTIONS ===\\n';\nprompt += 'Use Slack mrkdwn format: *bold* (NOT **bold**), _italic_, :emoji:, numbered lists. No markdown tables. No # headings.\\n\\n';\nprompt += 'Return ONLY valid JSON with these exact keys:\\n';\nprompt += '{\\n';\nprompt += '  \"overallScore\": 0-100,\\n';\nprompt += '  \"executiveSummary\": \"2-3 sentence overview of the page\\'s conversion potential\",\\n';\nprompt += '  \"heroSection\": { \"score\": 0-10, \"headline\": \"analysis of headline effectiveness\", \"subheadline\": \"analysis\", \"recommendations\": [\"specific fixes\"] },\\n';\nprompt += '  \"copyAnalysis\": { \"score\": 0-10, \"clarity\": \"is the value prop clear?\", \"persuasion\": \"emotional triggers and benefit-focused language\", \"recommendations\": [\"specific fixes\"] },\\n';\nprompt += '  \"ctaAnalysis\": { \"score\": 0-10, \"currentCTAs\": \"what CTAs exist and their effectiveness\", \"placement\": \"are CTAs above fold and repeated?\", \"recommendations\": [\"specific fixes\"] },\\n';\nprompt += '  \"trustSignals\": { \"score\": 0-10, \"existing\": \"what trust elements are present\", \"missing\": \"what should be added\", \"recommendations\": [\"specific fixes\"] },\\n';\nprompt += '  \"uxAndDesign\": { \"score\": 0-10, \"pageStructure\": \"flow and visual hierarchy\", \"mobileReadiness\": \"mobile optimization signals\", \"recommendations\": [\"specific fixes\"] },\\n';\nprompt += '  \"seo\": { \"score\": 0-10, \"findings\": \"meta tags, headings, schema analysis\", \"recommendations\": [\"specific fixes\"] },\\n';\nprompt += '  \"topFixes\": [\"#1 highest-impact fix\", \"#2\", \"#3\", \"#4\", \"#5\"],\\n';\nprompt += '  \"quickWins\": [\"changes that take less than 1 hour\"]\\n';\nprompt += '}\\n';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3100-landing-page-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI landing page CRO analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3100-landing-page-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Strip code fences and parse Claude JSON output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { overallScore: 0, executiveSummary: raw.slice(0, 2000), topFixes: [], text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit CRO report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst url = $.input.url;\nconst score = ai.overallScore || 0;\n\n// Score emoji\nlet scoreEmoji = ':red_circle:';\nif (score >= 70) scoreEmoji = ':large_green_circle:';\nelse if (score >= 40) scoreEmoji = ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Landing Page CRO Analysis', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: scoreEmoji + ' *Overall Score: ' + score + '/100*\\n' + (ai.executiveSummary || '') + '\\n\\n*Page:* <' + url + '|' + url + '>' } });\nblocks.push({ type: 'divider' });\n\n// Section scores\nconst sections = [\n  { key: 'heroSection', label: 'Hero Section', emoji: ':dart:' },\n  { key: 'copyAnalysis', label: 'Copy & Messaging', emoji: ':pencil2:' },\n  { key: 'ctaAnalysis', label: 'Call-to-Action', emoji: ':point_right:' },\n  { key: 'trustSignals', label: 'Trust Signals', emoji: ':shield:' },\n  { key: 'uxAndDesign', label: 'UX & Design', emoji: ':art:' },\n  { key: 'seo', label: 'SEO', emoji: ':mag:' }\n];\n\nsections.forEach(sec => {\n  const data = ai[sec.key];\n  if (!data) return;\n  let text = sec.emoji + ' *' + sec.label + '* \u2014 ' + (data.score || 0) + '/10\\n';\n  // Add the main analysis fields (skip score and recommendations)\n  Object.keys(data).forEach(k => {\n    if (k === 'score' || k === 'recommendations') return;\n    text += '*' + k.charAt(0).toUpperCase() + k.slice(1).replace(/([A-Z])/g, ' $1') + ':* ' + data[k] + '\\n';\n  });\n  if (data.recommendations && data.recommendations.length) {\n    text += '*Recommendations:*\\n';\n    data.recommendations.forEach((r, i) => { text += (i + 1) + '. ' + r + '\\n'; });\n  }\n  // Slack section text limit is ~3000 chars\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 2900) } });\n  blocks.push({ type: 'divider' });\n});\n\n// Top fixes\nif (ai.topFixes && ai.topFixes.length) {\n  let fixText = ':rotating_light: *Top 5 Highest-Impact Fixes*\\n';\n  ai.topFixes.forEach((f, i) => { fixText += (i + 1) + '. ' + f + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: fixText } });\n  blocks.push({ type: 'divider' });\n}\n\n// Quick wins\nif (ai.quickWins && ai.quickWins.length) {\n  let qwText = ':zap: *Quick Wins (< 1 hour)*\\n';\n  ai.quickWins.forEach((q, i) => { qwText += (i + 1) + '. ' + q + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: qwText } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Analyzed via Firecrawl + Claude AI | CRO score: ' + score + '/100' }] });\n\nconst fallback = 'Landing Page Analysis: ' + url + ' scored ' + score + '/100';\n\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post CRO report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

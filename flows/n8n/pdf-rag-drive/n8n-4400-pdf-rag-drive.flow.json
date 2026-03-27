@@ -1,0 +1,177 @@
+{
+  "key": "n8n-4400-pdf-rag-drive",
+  "name": "PDF Document RAG from Google Drive",
+  "description": "Searches Google Drive for documents matching a user question, exports their content as plain text, uses Claude AI to synthesize an accurate answer grounded in the document content with citations, and posts the answer to Slack with Block Kit formatting. Adapted from n8n's PDF RAG system with Mistral OCR workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4400,
+    "url": "https://n8n.io/workflows/4400",
+    "originalName": "Build a PDF Document RAG System with Mistral OCR, Qdrant and Gemini AI",
+    "totalViews": 45069,
+    "rank": 136,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "googleDriveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key for searching and reading documents",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the answer",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The question to answer from Google Drive documents"
+    },
+    "folderId": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Google Drive folder ID to search within (optional \u2014 searches all files if omitted)"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the answer"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildSearchQuery",
+      "name": "Build Google Drive search query from the question",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question;\nconst stopWords = ['what','is','the','a','an','how','does','do','can','where','when','which','who','why','are','was','were','been','being','have','has','had','will','would','should','could','may','might','shall','about','into','through','during','before','after','above','below','from','with','this','that','these','those','for','and','but','or'];\nconst keywords = question.split(/\\s+/).filter(w => w.length > 2 && !stopWords.includes(w.toLowerCase())).slice(0, 5).join(' ');\n\nlet q = \"trashed=false and mimeType != 'application/vnd.google-apps.folder'\";\nif (keywords) q += \" and fullText contains '\" + keywords.replace(/'/g, '') + \"'\";\nconst folderId = $.input.folderId || '';\nif (folderId) q += \" and '\" + folderId + \"' in parents\";\n\nreturn { searchQuery: q, keywords };"
+      }
+    },
+    {
+      "id": "searchFiles",
+      "name": "Search Google Drive for relevant documents",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.googleDriveKey",
+        "data": {
+          "q": "$.steps.buildSearchQuery.output.searchQuery",
+          "pageSize": 10,
+          "orderBy": "modifiedTime desc"
+        }
+      }
+    },
+    {
+      "id": "selectFiles",
+      "name": "Select top files to fetch content from",
+      "type": "code",
+      "code": {
+        "source": "const files = ($.steps.searchFiles.response.files || []).slice(0, 5);\nconst exportable = files.map(f => ({\n  id: f.id,\n  name: f.name,\n  mimeType: f.mimeType,\n  modifiedTime: f.modifiedTime,\n  isGoogleDoc: (f.mimeType || '').startsWith('application/vnd.google-apps.')\n}));\n\nreturn { files: exportable, fileCount: exportable.length };"
+      }
+    },
+    {
+      "id": "fetchContent",
+      "name": "Export each document as plain text",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.selectFiles.output.files",
+        "as": "file",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "exportFile",
+            "name": "Export file content as text",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "google-drive",
+              "actionId": "conn_mod_def::GJ6RziZnVhE::KyuPyhkzQ1K3CQxYqa8IGA",
+              "connectionKey": "$.input.googleDriveKey",
+              "data": {
+                "fileId": "$.loop.file.id",
+                "mimeType": "text/plain"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileDocuments",
+      "name": "Compile all document content for AI analysis",
+      "type": "code",
+      "code": {
+        "source": "const files = $.steps.selectFiles.output.files;\nconst iterations = $.steps.fetchContent.response.iterations || [];\n\nlet compiled = '';\nfiles.forEach((file, i) => {\n  compiled += '=== DOCUMENT ' + (i + 1) + ': ' + file.name + ' ===\\n';\n  compiled += 'Type: ' + file.mimeType + ' | Modified: ' + (file.modifiedTime || 'unknown') + '\\n\\n';\n\n  const iter = iterations[i];\n  if (iter && iter.exportFile && iter.exportFile.response) {\n    const resp = iter.exportFile.response;\n    const text = typeof resp === 'string' ? resp : (resp.body || resp.data || JSON.stringify(resp));\n    compiled += (typeof text === 'string' ? text : JSON.stringify(text)).slice(0, 5000) + '\\n';\n  } else {\n    compiled += '(content not available)\\n';\n  }\n  compiled += '\\n\\n';\n});\n\nreturn { compiled: compiled.slice(0, 30000), fileCount: files.length, fileNames: files.map(f => f.name) };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for document Q&A",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileDocuments.output;\nconst question = $.input.question;\n\nlet prompt = 'You are a document analysis assistant. Answer the following question accurately using ONLY the content from the Google Drive documents provided below. If the answer is not in the documents, say so.\\n\\n';\nprompt += 'QUESTION: ' + question + '\\n\\n';\nprompt += 'DOCUMENTS (' + d.fileCount + ' files found):\\n';\nprompt += d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Answer based ONLY on the document content provided\\n';\nprompt += '- Cite which document(s) the information comes from using [Doc N: filename] notation\\n';\nprompt += '- If information is found across multiple documents, synthesize it\\n';\nprompt += '- If the answer is not found, clearly state that\\n';\nprompt += '- Use Slack mrkdwn: *bold* (NOT **bold**), _italic_, numbered lists\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"answer\": \"comprehensive answer citing [Doc N: filename] sources\",\\n';\nprompt += '  \"confidence\": \"high|medium|low\",\\n';\nprompt += '  \"documentsUsed\": [{ \"number\": 1, \"name\": \"filename\", \"relevance\": \"how relevant\" }],\\n';\nprompt += '  \"keyExtracts\": [\"important quote or data point from the documents\"],\\n';\nprompt += '  \"followUpQuestions\": [\"related question to explore further\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4400-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI document Q&A",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4400-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { answer: raw, confidence: 'medium', documentsUsed: [], keyExtracts: [], followUpQuestions: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit document answer",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst fileCount = $.steps.compileDocuments.output.fileCount;\n\nconst confidenceEmoji = ai.confidence === 'high' ? ':large_green_circle:' : ai.confidence === 'low' ? ':red_circle:' : ':large_yellow_circle:';\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Document Q&A Answer', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Question:* ' + question } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: confidenceEmoji + ' *Confidence:* ' + (ai.confidence || 'medium') + ' | *Documents searched:* ' + fileCount } });\nblocks.push({ type: 'divider' });\n\nconst answer = (ai.answer || 'No answer generated.').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: answer } });\nblocks.push({ type: 'divider' });\n\nif (ai.keyExtracts && ai.keyExtracts.length > 0) {\n  let kText = '*Key Extracts:*\\n';\n  ai.keyExtracts.forEach((k, i) => { kText += '> ' + k + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: kText.slice(0, 2900) } });\n}\n\nif (ai.documentsUsed && ai.documentsUsed.length > 0) {\n  let srcText = '*Sources:*\\n';\n  ai.documentsUsed.forEach(d => {\n    srcText += '[Doc ' + d.number + '] *' + d.name + '* - ' + d.relevance + '\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: srcText.slice(0, 2900) } });\n}\n\nif (ai.followUpQuestions && ai.followUpQuestions.length > 0) {\n  let fqText = '*Follow-up questions:*\\n';\n  ai.followUpQuestions.forEach((q, i) => { fqText += (i + 1) + '. ' + q + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: fqText } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Google Drive + Claude AI | One CLI' }] });\n\nconst fallback = 'Document Q&A: ' + question.slice(0, 80) + ' (' + fileCount + ' docs searched)';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post document answer to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

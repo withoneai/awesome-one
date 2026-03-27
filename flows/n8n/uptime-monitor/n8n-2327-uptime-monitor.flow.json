@@ -1,0 +1,185 @@
+{
+  "key": "n8n-2327-uptime-monitor",
+  "name": "Uptime monitoring with Slack and Gmail alerts",
+  "description": "Reads a list of URLs from Google Sheets, checks each one via HTTP, logs results back to the sheet, and sends Slack alerts and Gmail notifications for any downtime. Adapted from n8n's uptime monitoring with scheduled triggers workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2327,
+    "url": "https://n8n.io/workflows/2327",
+    "originalName": "Host your own uptime monitoring with scheduled triggers",
+    "totalViews": 28887,
+    "rank": 214,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for URL list and logging",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for downtime alerts",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for uptime alerts"
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for email alerts",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID with URLs to monitor"
+    },
+    "sheetRange": {
+      "type": "string",
+      "required": false,
+      "default": "Monitors!A1:B20",
+      "description": "Sheet range with columns: URL, Name"
+    },
+    "alertEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email address for downtime alerts"
+    }
+  },
+  "steps": [
+    {
+      "id": "readUrls",
+      "name": "Read monitored URLs from Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GJ30lYkSqLk::IOnDiKqfQ_2FtFCahohidA",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {},
+        "pathVars": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetRange"
+        }
+      }
+    },
+    {
+      "id": "parseUrls",
+      "name": "Parse URL list from sheet",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.readUrls.response || {};\nconst values = resp.values || [];\nif (values.length < 2) return { urls: [], count: 0 };\nconst urls = values.slice(1).map((row, i) => ({\n  index: i + 1,\n  url: row[0] || '',\n  name: row[1] || row[0] || 'Site ' + (i + 1)\n})).filter(u => u.url.length > 0);\nreturn { urls, count: urls.length };"
+      }
+    },
+    {
+      "id": "checkSites",
+      "name": "Check each URL for uptime",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.parseUrls.output.urls",
+        "as": "site",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "pingOne",
+            "name": "Ping individual site",
+            "type": "bash",
+            "onError": {
+              "strategy": "continue"
+            },
+            "bash": {
+              "command": "curl -o /dev/null -s -w '%{http_code} %{time_total}' --max-time 10 \"$SITE_URL\"",
+              "timeout": 15000,
+              "parseJson": false,
+              "env": {
+                "SITE_URL": "$.loop.site.url"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileResults",
+      "name": "Compile uptime check results",
+      "type": "code",
+      "code": {
+        "source": "const urls = $.steps.parseUrls.output.urls || [];\nconst iterations = $.steps.checkSites.response.iterations || [];\nconst now = new Date().toISOString();\nconst results = [];\nlet downCount = 0;\n\nurls.forEach((u, i) => {\n  let status = 'unknown';\n  let code = 0;\n  let responseTime = 0;\n  if (iterations[i] && iterations[i].pingOne) {\n    const output = iterations[i].pingOne.output || '';\n    const parts = output.trim().split(' ');\n    code = parseInt(parts[0] || '0', 10);\n    responseTime = parseFloat(parts[1] || '0');\n    if (code >= 200 && code < 400) {\n      status = 'up';\n    } else {\n      status = 'down';\n      downCount++;\n    }\n  } else {\n    status = 'down';\n    downCount++;\n  }\n  results.push({\n    name: u.name,\n    url: u.url,\n    status: status,\n    statusCode: code,\n    responseTime: responseTime,\n    checkedAt: now\n  });\n});\n\nconst header = ['Name', 'URL', 'Status', 'Code', 'Response Time (s)', 'Checked At'];\nconst rows = results.map(r => [\n  r.name, r.url, r.status, String(r.statusCode),\n  String(r.responseTime.toFixed(3)), r.checkedAt\n]);\n\nreturn {\n  results, downCount, upCount: results.length - downCount,\n  total: results.length, values: [header].concat(rows)\n};"
+      }
+    },
+    {
+      "id": "logToSheets",
+      "name": "Log uptime results to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "Results",
+          "values": "$.steps.compileResults.output.values",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildAlertContent",
+      "name": "Build alert content for down sites",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileResults.output;\nconst downSites = d.results.filter(r => r.status === 'down');\nconst hasDown = downSites.length > 0;\n\nlet emailBody = '';\nif (hasDown) {\n  emailBody = 'DOWNTIME ALERT\\n\\n';\n  emailBody += 'The following sites are DOWN:\\n\\n';\n  downSites.forEach((s, i) => {\n    emailBody += (i + 1) + '. ' + s.name + ' (' + s.url + ')\\n';\n    emailBody += '   Status Code: ' + s.statusCode + '\\n';\n    emailBody += '   Checked: ' + s.checkedAt + '\\n\\n';\n  });\n  emailBody += 'Total: ' + d.total + ' sites monitored, ' + d.downCount + ' down, ' + d.upCount + ' up\\n';\n}\n\nreturn { hasDown, downSites, emailBody, emailSubject: 'ALERT: ' + downSites.length + ' site(s) DOWN' };"
+      }
+    },
+    {
+      "id": "sendAlertEmail",
+      "name": "Send downtime alert email via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.alertEmail",
+          "subject": "$.steps.buildAlertContent.output.emailSubject",
+          "body": "$.steps.buildAlertContent.output.emailBody"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit uptime report",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileResults.output;\nconst results = d.results || [];\nconst hasDown = d.downCount > 0;\n\nconst blocks = [];\nconst statusIcon = hasDown ? ':rotating_light:' : ':white_check_mark:';\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Uptime Monitor Report', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: statusIcon + ' *' + d.upCount + '/' + d.total + '* sites up' } });\n\nif (hasDown) {\n  const downNames = results.filter(r => r.status === 'down').map(r => r.name).join(', ');\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':x: *DOWN:* ' + downNames } });\n}\n\nresults.forEach(r => {\n  const icon = r.status === 'up' ? ':large_green_circle:' : ':red_circle:';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: icon + ' *' + r.name + '* \u2014 ' + r.statusCode + ' (' + r.responseTime.toFixed(3) + 's)' } });\n});\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Results logged to Google Sheets | Powered by One CLI' }] });\n\nconst fallback = 'Uptime: ' + d.upCount + '/' + d.total + ' sites up' + (hasDown ? ' - DOWNTIME DETECTED' : '');\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post uptime report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

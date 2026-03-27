@@ -1,0 +1,146 @@
+{
+  "key": "n8n-3662-personalize-marketing-emails",
+  "name": "Personalize marketing emails with AI",
+  "description": "Takes customer data (name, product, feedback), uses Claude AI to analyze sentiment and personalize email copy, then sends the personalized marketing email via Gmail.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1978,
+    "url": "https://n8n.io/workflows/1978",
+    "originalName": "Personalize marketing emails using customer data and AI",
+    "totalViews": 95731,
+    "rank": 52,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for status notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for email send confirmation"
+    },
+    "customerName": {
+      "type": "string",
+      "required": true,
+      "description": "Customer's full name"
+    },
+    "customerEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Customer's email address"
+    },
+    "productName": {
+      "type": "string",
+      "required": true,
+      "description": "Name of the product the customer purchased"
+    },
+    "customerFeedback": {
+      "type": "string",
+      "required": true,
+      "description": "Customer's product feedback or review text"
+    },
+    "senderName": {
+      "type": "string",
+      "required": false,
+      "default": "Customer Success Team",
+      "description": "Name to use in email signature"
+    },
+    "companyName": {
+      "type": "string",
+      "required": false,
+      "default": "Our Company",
+      "description": "Company name for branding"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for sentiment analysis and email personalization",
+      "type": "code",
+      "code": {
+        "source": "const name = $.input.customerName;\nconst product = $.input.productName;\nconst feedback = $.input.customerFeedback;\nconst sender = $.input.senderName || 'Customer Success Team';\nconst company = $.input.companyName || 'Our Company';\n\nlet prompt = 'You are a customer engagement specialist. Analyze the following customer feedback, determine sentiment, and create a personalized follow-up email.\\n\\n';\nprompt += 'CUSTOMER DATA:\\n';\nprompt += '- Name: ' + name + '\\n';\nprompt += '- Product: ' + product + '\\n';\nprompt += '- Feedback: ' + feedback + '\\n';\nprompt += '- Sender Name: ' + sender + '\\n';\nprompt += '- Company: ' + company + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '1. Analyze the sentiment (positive, neutral, negative)\\n';\nprompt += '2. If negative, consider offering a discount or personal follow-up\\n';\nprompt += '3. Create a warm, personalized email that references their specific feedback\\n';\nprompt += '4. Keep the email concise (150-250 words)\\n';\nprompt += '5. Include a clear call-to-action\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"sentiment\": \"positive|neutral|negative\",\\n';\nprompt += '  \"sentimentScore\": 0.8,\\n';\nprompt += '  \"offerDiscount\": false,\\n';\nprompt += '  \"discountPercent\": 0,\\n';\nprompt += '  \"emailSubject\": \"subject line\",\\n';\nprompt += '  \"emailBody\": \"full HTML email body with <p> tags\",\\n';\nprompt += '  \"keyInsights\": [\"insight1\", \"insight2\"]\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3662-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for email personalization",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3662-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { sentiment: 'unknown', sentimentScore: 0, offerDiscount: false, discountPercent: 0, emailSubject: 'Follow-up on your recent purchase', emailBody: '<p>' + raw + '</p>', keyInsights: [] }; }"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send personalized email via Gmail",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "to": "$.input.customerEmail",
+          "subject": "$.steps.parseAI.output.emailSubject",
+          "body": "$.steps.parseAI.output.emailBody",
+          "isHtml": true
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack confirmation message",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst name = $.input.customerName;\nconst email = $.input.customerEmail;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Marketing Email Sent', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Customer:*\\n' + name },\n  { type: 'mrkdwn', text: '*Sentiment:*\\n' + (ai.sentiment || 'unknown') + ' (' + (ai.sentimentScore || 0) + ')' }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Email:*\\n' + email },\n  { type: 'mrkdwn', text: '*Discount Offered:*\\n' + (ai.offerDiscount ? ai.discountPercent + '%' : 'No') }\n] });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Subject:* ' + (ai.emailSubject || 'N/A') } });\n\nif (ai.keyInsights && ai.keyInsights.length > 0) {\n  let insText = '*Key Insights:*\\n';\n  ai.keyInsights.slice(0, 4).forEach((ins, i) => { insText += (i + 1) + '. ' + ins + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: insText.slice(0, 1800) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI + Gmail' }] });\n\nconst fallbackText = 'Marketing email sent to ' + name + ' (' + email + ') - Sentiment: ' + (ai.sentiment || 'unknown');\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post email confirmation to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

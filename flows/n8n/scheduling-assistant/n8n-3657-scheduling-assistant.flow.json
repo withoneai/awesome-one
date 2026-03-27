@@ -1,0 +1,155 @@
+{
+  "key": "n8n-3657-scheduling-assistant",
+  "name": "AI Scheduling Assistant",
+  "description": "Check Google Calendar availability, use Claude AI to suggest optimal meeting slots, and post scheduling recommendations to Slack. Adapted from the Voiceflow phone agent template for calendar-focused scheduling.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3657,
+    "url": "https://n8n.io/workflows/3657",
+    "originalName": "Build a chatbot, voice and phone agent with Voiceflow, Google Calendar and RAG",
+    "totalViews": 33036,
+    "rank": 184,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "calendarKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "google-calendar"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post scheduling suggestions"
+    },
+    "meetingRequest": {
+      "type": "string",
+      "required": true,
+      "description": "Describe the meeting you need to schedule (e.g. '1-hour team sync with marketing next week')"
+    },
+    "lookAheadDays": {
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "Number of business days to look ahead for availability"
+    },
+    "workingHoursStart": {
+      "type": "number",
+      "required": false,
+      "default": 9,
+      "description": "Working hours start (24h format, e.g. 9)"
+    },
+    "workingHoursEnd": {
+      "type": "number",
+      "required": false,
+      "default": 17,
+      "description": "Working hours end (24h format, e.g. 17)"
+    }
+  },
+  "steps": [
+    {
+      "id": "getDateRange",
+      "name": "Calculate date range for availability check",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar now = new Date();\nvar lookAhead = fb($.input.lookAheadDays, 5);\nvar end = new Date(now);\nend.setDate(end.getDate() + lookAhead);\nreturn {\n  timeMin: now.toISOString(),\n  timeMax: end.toISOString(),\n  today: now.toISOString().split('T')[0],\n  endDate: end.toISOString().split('T')[0],\n  workStart: fb($.input.workingHoursStart, 9),\n  workEnd: fb($.input.workingHoursEnd, 17)\n};"
+      }
+    },
+    {
+      "id": "listEvents",
+      "name": "Fetch calendar events for the date range",
+      "type": "action",
+      "action": {
+        "platform": "google-calendar",
+        "actionId": "conn_mod_def::GJ6RlnIYK20::YzuWSmaVQgurletRDNJavA",
+        "connectionKey": "$.input.calendarKey",
+        "pathVars": {
+          "calendarId": "primary"
+        },
+        "queryParams": {
+          "timeMin": "$.steps.getDateRange.output.timeMin",
+          "timeMax": "$.steps.getDateRange.output.timeMax",
+          "singleEvents": true,
+          "orderBy": "startTime",
+          "maxResults": 50
+        }
+      }
+    },
+    {
+      "id": "analyzeAvailability",
+      "name": "Analyze calendar availability",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar events = fb(fb($.steps.listEvents.response, {}).items, []);\nvar dateRange = $.steps.getDateRange.output;\nvar workStart = dateRange.workStart;\nvar workEnd = dateRange.workEnd;\n\nvar busySlots = '';\nevents.forEach(function(e, i) {\n  var start = e.start ? (fb(fb(e.start.dateTime, e.start.date), '')) : '';\n  var end = e.end ? (fb(fb(e.end.dateTime, e.end.date), '')) : '';\n  busySlots += '- ' + (fb(e.summary, 'Busy')) + ': ' + start + ' to ' + end + '\\n';\n});\n\nvar scheduleInfo = 'CALENDAR AVAILABILITY CHECK\\n';\nscheduleInfo += 'Period: ' + dateRange.today + ' to ' + dateRange.endDate + '\\n';\nscheduleInfo += 'Working hours: ' + workStart + ':00 - ' + workEnd + ':00\\n';\nscheduleInfo += 'Total existing events: ' + events.length + '\\n\\n';\nscheduleInfo += 'BUSY TIMES:\\n' + busySlots;\n\nreturn { scheduleInfo: scheduleInfo, eventCount: events.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build scheduling prompt for Claude",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar data = $.steps.analyzeAvailability.output;\nvar request = fb($.input.meetingRequest, '');\n\nvar prompt = 'You are a smart scheduling assistant. Based on the calendar availability below, suggest optimal meeting times for the requested meeting.\\n\\n';\nprompt += 'MEETING REQUEST: ' + request + '\\n\\n';\nprompt += data.scheduleInfo + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Suggest 3 specific time slots that avoid conflicts\\n';\nprompt += '- Prefer morning slots for important meetings\\n';\nprompt += '- Avoid back-to-back meetings (leave 15min buffer)\\n';\nprompt += '- Consider meeting duration from the request\\n';\nprompt += '- Note any days that are particularly busy or free\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"interpretation\": \"what meeting is being requested\",\\n';\nprompt += '  \"suggestedDuration\": \"recommended duration\",\\n';\nprompt += '  \"slots\": [\\n';\nprompt += '    { \"rank\": 1, \"date\": \"YYYY-MM-DD\", \"startTime\": \"HH:MM\", \"endTime\": \"HH:MM\", \"reason\": \"why this slot is good\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"busyDays\": [\"days that are heavily booked\"],\\n';\nprompt += '  \"freeDays\": [\"days with most availability\"],\\n';\nprompt += '  \"schedulingTips\": \"any relevant advice\",\\n';\nprompt += '  \"conflicts\": [\"any potential issues to watch for\"]\\n';\nprompt += '}';\n\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/scheduling-assistant-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Get scheduling suggestions from Claude",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/scheduling-assistant-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse Claude response",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiAnalysis.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { interpretation: raw, slots: [], schedulingTips: '' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseResponse.output;\nvar request = $.input.meetingRequest;\n\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':calendar: Scheduling Assistant', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Request:* ' + request + '\\n*Duration:* ' + (fb(ai.suggestedDuration, 'TBD')) } });\nblocks.push({ type: 'divider' });\n\nvar slots = fb(ai.slots, []);\nif (slots.length > 0) {\n  var slotsText = '*:star: Recommended Time Slots*\\n\\n';\n  slots.forEach(function(slot) {\n    var medal = ':first_place_medal:';\n    if (slot.rank === 2) medal = ':second_place_medal:';\n    if (slot.rank === 3) medal = ':third_place_medal:';\n    slotsText += medal + ' *' + slot.date + '* ' + slot.startTime + ' - ' + slot.endTime + '\\n';\n    slotsText += '   _' + (fb(slot.reason, '')) + '_\\n\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: slotsText } });\n}\n\nvar busyDays = fb(ai.busyDays, []);\nvar freeDays = fb(ai.freeDays, []);\nif (busyDays.length > 0) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':no_entry: *Busy:* ' + busyDays.join(', ') + '  |  :white_check_mark: *Open:* ' + freeDays.join(', ') }] });\n}\n\nvar conflicts = fb(ai.conflicts, []);\nif (conflicts.length > 0) {\n  var conflictText = ':warning: *Watch out:*\\n';\n  conflicts.forEach(function(c) { conflictText += '- ' + c + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: conflictText } });\n}\n\nif (ai.schedulingTips) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':bulb: ' + ai.schedulingTips }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Google Calendar + Claude AI + One CLI' }] });\n\nvar fallback = 'Scheduling: ' + slots.length + ' time slots suggested for ' + request;\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post scheduling suggestions to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

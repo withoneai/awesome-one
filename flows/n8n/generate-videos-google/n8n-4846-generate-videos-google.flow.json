@@ -1,0 +1,137 @@
+{
+  "key": "n8n-4846-generate-videos-google",
+  "name": "AI Video Content Planner",
+  "description": "Takes a topic, uses Claude AI to generate multiple video concepts with full scripts, SEO-optimized YouTube titles and descriptions, thumbnail ideas, and production notes. Saves the plan to Google Sheets for tracking and full scripts to Google Docs.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 4846,
+    "url": "https://n8n.io/workflows/4846",
+    "originalName": "Generate AI videos with Google Veo3, save to Google Drive and upload to YouTube",
+    "totalViews": 253233,
+    "rank": 13,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "googleDocsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Docs connection key",
+      "connection": {
+        "platform": "google-docs"
+      }
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Video topic or niche (e.g. 'AI productivity tools for remote workers')"
+    },
+    "videoCount": {
+      "type": "string",
+      "required": false,
+      "default": "5",
+      "description": "Number of video concepts to generate (1-10)"
+    },
+    "channelStyle": {
+      "type": "string",
+      "required": false,
+      "default": "educational and engaging",
+      "description": "Channel style/tone (e.g. 'entertaining', 'tutorial-focused', 'documentary')"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for video content planning",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic;\nconst count = parseInt($.input.videoCount || '5', 10);\nconst style = $.input.channelStyle || 'educational and engaging';\nconst date = new Date().toISOString().split('T')[0];\n\nlet prompt = 'You are a YouTube content strategist and SEO expert. Generate a batch of video concepts with full production details for a channel focused on the given topic.\\n\\n';\nprompt += 'TOPIC: ' + topic + '\\n';\nprompt += 'NUMBER OF VIDEOS: ' + count + '\\n';\nprompt += 'CHANNEL STYLE: ' + style + '\\n\\n';\nprompt += 'For each video, provide a complete production plan optimized for YouTube discovery and viewer retention. Return ONLY valid JSON.\\n\\n';\nprompt += 'Return this exact structure:\\n';\nprompt += '{\\n';\nprompt += '  \"channelStrategy\": \"1-2 sentence overall channel positioning advice\",\\n';\nprompt += '  \"videos\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"title\": \"SEO-optimized YouTube title (60 chars max, include power words)\",\\n';\nprompt += '      \"description\": \"YouTube description (first 2 lines are most important, include keywords)\",\\n';\nprompt += '      \"tags\": [\"relevant\", \"youtube\", \"tags\"],\\n';\nprompt += '      \"thumbnailIdea\": \"detailed thumbnail concept (text overlay, imagery, colors)\",\\n';\nprompt += '      \"hook\": \"first 30 seconds script to maximize retention\",\\n';\nprompt += '      \"outline\": [\\n';\nprompt += '        { \"timestamp\": \"0:00\", \"section\": \"section name\", \"content\": \"what to cover\", \"duration\": \"estimated minutes\" }\\n';\nprompt += '      ],\\n';\nprompt += '      \"fullScript\": \"complete narration script with section markers\",\\n';\nprompt += '      \"bRoll\": [\"b-roll footage suggestions\"],\\n';\nprompt += '      \"estimatedLength\": \"total video length\",\\n';\nprompt += '      \"targetKeywords\": [\"primary keyword\", \"secondary keywords\"],\\n';\nprompt += '      \"competitiveAngle\": \"what makes this different from existing videos on this topic\",\\n';\nprompt += '      \"endScreen\": \"end screen CTA and suggested next video\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"publishingSchedule\": \"recommended order and timing for publishing these videos\",\\n';\nprompt += '  \"playlistSuggestion\": \"playlist name and organization\"\\n';\nprompt += '}\\n';\n\nreturn { prompt, date, topic };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-4846-video-planner-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI to generate video content plans",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-4846-video-planner-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Strip code fences and parse Claude JSON output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { videos: [], channelStrategy: '', text: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetData",
+      "name": "Build Google Sheets tracking data",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst date = $.steps.buildPrompt.output.date;\nconst videos = ai.videos || [];\n\nconst sheetData = videos.map((v, i) => ({\n  '#': i + 1,\n  'Title': v.title || '',\n  'Est. Length': v.estimatedLength || '',\n  'Primary Keyword': (v.targetKeywords || [])[0] || '',\n  'Tags': (v.tags || []).join(', '),\n  'Thumbnail Idea': v.thumbnailIdea || '',\n  'Hook (first 30s)': (v.hook || '').slice(0, 300),\n  'Competitive Angle': v.competitiveAngle || '',\n  'Sections': (v.outline || []).map(o => o.section).join(' > '),\n  'Status': 'Planned',\n  'Date Created': date\n}));\n\nreturn { sheetData, videoCount: videos.length };"
+      }
+    },
+    {
+      "id": "buildDocContent",
+      "name": "Build Google Docs content with full scripts",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst topic = $.steps.buildPrompt.output.topic;\nconst date = $.steps.buildPrompt.output.date;\nconst videos = ai.videos || [];\n\nlet doc = 'VIDEO CONTENT PLAN: ' + topic + '\\n';\ndoc += '='.repeat(50) + '\\n';\ndoc += 'Generated: ' + date + '\\n';\ndoc += 'Videos: ' + videos.length + '\\n';\nif (ai.channelStrategy) doc += 'Strategy: ' + ai.channelStrategy + '\\n';\ndoc += '\\n';\n\nvideos.forEach((v, i) => {\n  doc += '-'.repeat(50) + '\\n';\n  doc += 'VIDEO ' + (i + 1) + ': ' + (v.title || 'Untitled') + '\\n';\n  doc += '-'.repeat(50) + '\\n\\n';\n\n  if (v.description) {\n    doc += 'DESCRIPTION:\\n' + v.description + '\\n\\n';\n  }\n  if (v.targetKeywords && v.targetKeywords.length) {\n    doc += 'KEYWORDS: ' + v.targetKeywords.join(', ') + '\\n';\n  }\n  if (v.tags && v.tags.length) {\n    doc += 'TAGS: ' + v.tags.join(', ') + '\\n';\n  }\n  if (v.thumbnailIdea) {\n    doc += 'THUMBNAIL: ' + v.thumbnailIdea + '\\n';\n  }\n  if (v.estimatedLength) {\n    doc += 'LENGTH: ' + v.estimatedLength + '\\n';\n  }\n  if (v.competitiveAngle) {\n    doc += 'ANGLE: ' + v.competitiveAngle + '\\n';\n  }\n  doc += '\\n';\n\n  if (v.outline && v.outline.length) {\n    doc += 'OUTLINE:\\n';\n    v.outline.forEach(o => {\n      doc += '  [' + (o.timestamp || '') + '] ' + (o.section || '') + ' (' + (o.duration || '') + ')\\n';\n      doc += '    ' + (o.content || '') + '\\n';\n    });\n    doc += '\\n';\n  }\n\n  if (v.hook) {\n    doc += 'HOOK (First 30 seconds):\\n' + v.hook + '\\n\\n';\n  }\n\n  if (v.fullScript) {\n    doc += 'FULL SCRIPT:\\n' + v.fullScript + '\\n\\n';\n  }\n\n  if (v.bRoll && v.bRoll.length) {\n    doc += 'B-ROLL SUGGESTIONS:\\n';\n    v.bRoll.forEach(b => { doc += '  - ' + b + '\\n'; });\n    doc += '\\n';\n  }\n\n  if (v.endScreen) {\n    doc += 'END SCREEN: ' + v.endScreen + '\\n';\n  }\n  doc += '\\n\\n';\n});\n\nif (ai.publishingSchedule) {\n  doc += 'PUBLISHING SCHEDULE:\\n' + ai.publishingSchedule + '\\n\\n';\n}\nif (ai.playlistSuggestion) {\n  doc += 'PLAYLIST: ' + ai.playlistSuggestion + '\\n';\n}\n\nreturn { content: doc, title: 'Video Plan - ' + topic };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save video tracking to Google Sheets",
+      "type": "action",
+      "onError": {
+        "strategy": "continue"
+      },
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "connectionKey": "$.input.sheetsKey",
+          "title": "Video Plan - {{$.input.topic}}",
+          "sheetTitle": "Video Tracker",
+          "data": "$.steps.buildSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "saveToDocs",
+      "name": "Save full scripts to Google Docs",
+      "type": "action",
+      "action": {
+        "platform": "google-docs",
+        "actionId": "conn_mod_def::GGSOqEghlL4::FNvL8lIORlafZq3CdDlFEg",
+        "connectionKey": "$.input.googleDocsKey",
+        "data": {
+          "connectionKey": "$.input.googleDocsKey",
+          "title": "$.steps.buildDocContent.output.title",
+          "content": "$.steps.buildDocContent.output.content"
+        }
+      }
+    }
+  ]
+}

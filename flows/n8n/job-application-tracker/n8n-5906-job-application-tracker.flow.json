@@ -1,0 +1,141 @@
+{
+  "key": "n8n-5906-job-application-tracker",
+  "name": "AI Job Application Tracker",
+  "description": "Searches Gmail for job-related emails (applications, interviews, offers, rejections), uses Claude AI to extract company name, role, status, and next steps, then saves structured tracking data to Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5906,
+    "url": "https://n8n.io/workflows/5906",
+    "originalName": "Automated job applications & status tracking with LinkedIn, Indeed & Google Sheets",
+    "totalViews": 79817,
+    "rank": 72,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for searching job emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving tracking data",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID to save job tracking data"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Job Applications",
+      "description": "Sheet tab name (default: 'Job Applications')"
+    },
+    "daysBack": {
+      "type": "number",
+      "required": false,
+      "default": 7,
+      "description": "Number of days to search back for job emails (default: 7)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildSearchQuery",
+      "name": "Build Gmail search query for job-related emails",
+      "type": "code",
+      "code": {
+        "source": "const days = $.input.daysBack || 7;\nconst since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);\nconst y = since.getFullYear();\nconst m = String(since.getMonth() + 1).padStart(2, '0');\nconst d = String(since.getDate()).padStart(2, '0');\nconst afterDate = y + '/' + m + '/' + d;\nconst query = '(subject:application OR subject:interview OR subject:offer OR subject:\"job\" OR subject:\"position\" OR subject:\"role\" OR subject:\"hiring\" OR subject:\"recruiter\" OR from:linkedin OR from:indeed OR from:greenhouse OR from:lever OR from:workday) after:' + afterDate;\nreturn { query, afterDate, daysBack: days };"
+      }
+    },
+    {
+      "id": "searchEmails",
+      "name": "Search Gmail for job-related emails",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "maxResults": 50,
+          "q": "$.steps.buildSearchQuery.output.query"
+        }
+      }
+    },
+    {
+      "id": "compileEmails",
+      "name": "Compile job email data",
+      "type": "code",
+      "code": {
+        "source": "const response = $.steps.searchEmails.response;\nconst messages = response.messages || response.data || [];\nlet compiled = '';\nlet count = 0;\n\nif (Array.isArray(messages)) {\n  messages.slice(0, 40).forEach((msg, i) => {\n    const headers = msg.payload && msg.payload.headers ? msg.payload.headers : [];\n    const getH = (n) => { const h = headers.find(h => h.name && h.name.toLowerCase() === n.toLowerCase()); return h ? h.value : ''; };\n    compiled += 'Email #' + (i + 1) + ':\\n';\n    compiled += '  From: ' + (getH('From') || msg.from || 'Unknown') + '\\n';\n    compiled += '  To: ' + (getH('To') || msg.to || '') + '\\n';\n    compiled += '  Subject: ' + (getH('Subject') || msg.subject || '(no subject)') + '\\n';\n    compiled += '  Date: ' + (getH('Date') || msg.date || '') + '\\n';\n    compiled += '  Body Preview: ' + (msg.snippet || msg.body || '').slice(0, 400) + '\\n\\n';\n    count++;\n  });\n}\n\nreturn { compiled, emailCount: count };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for job extraction",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.compileEmails.output;\n\nlet prompt = 'You are a job application tracking assistant. Analyze the following ' + data.emailCount + ' emails and extract job application data.\\n\\n';\nprompt += 'EMAILS:\\n' + data.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Extract ONLY emails genuinely related to job applications, interviews, offers, or recruitment\\n';\nprompt += '- For each job-related email, extract: company name, job title/role, application status, contact person, date, and any next steps\\n';\nprompt += '- Status should be one of: Applied, Phone Screen, Interview Scheduled, Interview Completed, Offer, Rejected, Follow-Up Needed, Informational\\n';\nprompt += '- Skip promotional emails, newsletters, and spam even if they mention jobs\\n';\nprompt += '- Deduplicate: if multiple emails are about the same company/role, merge into one entry with latest status\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"applications\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"company\": \"Company Name\",\\n';\nprompt += '      \"role\": \"Job Title\",\\n';\nprompt += '      \"status\": \"Applied|Phone Screen|Interview Scheduled|Interview Completed|Offer|Rejected|Follow-Up Needed\",\\n';\nprompt += '      \"contactPerson\": \"recruiter or hiring manager name\",\\n';\nprompt += '      \"contactEmail\": \"their email\",\\n';\nprompt += '      \"dateReceived\": \"YYYY-MM-DD\",\\n';\nprompt += '      \"nextSteps\": \"what to do next\",\\n';\nprompt += '      \"notes\": \"any additional context\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"summary\": \"overview of application pipeline\",\\n';\nprompt += '  \"totalFound\": 0\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5906-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI to extract job data",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5906-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude AI output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { applications: [], summary: raw, totalFound: 0 }; }"
+      }
+    },
+    {
+      "id": "prepareSheetRows",
+      "name": "Prepare rows for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst apps = ai.applications || [];\nconst today = new Date().toISOString().split('T')[0];\n\nconst headerRow = ['Company', 'Role', 'Status', 'Contact Person', 'Contact Email', 'Date Received', 'Next Steps', 'Notes', 'Last Updated'];\nconst rows = [headerRow];\n\napps.forEach(app => {\n  rows.push([\n    app.company || '',\n    app.role || '',\n    app.status || 'Unknown',\n    app.contactPerson || '',\n    app.contactEmail || '',\n    app.dateReceived || '',\n    app.nextSteps || '',\n    app.notes || '',\n    today\n  ]);\n});\n\nreturn { rows, applicationCount: apps.length, summary: ai.summary || '' };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save job tracking data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": "$.steps.prepareSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    }
+  ]
+}

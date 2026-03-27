@@ -1,0 +1,182 @@
+{
+  "key": "n8n-3442-ai-video-gen-multiplatform",
+  "name": "AI Video Generation & Multi-Platform Publish",
+  "description": "Claude AI generates creative video concepts with scene descriptions, image prompts, and scripts, saves them to Google Sheets for tracking, then posts formatted announcements to both Discord and Slack channels.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 3442,
+    "url": "https://n8n.io/workflows/3442",
+    "originalName": "Fully automated AI video generation & multi-platform publishing",
+    "totalViews": 247917,
+    "rank": 14,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving video concepts",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting video announcements",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "discordKey": {
+      "type": "string",
+      "required": true,
+      "description": "Discord connection key for posting video announcements",
+      "connection": {
+        "platform": "discord"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post video announcements (e.g. '#video-content')"
+    },
+    "discordChannelId": {
+      "type": "string",
+      "required": true,
+      "description": "Discord channel ID to post video announcements"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for video concept tracking"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Video Concepts",
+      "description": "Sheet tab name (default: 'Video Concepts')"
+    },
+    "topic": {
+      "type": "string",
+      "required": true,
+      "description": "Topic or niche for video generation (e.g. 'AI tutorials', 'cooking hacks', 'tech reviews')"
+    },
+    "videoCount": {
+      "type": "number",
+      "required": false,
+      "default": 3,
+      "description": "Number of video concepts to generate (default: 3)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for video concept generation",
+      "type": "code",
+      "code": {
+        "source": "const topic = $.input.topic;\nconst count = $.input.videoCount || 3;\nconst today = new Date().toISOString().split('T')[0];\n\nlet prompt = 'You are an expert short-form video content strategist. Generate ' + count + ' unique, viral-worthy video concepts for the topic: ' + topic + '.\\n\\n';\nprompt += 'For each video, provide:\\n';\nprompt += '- A catchy title optimized for social media\\n';\nprompt += '- A POV-style hook (first 3 seconds)\\n';\nprompt += '- Scene-by-scene breakdown (3-5 scenes)\\n';\nprompt += '- AI image generation prompt for the key visual\\n';\nprompt += '- Voiceover script (30-60 seconds)\\n';\nprompt += '- Suggested music mood\\n';\nprompt += '- Platform-specific caption (TikTok/YouTube Shorts/Reels style)\\n';\nprompt += '- Hashtags\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"videos\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"title\": \"catchy title\",\\n';\nprompt += '      \"hook\": \"POV opening hook\",\\n';\nprompt += '      \"scenes\": [{ \"sceneNum\": 1, \"description\": \"what happens\", \"duration\": \"5s\" }],\\n';\nprompt += '      \"imagePrompt\": \"detailed AI image generation prompt\",\\n';\nprompt += '      \"voiceoverScript\": \"full voiceover text\",\\n';\nprompt += '      \"musicMood\": \"upbeat/dramatic/calm\",\\n';\nprompt += '      \"caption\": \"social media caption\",\\n';\nprompt += '      \"hashtags\": [\"#tag1\", \"#tag2\"]\\n';\nprompt += '    }\\n';\nprompt += '  ]\\n';\nprompt += '}';\n\nreturn { prompt, today, topic, count };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-3442-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerate",
+      "name": "Run Claude AI to generate video concepts",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-3442-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude AI output and strip fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiGenerate.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { videos: [] }; }"
+      }
+    },
+    {
+      "id": "prepareSheetRows",
+      "name": "Prepare video concept rows for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = $.steps.buildPrompt.output.today;\nconst topic = $.steps.buildPrompt.output.topic;\nconst videos = ai.videos || [];\n\nconst headerRow = ['Date', 'Topic', 'Title', 'Hook', 'Scenes', 'Image Prompt', 'Voiceover Script', 'Music Mood', 'Caption', 'Hashtags', 'Status'];\nconst rows = [headerRow];\n\nvideos.forEach(v => {\n  const scenesText = (v.scenes || []).map(s => 'Scene ' + s.sceneNum + ' (' + (s.duration || '') + '): ' + s.description).join('; ');\n  rows.push([\n    today,\n    topic,\n    v.title || '',\n    v.hook || '',\n    scenesText,\n    v.imagePrompt || '',\n    v.voiceoverScript || '',\n    v.musicMood || '',\n    v.caption || '',\n    (v.hashtags || []).join(' '),\n    'Generated'\n  ]);\n});\n\nreturn { rows, videoCount: videos.length, videos };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save video concepts to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.sheetName",
+          "values": "$.steps.prepareSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildDiscordMessage",
+      "name": "Build Discord embed for video concepts",
+      "type": "code",
+      "code": {
+        "source": "const videos = $.steps.prepareSheetRows.output.videos || [];\nconst topic = $.steps.buildPrompt.output.topic;\nconst today = $.steps.buildPrompt.output.today;\n\nconst embeds = [];\nvideos.slice(0, 3).forEach((v, i) => {\n  embeds.push({\n    title: 'Video ' + (i + 1) + ': ' + (v.title || 'Untitled'),\n    description: '**Hook:** ' + (v.hook || '') + '\\n\\n**Script Preview:** ' + (v.voiceoverScript || '').slice(0, 300) + '\\n\\n**Caption:** ' + (v.caption || '') + '\\n\\n' + (v.hashtags || []).join(' '),\n    color: 5814783,\n    fields: [\n      { name: 'Music Mood', value: v.musicMood || 'N/A', inline: true },\n      { name: 'Scenes', value: String((v.scenes || []).length), inline: true }\n    ],\n    footer: { text: 'AI Video Generator | ' + today }\n  });\n});\n\nconst contentText = 'New AI Video Concepts Generated for: **' + topic + '** (' + videos.length + ' videos)';\nreturn { content: contentText.slice(0, 2000), embeds };"
+      }
+    },
+    {
+      "id": "postToDiscord",
+      "name": "Post video concepts to Discord",
+      "type": "action",
+      "action": {
+        "platform": "discord",
+        "actionId": "conn_mod_def::GJ2V63KF4zs::ftkHHNGaTlyiikolAQZ0tA",
+        "connectionKey": "$.input.discordKey",
+        "pathVariables": {
+          "channelId": "$.input.discordChannelId"
+        },
+        "data": {
+          "content": "$.steps.buildDiscordMessage.output.content",
+          "embeds": "$.steps.buildDiscordMessage.output.embeds"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message for video concepts",
+      "type": "code",
+      "code": {
+        "source": "const videos = $.steps.prepareSheetRows.output.videos || [];\nconst topic = $.steps.buildPrompt.output.topic;\nconst today = $.steps.buildPrompt.output.today;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'AI Video Concepts: ' + topic, emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Videos Generated:*\\n' + videos.length },\n  { type: 'mrkdwn', text: '*Date:*\\n' + today }\n] });\nblocks.push({ type: 'divider' });\n\nvideos.slice(0, 5).forEach((v, i) => {\n  let text = '*' + (i + 1) + '. ' + (v.title || 'Untitled') + '*\\n';\n  text += 'Hook: ' + (v.hook || '') + '\\n';\n  text += 'Script: ' + (v.voiceoverScript || '').slice(0, 200) + '...\\n';\n  text += 'Music: ' + (v.musicMood || 'N/A') + ' | Scenes: ' + (v.scenes || []).length + '\\n';\n  text += (v.hashtags || []).join(' ');\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n});\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI | One CLI | Saved to Google Sheets' }] });\n\nconst fallbackText = 'AI Video Concepts: ' + videos.length + ' videos generated for ' + topic;\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post video concepts to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

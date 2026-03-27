@@ -1,0 +1,178 @@
+{
+  "key": "n8n-6067-seo-blog-posts",
+  "name": "SEO Blog Posts \u2014 Exa Keyword Research + Claude Writing + Sheets Tracking",
+  "description": "Uses Exa for keyword research and competitive analysis, Claude AI to write SEO-optimized blog posts with proper headings and meta tags, and saves the results to Google Sheets for content tracking.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 6067,
+    "url": "https://n8n.io/workflows/6067",
+    "originalName": "Auto-generate SEO blog posts with Perplexity, GPT, Leonardo & WordPress",
+    "totalViews": 39230,
+    "rank": 159,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for keyword research",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving posts",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for post notifications"
+    },
+    "spreadsheetUrl": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets URL to save generated posts (columns: Date, Keyword, Title, MetaDescription, WordCount, Status)"
+    },
+    "sheetName": {
+      "type": "string",
+      "required": false,
+      "default": "Sheet1",
+      "description": "Sheet tab name"
+    },
+    "keyword": {
+      "type": "string",
+      "required": true,
+      "description": "Target SEO keyword or topic (e.g. 'best project management tools 2025')"
+    },
+    "targetWordCount": {
+      "type": "number",
+      "required": false,
+      "default": 1500,
+      "description": "Target word count for the blog post"
+    }
+  },
+  "steps": [
+    {
+      "id": "researchKeyword",
+      "name": "Research keyword with Exa for competitive analysis",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.keyword",
+          "numResults": 5,
+          "type": "auto",
+          "contents": {
+            "text": true
+          }
+        }
+      }
+    },
+    {
+      "id": "parseResearch",
+      "name": "Parse Exa research results for SEO context",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.researchKeyword.response || {};\nconst data = resp.data || resp;\nconst results = data.results || [];\n\nlet competitorContent = '';\nconst competitorTitles = [];\n\nresults.slice(0, 5).forEach((r, i) => {\n  const title = r.title || 'Untitled';\n  const url = r.url || '';\n  const text = (r.text || '').slice(0, 1500);\n  competitorContent += 'Competitor ' + (i + 1) + ': ' + title + '\\n';\n  competitorContent += 'URL: ' + url + '\\n';\n  competitorContent += 'Content preview: ' + text + '\\n\\n';\n  competitorTitles.push(title);\n});\n\nreturn { competitorContent, competitorTitles, competitorCount: results.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude SEO blog post prompt",
+      "type": "code",
+      "code": {
+        "source": "const keyword = $.input.keyword;\nconst wordCount = $.input.targetWordCount || 1500;\nconst research = $.steps.parseResearch.output;\n\nlet prompt = 'You are an expert SEO content writer. Write a comprehensive, SEO-optimized blog post that outranks the competition.\\n\\n';\nprompt += 'TARGET KEYWORD: ' + keyword + '\\n';\nprompt += 'TARGET WORD COUNT: ' + wordCount + '\\n\\n';\nprompt += 'COMPETITOR ANALYSIS:\\n' + research.competitorContent + '\\n';\nprompt += 'COMPETITOR TITLES: ' + research.competitorTitles.join(', ') + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Write a title that is better than competitors (include target keyword)\\n';\nprompt += '- Write a meta description under 160 characters with the keyword\\n';\nprompt += '- Use H2 and H3 headings with keyword variations\\n';\nprompt += '- Include an introduction, 4-6 main sections, and conclusion\\n';\nprompt += '- Use HTML formatting (h2, h3, p, ul/li, strong)\\n';\nprompt += '- Add internal linking suggestions and a FAQ section\\n';\nprompt += '- Make content comprehensive, going beyond what competitors cover\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"SEO-optimized title\",\\n';\nprompt += '  \"metaDescription\": \"Under 160 chars with keyword\",\\n';\nprompt += '  \"content\": \"Full HTML blog post content\",\\n';\nprompt += '  \"headings\": [\"H2 heading 1\", \"H2 heading 2\"],\\n';\nprompt += '  \"wordCount\": 1500,\\n';\nprompt += '  \"primaryKeyword\": \"main keyword\",\\n';\nprompt += '  \"secondaryKeywords\": [\"related kw1\", \"related kw2\"],\\n';\nprompt += '  \"faqQuestions\": [\"FAQ question 1\"],\\n';\nprompt += '  \"seoScore\": \"estimated SEO readiness 1-10\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-6067-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiWrite",
+      "name": "Run Claude AI to write SEO blog post",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-6067-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip code fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiWrite.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'SEO Post: ' + $.input.keyword, metaDescription: '', content: raw, headings: [], wordCount: 0, primaryKeyword: $.input.keyword, secondaryKeywords: [], faqQuestions: [], seoScore: 'N/A' }; }"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save SEO post data to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetUrl": "$.input.spreadsheetUrl",
+          "sheetName": "$.input.sheetName",
+          "values": {
+            "Date": "new Date().toISOString().split('T')[0]",
+            "Keyword": "$.steps.parseAI.output.primaryKeyword",
+            "Title": "$.steps.parseAI.output.title",
+            "Meta Description": "$.steps.parseAI.output.metaDescription",
+            "Word Count": "$.steps.parseAI.output.wordCount",
+            "SEO Score": "$.steps.parseAI.output.seoScore",
+            "Secondary Keywords": "$.steps.parseAI.output.secondaryKeywords.join(', ')",
+            "Status": "draft"
+          }
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit SEO post summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'SEO Blog Post Generated', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + (ai.title || 'Untitled') + '*' } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Keyword:*\\n' + (ai.primaryKeyword || 'N/A') },\n  { type: 'mrkdwn', text: '*Word Count:*\\n' + (ai.wordCount || 0) }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*SEO Score:*\\n' + (ai.seoScore || 'N/A') + '/10' },\n  { type: 'mrkdwn', text: '*Headings:*\\n' + (ai.headings || []).length + ' sections' }\n] });\nblocks.push({ type: 'divider' });\n\nif (ai.metaDescription) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Meta Description:*\\n' + ai.metaDescription } });\n}\n\nif (ai.secondaryKeywords && ai.secondaryKeywords.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Secondary Keywords:*\\n' + ai.secondaryKeywords.join(', ') } });\n}\n\nif (ai.headings && ai.headings.length > 0) {\n  let outlineText = '*Post Outline:*\\n';\n  ai.headings.forEach((h, i) => { outlineText += (i + 1) + '. ' + h + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: outlineText.slice(0, 1500) } });\n}\n\nif (ai.faqQuestions && ai.faqQuestions.length > 0) {\n  let faqText = '*FAQ Section:*\\n';\n  ai.faqQuestions.slice(0, 3).forEach(q => { faqText += '- ' + q + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: faqText.slice(0, 1000) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa Research + Claude AI + Google Sheets' }] });\n\nconst fallback = 'SEO Post: ' + (ai.title || '') + ' (' + (ai.wordCount || 0) + ' words, score: ' + (ai.seoScore || 'N/A') + ')';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post SEO summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,166 @@
+{
+  "key": "n8n-1900-openai-examples-5in1",
+  "name": "AI multi-tool showcase: chat, summarize, translate, code, and extract",
+  "description": "Demonstrates five AI capabilities in one flow: text chat/Q&A, content summarization, language translation, code generation, and data extraction. Runs all through Claude AI, compiles results, saves to Google Sheets, and posts a showcase to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1900,
+    "url": "https://n8n.io/workflows/1900",
+    "originalName": "OpenAI examples: ChatGPT, DALLE-2, Whisper-1 \u2013 5-in-1",
+    "totalViews": 26594,
+    "rank": 237,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "googleSheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving results",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting showcase",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for AI showcase results"
+    },
+    "chatQuestion": {
+      "type": "string",
+      "required": false,
+      "default": "What are the top 3 trends in AI for 2026?",
+      "description": "Question for the chat/Q&A demo"
+    },
+    "textToSummarize": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Text to summarize (leave empty for a default sample)"
+    },
+    "translateText": {
+      "type": "string",
+      "required": false,
+      "default": "Hello, how are you today?",
+      "description": "Text to translate"
+    },
+    "translateTo": {
+      "type": "string",
+      "required": false,
+      "default": "Spanish, French, Japanese",
+      "description": "Target languages (comma-separated)"
+    },
+    "codeTask": {
+      "type": "string",
+      "required": false,
+      "default": "Write a Python function that checks if a string is a palindrome",
+      "description": "Programming task for code generation"
+    },
+    "textToExtract": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Text to extract structured data from"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build 5-in-1 AI showcase prompt",
+      "type": "code",
+      "code": {
+        "source": "const q = $.input.chatQuestion || 'What are the top 3 trends in AI for 2026?';\nconst summarizeText = $.input.textToSummarize || 'Artificial intelligence has rapidly evolved from a niche research topic to a mainstream technology that impacts every industry. In 2026, we see AI being used in healthcare for drug discovery, in finance for fraud detection, in education for personalized learning, and in manufacturing for predictive maintenance. The global AI market is expected to exceed $500 billion, with generative AI leading growth.';\nconst translateText = $.input.translateText || 'Hello, how are you today?';\nconst translateTo = $.input.translateTo || 'Spanish, French, Japanese';\nconst codeTask = $.input.codeTask || 'Write a Python function that checks if a string is a palindrome';\nconst extractText = $.input.textToExtract || 'John Smith, CEO of TechCorp (john@techcorp.com, +1-555-0123) met with Sarah Jones from InnovateLabs on March 15, 2026 to discuss a $2.5M partnership deal for AI-powered analytics.';\n\nlet prompt = 'You are a versatile AI assistant. Perform these 5 tasks and return results for each.\\n\\n';\nprompt += 'TASK 1 - CHAT Q&A:\\nQuestion: ' + q + '\\n\\n';\nprompt += 'TASK 2 - SUMMARIZE:\\nText: ' + summarizeText + '\\n\\n';\nprompt += 'TASK 3 - TRANSLATE to ' + translateTo + ':\\nText: ' + translateText + '\\n\\n';\nprompt += 'TASK 4 - CODE GENERATION:\\nTask: ' + codeTask + '\\n\\n';\nprompt += 'TASK 5 - DATA EXTRACTION:\\nText: ' + extractText + '\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"chat\": { \"question\": \"\", \"answer\": \"\" },\\n';\nprompt += '  \"summary\": { \"original\": \"\", \"summary\": \"\", \"keyPoints\": [] },\\n';\nprompt += '  \"translations\": [{ \"language\": \"\", \"translation\": \"\" }],\\n';\nprompt += '  \"code\": { \"task\": \"\", \"language\": \"\", \"code\": \"\", \"explanation\": \"\" },\\n';\nprompt += '  \"extraction\": { \"people\": [{ \"name\": \"\", \"role\": \"\", \"organization\": \"\" }], \"emails\": [], \"phones\": [], \"amounts\": [], \"dates\": [], \"summary\": \"\" }\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1900-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiShowcase",
+      "name": "Run Claude AI 5-in-1 showcase",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1900-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiShowcase.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { chat: { question: '', answer: raw.slice(0, 500) }, summary: { summary: '' }, translations: [], code: { code: '' }, extraction: { people: [], emails: [], phones: [], amounts: [], dates: [] } }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build spreadsheet with all results",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst rows = [];\nrows.push(['Chat Q&A', ai.chat?.question || '', (ai.chat?.answer || '').slice(0, 500)]);\nrows.push(['Summary', '', (ai.summary?.summary || '').slice(0, 500)]);\nconst translations = ai.translations || [];\ntranslations.forEach(function(t) {\n  rows.push(['Translation (' + t.language + ')', '', t.translation || '']);\n});\nrows.push(['Code Generation', ai.code?.language || '', (ai.code?.code || '').slice(0, 500)]);\nrows.push(['Data Extraction', '', (ai.extraction?.summary || '').slice(0, 500)]);\nreturn { rows: rows };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save showcase results to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.googleSheetsKey",
+        "data": {
+          "title": "AI Capabilities Showcase",
+          "sheets": [
+            {
+              "title": "Results",
+              "headers": [
+                "Task",
+                "Input",
+                "Output"
+              ],
+              "rows": "$.steps.buildSheetRows.output.rows"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack showcase post",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'AI Capabilities Showcase (5-in-1)', emoji: true } });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*1. Chat Q&A*\\n_Q: ' + (ai.chat?.question || '').slice(0, 100) + '_\\nA: ' + (ai.chat?.answer || '').slice(0, 400) } });\nblocks.push({ type: 'divider' });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*2. Summary*\\n' + (ai.summary?.summary || '').slice(0, 400) } });\nblocks.push({ type: 'divider' });\n\nconst translations = ai.translations || [];\nlet transText = '*3. Translations*\\n';\ntranslations.slice(0, 3).forEach(function(t) { transText += '*' + t.language + ':* ' + t.translation + '\\n'; });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: transText.slice(0, 1800) } });\nblocks.push({ type: 'divider' });\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*4. Code*\\n```' + (ai.code?.code || '').slice(0, 500) + '```' } });\nblocks.push({ type: 'divider' });\n\nlet extractText = '*5. Data Extraction*\\n';\nconst people = ai.extraction?.people || [];\nif (people.length > 0) extractText += 'People: ' + people.map(function(p) { return p.name + ' (' + p.role + ')'; }).join(', ') + '\\n';\nconst emails = ai.extraction?.emails || [];\nif (emails.length > 0) extractText += 'Emails: ' + emails.join(', ') + '\\n';\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: extractText.slice(0, 1800) } });\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Full results in Google Sheets | Powered by Claude AI' }] });\nconst fallbackText = 'AI 5-in-1 Showcase: Chat, Summary, Translate, Code, Extract';\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post showcase to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

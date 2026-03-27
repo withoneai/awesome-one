@@ -1,0 +1,219 @@
+{
+  "key": "n8n-2883-deep-research-agent",
+  "name": "Deep Research Agent",
+  "description": "Run multi-query Exa searches, deep-scrape top results with Firecrawl, and have Claude AI synthesize a comprehensive research report. Posts the final report to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2883,
+    "url": "https://n8n.io/workflows/2883",
+    "originalName": "Open deep research - AI-powered autonomous research workflow",
+    "totalViews": 33017,
+    "rank": 185,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the research report"
+    },
+    "researchTopic": {
+      "type": "string",
+      "required": true,
+      "description": "The research topic or question to investigate"
+    },
+    "depth": {
+      "type": "string",
+      "required": false,
+      "default": "standard",
+      "description": "Research depth: 'quick' (3 queries), 'standard' (5 queries), or 'deep' (8 queries)"
+    }
+  },
+  "steps": [
+    {
+      "id": "generateQueries",
+      "name": "Generate research search queries",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar topic = fb($.input.researchTopic, '');\nvar depth = fb($.input.depth, 'standard');\n\nvar queryCount = 5;\nif (depth === 'quick') queryCount = 3;\nif (depth === 'deep') queryCount = 8;\n\nvar prompt = 'Generate ' + queryCount + ' diverse search queries to thoroughly research the following topic. Each query should explore a different angle.\\n\\n';\nprompt += 'TOPIC: ' + topic + '\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{ \"queries\": [\"query 1\", \"query 2\"] }';\n\nreturn { prompt: prompt, topic: topic, depth: depth, queryCount: queryCount };"
+      }
+    },
+    {
+      "id": "writeQueryPrompt",
+      "name": "Save query generation prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/research-queries-prompt.txt",
+        "content": "$.steps.generateQueries.output.prompt"
+      }
+    },
+    {
+      "id": "aiGenerateQueries",
+      "name": "Generate search queries with Claude",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/research-queries-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseQueries",
+      "name": "Parse generated queries",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiGenerateQueries.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry {\n  var parsed = JSON.parse(raw);\n  return { queries: fb(parsed.queries, []) };\n} catch(e) {\n  return { queries: [$.input.researchTopic] };\n}"
+      }
+    },
+    {
+      "id": "searchExa",
+      "name": "Run Exa search with primary query",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "$.input.researchTopic",
+          "numResults": 10,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "pickTopUrls",
+      "name": "Pick top URLs for deep scraping",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar results = fb(fb($.steps.searchExa.response, {}).results, []);\nvar urls = [];\nresults.slice(0, 3).forEach(function(r) {\n  if (r.url) urls.push(r.url);\n});\n\nvar searchSummary = '';\nresults.forEach(function(r, i) {\n  searchSummary += (i + 1) + '. ' + (fb(r.title, r.url)) + '\\n';\n  searchSummary += '   ' + (fb(r.text, '')).slice(0, 200) + '\\n\\n';\n});\n\nreturn { urls: urls, searchSummary: searchSummary, resultCount: results.length };"
+      }
+    },
+    {
+      "id": "deepScrape",
+      "name": "Deep scrape top results with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.pickTopUrls.output.urls",
+        "as": "pageUrl",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapePage",
+            "name": "Scrape page content",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.pageUrl",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileResearch",
+      "name": "Compile all research data",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nfunction gd(a, b) { if (a) { return b; } return a; }\nvar searchSummary = $.steps.pickTopUrls.output.searchSummary;\nvar urls = $.steps.pickTopUrls.output.urls;\nvar iterations = fb(fb($.steps.deepScrape.response, {}).iterations, []);\nvar topic = $.input.researchTopic;\n\nvar deepContent = '';\niterations.forEach(function(iter, i) {\n  var url = fb(urls[i], 'Unknown');\n  var resp = null; try { if (iter.scrapePage) { if (iter.scrapePage.response) { resp = iter.scrapePage.response.data; } } } catch(ex) { resp = null; };\n  if (resp) { if (resp.markdown) {\n    deepContent += '=== DEEP DIVE ' + (i + 1) + ' ===\\n';\n    deepContent += 'URL: ' + url + '\\n';\n    deepContent += resp.markdown.slice(0, 4000) + '\\n\\n';\n  }\n});\n\nvar allResearch = 'RESEARCH TOPIC: ' + topic + '\\n\\n';\nallResearch += 'SEARCH RESULTS OVERVIEW:\\n' + searchSummary + '\\n';\nallResearch += 'DEEP SCRAPED CONTENT:\\n' + deepContent;\n\nreturn { allResearch: allResearch, topic: topic };"
+      }
+    },
+    {
+      "id": "buildSynthesisPrompt",
+      "name": "Build synthesis prompt for Claude",
+      "type": "code",
+      "code": {
+        "source": "var data = $.steps.compileResearch.output;\n\nvar prompt = 'You are a senior research analyst. Synthesize the following research data into a comprehensive, well-structured report.\\n\\n';\nprompt += data.allResearch + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Write an executive summary\\n';\nprompt += '- Organize findings into clear sections\\n';\nprompt += '- Highlight key insights and trends\\n';\nprompt += '- Note conflicting information from different sources\\n';\nprompt += '- Include recommendations and next steps\\n';\nprompt += '- Cite sources where applicable\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"title\": \"report title\",\\n';\nprompt += '  \"executiveSummary\": \"3-5 sentence executive summary\",\\n';\nprompt += '  \"sections\": [\\n';\nprompt += '    { \"heading\": \"section title\", \"content\": \"section content\", \"keyInsight\": \"main takeaway\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"keyFindings\": [\"finding 1\", \"finding 2\"],\\n';\nprompt += '  \"trends\": [\"trend 1\"],\\n';\nprompt += '  \"recommendations\": [\"recommendation 1\"],\\n';\nprompt += '  \"sources\": [{ \"title\": \"source title\", \"url\": \"source url\", \"relevance\": \"why it matters\" }],\\n';\nprompt += '  \"confidence\": \"high/medium/low\",\\n';\nprompt += '  \"gapsInResearch\": [\"areas that need more investigation\"]\\n';\nprompt += '}';\n\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "writeSynthesisPrompt",
+      "name": "Save synthesis prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/research-synthesis-prompt.txt",
+        "content": "$.steps.buildSynthesisPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiSynthesize",
+      "name": "Synthesize research report with Claude",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/research-synthesis-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseReport",
+      "name": "Parse research report",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiSynthesize.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { title: 'Research Report', executiveSummary: raw, sections: [], keyFindings: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseReport.output;\nvar topic = $.input.researchTopic;\n\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':mag: ' + (fb(ai.title, 'Research Report')), emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Executive Summary*\\n' + (fb(ai.executiveSummary, '')) } });\n\nvar confidenceIcon = ':white_circle:';\nif (ai.confidence === 'high') confidenceIcon = ':large_green_circle:';\nif (ai.confidence === 'medium') confidenceIcon = ':large_orange_circle:';\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: confidenceIcon + ' *Confidence:* ' + (fb(ai.confidence, 'N/A')) }] });\nblocks.push({ type: 'divider' });\n\nvar sections = fb(ai.sections, []);\nsections.forEach(function(s) {\n  var sText = '*' + s.heading + '*\\n' + (fb(s.content, '')).slice(0, 500);\n  if (s.keyInsight) sText += '\\n:bulb: _Key insight: ' + s.keyInsight + '_';\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: sText } });\n});\n\nvar findings = fb(ai.keyFindings, []);\nif (findings.length > 0) {\n  blocks.push({ type: 'divider' });\n  var findText = '*:dart: Key Findings*\\n';\n  findings.forEach(function(f, i) { findText += (i + 1) + '. ' + f + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: findText } });\n}\n\nvar recs = fb(ai.recommendations, []);\nif (recs.length > 0) {\n  var recText = '*:pushpin: Recommendations*\\n';\n  recs.forEach(function(r, i) { recText += (i + 1) + '. ' + r + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: recText } });\n}\n\nvar gaps = fb(ai.gapsInResearch, []);\nif (gaps.length > 0) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':question: *Research gaps:* ' + gaps.join(', ') }] });\n}\n\nvar sources = fb(ai.sources, []);\nif (sources.length > 0) {\n  var srcText = '*Sources:* ';\n  sources.slice(0, 5).forEach(function(s, i) {\n    srcText += '<' + (fb(s.url, '#')) + '|' + (fb(s.title, 'Source ') + (i + 1)) + '> ';\n  });\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: srcText }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa + Firecrawl + Claude AI + One CLI' }] });\n\nvar fallback = 'Research Report: ' + (fb(ai.title, topic));\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post research report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

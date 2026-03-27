@@ -1,0 +1,113 @@
+{
+  "key": "n8n-2098-ai-chat-with-memory",
+  "name": "AI Chat with Memory via Slack",
+  "description": "Takes a user question and optional conversation context, uses Claude AI to generate a contextually aware response that maintains conversation continuity, and posts the response to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2098,
+    "url": "https://n8n.io/workflows/2098",
+    "originalName": "Chat with OpenAI Assistant (by adding a memory)",
+    "totalViews": 65964,
+    "rank": 91,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting the response",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel to post the AI response"
+    },
+    "question": {
+      "type": "string",
+      "required": true,
+      "description": "The user's question or message to the AI"
+    },
+    "conversationContext": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Previous conversation context or memory (e.g. prior Q&A pairs, user preferences, session notes)"
+    },
+    "systemRole": {
+      "type": "string",
+      "required": false,
+      "default": "helpful assistant",
+      "description": "AI persona/role (e.g. 'helpful assistant', 'coding expert', 'creative writer', 'business advisor')"
+    },
+    "userName": {
+      "type": "string",
+      "required": false,
+      "default": "User",
+      "description": "Name of the person asking the question"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt with memory context",
+      "type": "code",
+      "code": {
+        "source": "const question = $.input.question || '';\nconst context = $.input.conversationContext || '';\nconst role = $.input.systemRole || 'helpful assistant';\nconst userName = $.input.userName || 'User';\nconst now = new Date().toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' });\n\nlet prompt = 'You are a ' + role + '. You have memory of previous conversations and should use this context to provide better, more personalized responses.\\n\\n';\nprompt += 'CURRENT DATE/TIME: ' + now + '\\n';\nprompt += 'USER NAME: ' + userName + '\\n\\n';\n\nif (context) {\n  prompt += 'CONVERSATION MEMORY / CONTEXT:\\n';\n  prompt += context + '\\n\\n';\n  prompt += 'Use the above context to inform your response. Reference previous topics when relevant. Show that you remember prior conversations.\\n\\n';\n}\n\nprompt += 'CURRENT QUESTION FROM ' + userName + ':\\n' + question + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Answer the question thoughtfully and completely\\n';\nprompt += '- If context is provided, reference it naturally (do not just summarize the context)\\n';\nprompt += '- If the question relates to a previous conversation topic, build upon it\\n';\nprompt += '- Be conversational and engaging\\n';\nprompt += '- Use Slack mrkdwn: *bold* (NOT **bold**), _italic_, ```code```, numbered lists\\n';\nprompt += '- Keep response focused and useful\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"response\": \"your complete response using Slack mrkdwn formatting\",\\n';\nprompt += '  \"memoryUpdate\": \"brief summary of this exchange to add to memory for future context (1-2 sentences)\",\\n';\nprompt += '  \"topicTags\": [\"topic1\", \"topic2\"],\\n';\nprompt += '  \"followUpSuggestions\": [\"natural follow-up question 1\", \"question 2\"],\\n';\nprompt += '  \"usedContext\": true,\\n';\nprompt += '  \"responseType\": \"answer|explanation|suggestion|creative|code|analysis\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2098-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiChat",
+      "name": "Run Claude AI chat response",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2098-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiChat.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { response: raw, memoryUpdate: '', topicTags: [], followUpSuggestions: [], usedContext: false, responseType: 'answer' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit chat response",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst question = $.input.question;\nconst userName = $.input.userName || 'User';\nconst hasContext = $.input.conversationContext ? true : false;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'AI Chat Response', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*' + userName + ' asked:* ' + question.slice(0, 500) } });\n\nconst contextIndicator = hasContext ? ':brain: _Using conversation memory_' : ':new: _New conversation_';\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: contextIndicator + ' | Type: ' + (ai.responseType || 'answer') }] });\n\nblocks.push({ type: 'divider' });\n\nconst response = (ai.response || 'No response generated.').slice(0, 2900);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: response } });\n\nif (ai.memoryUpdate) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':floppy_disk: *Memory Update:* ' + ai.memoryUpdate } });\n}\n\nif (ai.followUpSuggestions && ai.followUpSuggestions.length > 0) {\n  blocks.push({ type: 'divider' });\n  let fqText = '*Suggested Follow-ups:*\\n';\n  ai.followUpSuggestions.forEach((q, i) => { fqText += (i + 1) + '. ' + q + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: fqText.slice(0, 1800) } });\n}\n\nif (ai.topicTags && ai.topicTags.length > 0) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Topics: ' + ai.topicTags.join(', ') + ' | Powered by Claude AI | One CLI' }] });\n} else {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI | One CLI' }] });\n}\n\nconst fallbackText = 'AI Chat: ' + (ai.response || '').slice(0, 100);\nreturn { blocks, fallbackText, memoryUpdate: ai.memoryUpdate || '' };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post AI response to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

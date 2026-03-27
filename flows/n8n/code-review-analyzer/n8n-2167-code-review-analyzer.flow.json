@@ -1,0 +1,112 @@
+{
+  "key": "n8n-2167-code-review-analyzer",
+  "name": "AI Code Review Analyzer",
+  "description": "Submit a code snippet or file for Claude AI to review. Gets a thorough analysis covering bugs, security issues, performance, style, and improvement suggestions, posted to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2167,
+    "url": "https://n8n.io/workflows/2167",
+    "originalName": "ChatGPT Automatic Code Review in Gitlab MR",
+    "totalViews": 32975,
+    "rank": 186,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the code review"
+    },
+    "code": {
+      "type": "string",
+      "required": true,
+      "description": "Code snippet or code content to review"
+    },
+    "language": {
+      "type": "string",
+      "required": false,
+      "default": "auto-detect",
+      "description": "Programming language (e.g. 'python', 'javascript', 'go'). Leave blank for auto-detection."
+    },
+    "context": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "Additional context about the code (e.g. 'This is a REST API handler', 'Part of a payment processing pipeline')"
+    },
+    "focusAreas": {
+      "type": "string",
+      "required": false,
+      "default": "bugs,security,performance,readability",
+      "description": "Comma-separated review focus areas"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPrompt",
+      "name": "Build code review prompt",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar code = fb($.input.code, '');\nvar language = fb($.input.language, 'auto-detect');\nvar context = fb($.input.context, '');\nvar focusAreas = fb($.input.focusAreas, 'bugs,security,performance,readability');\n\nvar prompt = 'You are a senior software engineer conducting a thorough code review. Analyze the following code and provide detailed feedback.\\n\\n';\nprompt += 'LANGUAGE: ' + language + '\\n';\nif (context) prompt += 'CONTEXT: ' + context + '\\n';\nprompt += 'FOCUS AREAS: ' + focusAreas + '\\n\\n';\nprompt += 'CODE TO REVIEW:\\n```\\n' + code + '\\n```\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Identify bugs, logic errors, and edge cases\\n';\nprompt += '- Flag security vulnerabilities\\n';\nprompt += '- Suggest performance improvements\\n';\nprompt += '- Comment on code style and readability\\n';\nprompt += '- Provide specific, actionable suggestions with code examples\\n';\nprompt += '- Rate the overall code quality\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"language\": \"detected or specified language\",\\n';\nprompt += '  \"overallRating\": \"A/B/C/D/F\",\\n';\nprompt += '  \"summary\": \"2-3 sentence assessment\",\\n';\nprompt += '  \"issues\": [\\n';\nprompt += '    { \"severity\": \"critical/warning/info\", \"category\": \"bug/security/performance/style\", \"line\": \"approximate line or location\", \"description\": \"what the issue is\", \"suggestion\": \"how to fix it\", \"codeExample\": \"optional improved code snippet\" }\\n';\nprompt += '  ],\\n';\nprompt += '  \"strengths\": [\"good things about the code\"],\\n';\nprompt += '  \"improvements\": [\"general improvement suggestions\"],\\n';\nprompt += '  \"securityNotes\": \"security-specific observations\",\\n';\nprompt += '  \"testingSuggestions\": [\"test cases to add\"]\\n';\nprompt += '}';\n\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "writePromptFile",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/code-review-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiReview",
+      "name": "Run code review with Claude",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/code-review-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseResponse",
+      "name": "Parse Claude response",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar raw = fb($.steps.aiReview.output, '');\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, issues: [], overallRating: '?', strengths: [] }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit message",
+      "type": "code",
+      "code": {
+        "source": "function fb(a, b) { if (a) { return a; } return b; }\nvar ai = $.steps.parseResponse.output;\n\nvar ratingEmoji = ':white_circle:';\nvar rating = (fb(ai.overallRating, '')).toUpperCase();\nif (rating === 'A') ratingEmoji = ':star:';\nif (rating === 'B') ratingEmoji = ':large_green_circle:';\nif (rating === 'C') ratingEmoji = ':large_orange_circle:';\nif (rating === 'D') ratingEmoji = ':red_circle:';\nif (rating === 'F') ratingEmoji = ':no_entry:';\n\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: ':mag: Code Review \u2014 ' + (fb(ai.language, 'Code')), emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: ratingEmoji + ' *Rating: ' + rating + '*\\n' + (fb(ai.summary, '')) } });\nblocks.push({ type: 'divider' });\n\nvar issues = fb(ai.issues, []);\nif (issues.length > 0) {\n  var criticals = issues.filter(function(i) { return i.severity === 'critical'; });\n  var warnings = issues.filter(function(i) { return i.severity === 'warning'; });\n  var infos = issues.filter(function(i) { return i.severity === 'info'; });\n\n  if (criticals.length > 0) {\n    var critText = '*:rotating_light: Critical Issues (' + criticals.length + ')*\\n';\n    criticals.forEach(function(issue) {\n      critText += ':red_circle: *[' + issue.category + ']* ' + issue.description + '\\n';\n      if (issue.line) critText += '  _Location:_ ' + issue.line + '\\n';\n      critText += '  _Fix:_ ' + (fb(issue.suggestion, '')) + '\\n';\n    });\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: critText } });\n  }\n\n  if (warnings.length > 0) {\n    var warnText = '*:warning: Warnings (' + warnings.length + ')*\\n';\n    warnings.forEach(function(issue) {\n      warnText += ':large_orange_circle: *[' + issue.category + ']* ' + issue.description + '\\n';\n      warnText += '  _Fix:_ ' + (fb(issue.suggestion, '')) + '\\n';\n    });\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: warnText } });\n  }\n\n  if (infos.length > 0) {\n    var infoText = '*:information_source: Suggestions (' + infos.length + ')*\\n';\n    infos.forEach(function(issue) {\n      infoText += ':large_blue_circle: *[' + issue.category + ']* ' + issue.description + '\\n';\n    });\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: infoText } });\n  }\n}\n\nvar strengths = fb(ai.strengths, []);\nif (strengths.length > 0) {\n  blocks.push({ type: 'divider' });\n  var strText = '*:muscle: Strengths*\\n';\n  strengths.forEach(function(s) { strText += ':white_check_mark: ' + s + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: strText } });\n}\n\nif (ai.securityNotes) {\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: ':lock: *Security:* ' + ai.securityNotes }] });\n}\n\nvar tests = fb(ai.testingSuggestions, []);\nif (tests.length > 0) {\n  var testText = '*:test_tube: Test Suggestions:* ' + tests.join(', ');\n  blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: testText }] });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Claude AI + One CLI' }] });\n\nvar fallback = 'Code Review: ' + rating + ' \u2014 ' + issues.length + ' issues found';\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post code review to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

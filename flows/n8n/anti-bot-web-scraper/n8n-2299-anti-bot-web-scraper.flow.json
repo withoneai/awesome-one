@@ -1,0 +1,193 @@
+{
+  "key": "n8n-2299-anti-bot-web-scraper",
+  "name": "Scrape any URL without getting blocked using Firecrawl",
+  "description": "Scrapes one or more URLs using Firecrawl (which handles anti-bot technologies), extracts and analyzes the content with Claude AI, saves results to Google Sheets, and notifies Slack with a summary.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2299,
+    "url": "https://n8n.io/workflows/2299",
+    "originalName": "Scrape every URL on the web without getting blocked by Anti-Bot technologies with Scrappey",
+    "totalViews": 28002,
+    "rank": 227,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for web scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "googleSheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving results",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "urls": {
+      "type": "string",
+      "required": true,
+      "description": "Comma-separated list of URLs to scrape (e.g. 'https://example.com,https://other.com')"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for scraping results"
+    },
+    "extractionGoal": {
+      "type": "string",
+      "required": false,
+      "default": "Extract all key information, data, and structured content",
+      "description": "What to extract from the scraped pages"
+    }
+  },
+  "steps": [
+    {
+      "id": "parseUrls",
+      "name": "Parse URL list into array",
+      "type": "code",
+      "code": {
+        "source": "const urlString = $.input.urls || '';\nconst urls = urlString.split(',').map(function(u) { return u.trim(); }).filter(function(u) { return u.length > 0 && (u.startsWith('http://') || u.startsWith('https://')); });\nreturn { urls: urls, urlCount: urls.length };"
+      }
+    },
+    {
+      "id": "scrapePages",
+      "name": "Scrape all URLs with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.parseUrls.output.urls",
+        "as": "pageUrl",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapePage",
+            "name": "Scrape page with Firecrawl",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.pageUrl",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileScrapeResults",
+      "name": "Compile all scraped content",
+      "type": "code",
+      "code": {
+        "source": "const urls = $.steps.parseUrls.output.urls;\nconst iterations = $.steps.scrapePages.response?.iterations || [];\nlet allContent = '';\nlet successCount = 0;\nlet failCount = 0;\nconst pageResults = [];\n\nurls.forEach(function(url, i) {\n  const iter = iterations[i] || {};\n  const resp = iter.scrapePage?.response?.data || iter.scrapePage?.response || {};\n  const md = resp.markdown || resp.content || '';\n\n  if (md) {\n    successCount++;\n    allContent += '=== PAGE ' + (i + 1) + ' ===\\nURL: ' + url + '\\nContent:\\n' + md.slice(0, 3000) + '\\n\\n';\n    pageResults.push([String(i + 1), url, 'success', String(md.length), md.slice(0, 500)]);\n  } else {\n    failCount++;\n    allContent += '=== PAGE ' + (i + 1) + ' (FAILED) ===\\nURL: ' + url + '\\n\\n';\n    pageResults.push([String(i + 1), url, 'failed', '0', '']);\n  }\n});\n\nreturn { allContent: allContent, successCount: successCount, failCount: failCount, totalPages: urls.length, pageResults: pageResults };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude analysis prompt",
+      "type": "code",
+      "code": {
+        "source": "const data = $.steps.compileScrapeResults.output;\nconst goal = $.input.extractionGoal || 'Extract all key information';\n\nlet prompt = 'You are a web data extraction specialist. Analyze scraped content from ' + data.successCount + ' pages.\\n\\n';\nprompt += 'EXTRACTION GOAL: ' + goal + '\\n\\n';\nprompt += data.allContent + '\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"summary\": \"2-3 sentence overall summary\",\\n';\nprompt += '  \"pages\": [{ \"index\": 1, \"url\": \"\", \"title\": \"\", \"keyData\": [\"\"], \"status\": \"success\" }],\\n';\nprompt += '  \"extractedData\": [{ \"category\": \"\", \"items\": [\"\"] }],\\n';\nprompt += '  \"insights\": [\"\"],\\n';\nprompt += '  \"totalDataPoints\": 0\\n';\nprompt += '}';\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2299-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Analyze scraped content with Claude AI",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2299-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw.slice(0, 300), pages: [], extractedData: [], insights: [], totalDataPoints: 0 }; }"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save scraping results to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.googleSheetsKey",
+        "data": {
+          "title": "Web Scraping Results",
+          "sheets": [
+            {
+              "title": "Scraped Pages",
+              "headers": [
+                "#",
+                "URL",
+                "Status",
+                "Content Length",
+                "Preview"
+              ],
+              "rows": "$.steps.compileScrapeResults.output.pageResults"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack summary report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst stats = $.steps.compileScrapeResults.output;\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Web Scraping Report', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Pages Scraped:*\\n' + stats.successCount + '/' + stats.totalPages },\n  { type: 'mrkdwn', text: '*Data Points:*\\n' + (ai.totalDataPoints || 'N/A') }\n] });\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:*\\n' + (ai.summary || '').slice(0, 1800) } });\nif (ai.insights && ai.insights.length > 0) {\n  let insightText = '*Insights:*\\n';\n  ai.insights.slice(0, 5).forEach(function(ins, i) { insightText += (i + 1) + '. ' + ins + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: insightText.slice(0, 1800) } });\n}\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Data saved to Google Sheets | Powered by Firecrawl + Claude AI' }] });\nconst fallbackText = 'Scraping Report: ' + stats.successCount + '/' + stats.totalPages + ' pages - ' + (ai.summary || '').slice(0, 80);\nreturn { blocks, fallbackText };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post scraping report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallbackText",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

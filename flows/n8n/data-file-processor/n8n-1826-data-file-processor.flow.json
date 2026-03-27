@@ -1,0 +1,138 @@
+{
+  "key": "n8n-1826-data-file-processor",
+  "name": "Data File Processor \u2014 Fetch, Transform, and Report to Slack",
+  "description": "Fetches data files from Google Drive, uses Claude AI to analyze and transform the data (summarize, clean, restructure), and posts a structured report to Slack with Block Kit formatting.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1826,
+    "url": "https://n8n.io/workflows/1826",
+    "originalName": "Working with Excel spreadsheet files (xls & xlsx)",
+    "totalViews": 39167,
+    "rank": 160,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "driveKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key",
+      "connection": {
+        "platform": "google-drive"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID to post the data report"
+    },
+    "driveQuery": {
+      "type": "string",
+      "required": false,
+      "default": "mimeType = 'application/vnd.google-apps.spreadsheet' or mimeType contains 'spreadsheet' or mimeType contains 'excel'",
+      "description": "Google Drive query to find data files"
+    },
+    "maxFiles": {
+      "type": "number",
+      "required": false,
+      "default": 3,
+      "description": "Maximum number of files to process"
+    },
+    "transformGoal": {
+      "type": "string",
+      "required": false,
+      "default": "Summarize the data, identify trends, highlight anomalies, and provide key statistics",
+      "description": "What transformation or analysis to perform on the data"
+    }
+  },
+  "steps": [
+    {
+      "id": "listDataFiles",
+      "name": "List data files from Google Drive",
+      "type": "action",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.driveKey",
+        "data": {
+          "q": "$.input.driveQuery",
+          "pageSize": "$.input.maxFiles"
+        }
+      }
+    },
+    {
+      "id": "parseFileList",
+      "name": "Parse file list for analysis",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listDataFiles.response || {};\nconst data = resp.data || resp;\nconst files = data.files || data.items || [];\nconst maxFiles = $.input.maxFiles || 3;\nconst limited = files.slice(0, maxFiles);\n\nconst fileList = limited.map(f => ({\n  id: f.id || '',\n  name: f.name || f.title || 'unknown',\n  mimeType: f.mimeType || '',\n  modifiedTime: f.modifiedTime || '',\n  size: f.size || 0,\n  webViewLink: f.webViewLink || ''\n}));\n\nreturn { files: fileList, totalFound: files.length, processing: fileList.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude data analysis prompt",
+      "type": "code",
+      "code": {
+        "source": "const files = $.steps.parseFileList.output.files;\nconst goal = $.input.transformGoal || 'Summarize the data and identify trends';\n\nlet prompt = 'You are a data analysis specialist. You have received metadata about data files from Google Drive. Analyze the file information and provide a structured data processing report.\\n\\n';\nprompt += 'ANALYSIS GOAL: ' + goal + '\\n\\n';\nprompt += 'DATA FILES:\\n';\nfiles.forEach((f, i) => {\n  prompt += (i + 1) + '. ' + f.name + ' (type: ' + f.mimeType + ', modified: ' + f.modifiedTime + ')\\n';\n  if (f.webViewLink) prompt += '   Link: ' + f.webViewLink + '\\n';\n});\nprompt += '\\nINSTRUCTIONS:\\n';\nprompt += '- For each file, infer the likely data structure from the filename\\n';\nprompt += '- Suggest a transformation plan for each file\\n';\nprompt += '- Provide sample data processing steps\\n';\nprompt += '- Identify potential issues (missing data, format problems)\\n';\nprompt += '- Recommend best practices for working with these file types\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"summary\": \"Overview of data files found\",\\n';\nprompt += '  \"files\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"fileName\": \"name\",\\n';\nprompt += '      \"inferredStructure\": \"columns and data types\",\\n';\nprompt += '      \"transformPlan\": \"suggested transformation steps\",\\n';\nprompt += '      \"potentialIssues\": [\"issue1\"],\\n';\nprompt += '      \"recommendations\": [\"recommendation1\"]\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"overallRecommendations\": [\"cross-file recommendation\"],\\n';\nprompt += '  \"processingComplexity\": \"low/medium/high\"\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1826-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI data analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1826-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output and strip code fences",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { summary: raw, files: [], overallRecommendations: [], processingComplexity: 'unknown' }; }"
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit data report",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst stats = $.steps.parseFileList.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Data File Processing Report', emoji: true } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Files Found:*\\n' + stats.totalFound },\n  { type: 'mrkdwn', text: '*Files Analyzed:*\\n' + stats.processing }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Complexity:*\\n' + (ai.processingComplexity || 'N/A') },\n  { type: 'mrkdwn', text: '*Status:*\\n:white_check_mark: Analysis complete' }\n] });\nblocks.push({ type: 'divider' });\n\nconst summaryText = (ai.summary || 'No summary available.').slice(0, 1800);\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Summary:*\\n' + summaryText } });\n\nif (ai.files && ai.files.length > 0) {\n  blocks.push({ type: 'divider' });\n  ai.files.slice(0, 5).forEach((f, i) => {\n    let text = '*' + (i + 1) + '. ' + (f.fileName || 'File') + '*';\n    text += '\\n:card_index: ' + (f.inferredStructure || 'Unknown structure');\n    text += '\\n:gear: ' + (f.transformPlan || 'No plan').slice(0, 300);\n    if (f.potentialIssues && f.potentialIssues.length > 0) {\n      text += '\\n:warning: Issues: ' + f.potentialIssues.join(', ');\n    }\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 1800) } });\n  });\n}\n\nif (ai.overallRecommendations && ai.overallRecommendations.length > 0) {\n  blocks.push({ type: 'divider' });\n  let recText = '*Recommendations:*\\n';\n  ai.overallRecommendations.slice(0, 4).forEach((r, i) => { recText += (i + 1) + '. ' + r + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: recText.slice(0, 1000) } });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Google Drive + Claude AI + One CLI' }] });\n\nconst fallback = 'Data Report: ' + stats.processing + ' files analyzed - ' + (ai.summary || '').slice(0, 100);\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post data report to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

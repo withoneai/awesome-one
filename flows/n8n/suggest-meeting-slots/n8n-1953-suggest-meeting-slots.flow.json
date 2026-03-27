@@ -1,0 +1,239 @@
+{
+  "key": "n8n-1953-suggest-meeting-slots",
+  "name": "Suggest meeting slots using AI",
+  "description": "Fetches recent Gmail messages to find meeting requests, checks Google Calendar availability for the next few days, uses Claude AI to identify meeting requests and suggest available time slots, then sends a reply via Gmail with proposed meeting times.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 1953,
+    "url": "https://n8n.io/workflows/1953",
+    "originalName": "Suggest meeting slots using AI",
+    "totalViews": 101574,
+    "rank": 50,
+    "replicatedAt": "2026-03-24"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "calendarKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Calendar connection key",
+      "connection": {
+        "platform": "google-calendar"
+      }
+    },
+    "lookbackHours": {
+      "type": "string",
+      "required": false,
+      "default": "24",
+      "description": "How many hours back to scan for meeting requests"
+    },
+    "workingHoursStart": {
+      "type": "string",
+      "required": false,
+      "default": "9",
+      "description": "Start of working hours (24h format, e.g. 9)"
+    },
+    "workingHoursEnd": {
+      "type": "string",
+      "required": false,
+      "default": "17",
+      "description": "End of working hours (24h format, e.g. 17)"
+    },
+    "meetingDuration": {
+      "type": "string",
+      "required": false,
+      "default": "30",
+      "description": "Default meeting duration in minutes"
+    },
+    "senderName": {
+      "type": "string",
+      "required": false,
+      "default": "AI Assistant",
+      "description": "Name to sign the reply email with"
+    }
+  },
+  "steps": [
+    {
+      "id": "getDateBounds",
+      "name": "Calculate date ranges for email search and calendar",
+      "type": "code",
+      "code": {
+        "source": "const now = new Date();\nconst lookbackHours = parseInt($.input.lookbackHours || '24', 10);\nconst lookbackDate = new Date(now.getTime() - lookbackHours * 3600000);\n\nconst calStart = new Date(now);\ncalStart.setHours(0, 0, 0, 0);\nconst calEnd = new Date(now);\ncalEnd.setDate(calEnd.getDate() + 5);\ncalEnd.setHours(23, 59, 59, 999);\n\nconst afterDate = lookbackDate.toISOString().split('T')[0].replace(/-/g, '/');\n\nreturn {\n  gmailQuery: 'is:unread newer_than:' + lookbackHours + 'h',\n  calTimeMin: calStart.toISOString(),\n  calTimeMax: calEnd.toISOString(),\n  today: now.toISOString().split('T')[0],\n  nowISO: now.toISOString()\n};"
+      }
+    },
+    {
+      "id": "listEmails",
+      "name": "Fetch recent unread Gmail messages",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "pathVars": {
+          "userId": "me"
+        },
+        "queryParams": {
+          "q": "$.steps.getDateBounds.output.gmailQuery",
+          "maxResults": 10
+        }
+      }
+    },
+    {
+      "id": "fetchEmailDetails",
+      "name": "Fetch full email content for each message",
+      "type": "loop",
+      "if": "$.steps.listEmails.response.messages && $.steps.listEmails.response.messages.length > 0",
+      "loop": {
+        "over": "$.steps.listEmails.response.messages",
+        "as": "msg",
+        "maxConcurrency": 5,
+        "steps": [
+          {
+            "id": "getEmail",
+            "name": "Get email details",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GJ3ocvMGOS8::D__3BgQSSzWtDUoOqLuX2A",
+              "connectionKey": "$.input.gmailKey",
+              "pathVars": {
+                "userId": "me",
+                "id": "$.loop.msg.id"
+              },
+              "queryParams": {
+                "format": "full",
+                "metadataHeaders": [
+                  "From",
+                  "Subject",
+                  "Date"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "parseEmails",
+      "name": "Extract email content from API responses",
+      "type": "code",
+      "code": {
+        "source": "const iterations = ($.steps.fetchEmailDetails && $.steps.fetchEmailDetails.response && $.steps.fetchEmailDetails.response.iterations) || [];\n\nconst emails = [];\niterations.forEach((iter, i) => {\n  const resp = (iter.getEmail && iter.getEmail.response) ? iter.getEmail.response : null;\n  if (!resp) return;\n\n  const headers = resp.payload && resp.payload.headers ? resp.payload.headers : [];\n  const getHeader = (name) => {\n    const h = headers.find(h => h.name.toLowerCase() === name.toLowerCase());\n    return h ? h.value : '';\n  };\n\n  let body = '';\n  if (resp.payload && resp.payload.body && resp.payload.body.data) {\n    try { body = Buffer.from(resp.payload.body.data, 'base64').toString('utf-8'); } catch(e) { body = ''; }\n  } else if (resp.payload && resp.payload.parts) {\n    const textPart = resp.payload.parts.find(p => p.mimeType === 'text/plain');\n    if (textPart && textPart.body && textPart.body.data) {\n      try { body = Buffer.from(textPart.body.data, 'base64').toString('utf-8'); } catch(e) { body = ''; }\n    }\n  }\n  if (!body) body = resp.snippet || '';\n\n  emails.push({\n    id: resp.id,\n    threadId: resp.threadId,\n    from: getHeader('From'),\n    subject: getHeader('Subject'),\n    date: getHeader('Date'),\n    body: body.slice(0, 1500),\n    snippet: resp.snippet || ''\n  });\n});\n\nreturn { emails, emailCount: emails.length };"
+      }
+    },
+    {
+      "id": "listCalendarEvents",
+      "name": "Fetch calendar events for the next 5 days",
+      "type": "action",
+      "action": {
+        "platform": "google-calendar",
+        "actionId": "conn_mod_def::GJ6RlnIYK20::YzuWSmaVQgurletRDNJavA",
+        "connectionKey": "$.input.calendarKey",
+        "pathVars": {
+          "calendarId": "primary"
+        },
+        "queryParams": {
+          "timeMin": "$.steps.getDateBounds.output.calTimeMin",
+          "timeMax": "$.steps.getDateBounds.output.calTimeMax",
+          "singleEvents": true,
+          "orderBy": "startTime",
+          "maxResults": 50
+        }
+      }
+    },
+    {
+      "id": "formatCalendar",
+      "name": "Format calendar availability",
+      "type": "code",
+      "code": {
+        "source": "const events = $.steps.listCalendarEvents.response.items || [];\nconst workStart = parseInt($.input.workingHoursStart || '9', 10);\nconst workEnd = parseInt($.input.workingHoursEnd || '17', 10);\n\nlet calText = 'EXISTING CALENDAR EVENTS (next 5 days):\\n\\n';\nconst busySlots = [];\n\nevents.forEach(e => {\n  const start = e.start.dateTime || e.start.date;\n  const end = e.end.dateTime || e.end.date;\n  const startDate = new Date(start);\n  const endDate = new Date(end);\n  const dayStr = startDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });\n  const startTime = startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });\n  const endTime = endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });\n  calText += '- ' + dayStr + ': ' + (e.summary || '(busy)') + ' ' + startTime + ' - ' + endTime + '\\n';\n  busySlots.push({ start: startDate.toISOString(), end: endDate.toISOString() });\n});\n\ncalText += '\\nWORKING HOURS: ' + workStart + ':00 - ' + workEnd + ':00\\n';\ncalText += 'BUSY SLOTS: ' + busySlots.length + ' events\\n';\n\nreturn { calText, busySlots, eventCount: events.length, workStart, workEnd };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for meeting analysis",
+      "type": "code",
+      "code": {
+        "source": "const emails = $.steps.parseEmails.output.emails;\nconst calData = $.steps.formatCalendar.output;\nconst duration = $.input.meetingDuration || '30';\nconst today = $.steps.getDateBounds.output.today;\n\nlet emailText = 'RECENT EMAILS:\\n\\n';\nemails.forEach((e, i) => {\n  emailText += '--- EMAIL ' + (i + 1) + ' ---\\n';\n  emailText += 'From: ' + e.from + '\\n';\n  emailText += 'Subject: ' + e.subject + '\\n';\n  emailText += 'Date: ' + e.date + '\\n';\n  emailText += 'Body:\\n' + e.body + '\\n\\n';\n});\n\nlet prompt = 'You are an executive scheduling assistant. Analyze the recent emails below to identify any meeting requests or scheduling inquiries. Then check the calendar availability and suggest appropriate time slots.\\n\\n';\nprompt += 'TODAY: ' + today + '\\n';\nprompt += 'DEFAULT MEETING DURATION: ' + duration + ' minutes\\n\\n';\nprompt += emailText + '\\n';\nprompt += calData.calText + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Identify which emails are requesting meetings or appointments\\n';\nprompt += '- For each meeting request, suggest 3 available time slots that do not conflict with existing events\\n';\nprompt += '- Only suggest slots within working hours\\n';\nprompt += '- Draft a professional reply email for each meeting request\\n';\nprompt += '- If an email is NOT a meeting request, mark it as such\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"meetingRequests\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"emailIndex\": 1,\\n';\nprompt += '      \"from\": \"sender email\",\\n';\nprompt += '      \"subject\": \"email subject\",\\n';\nprompt += '      \"isMeetingRequest\": true,\\n';\nprompt += '      \"meetingTopic\": \"inferred meeting topic\",\\n';\nprompt += '      \"suggestedSlots\": [\\n';\nprompt += '        { \"date\": \"YYYY-MM-DD\", \"startTime\": \"HH:MM\", \"endTime\": \"HH:MM\", \"display\": \"human-readable slot\" }\\n';\nprompt += '      ],\\n';\nprompt += '      \"replyDraft\": \"professional reply email text suggesting the time slots\",\\n';\nprompt += '      \"replySubject\": \"Re: original subject\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"summary\": \"brief summary of findings\",\\n';\nprompt += '  \"totalMeetingRequests\": 0\\n';\nprompt += '}';\n\nreturn { prompt, emailCount: emails.length };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-1953-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI meeting analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-1953-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { meetingRequests: [], summary: raw, totalMeetingRequests: 0 }; }"
+      }
+    },
+    {
+      "id": "prepareReplies",
+      "name": "Prepare reply data for meeting requests",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst emails = $.steps.parseEmails.output.emails;\nconst senderName = $.input.senderName || 'AI Assistant';\n\nconst meetingRequests = (ai.meetingRequests || []).filter(r => r.isMeetingRequest);\n\nconst replies = meetingRequests.map(req => {\n  const emailIdx = req.emailIndex - 1;\n  const originalEmail = emails[emailIdx] || {};\n\n  let fromEmail = originalEmail.from || '';\n  const emailMatch = fromEmail.match(/<([^>]+)>/);\n  if (emailMatch) fromEmail = emailMatch[1];\n  else fromEmail = fromEmail.trim();\n\n  let replyBody = (req.replyDraft || '').trim();\n  if (!replyBody.includes(senderName)) {\n    replyBody += '\\n\\nBest regards,\\n' + senderName;\n  }\n\n  return {\n    to: fromEmail,\n    subject: req.replySubject || ('Re: ' + (originalEmail.subject || 'Meeting Request')),\n    body: replyBody,\n    threadId: originalEmail.threadId || null,\n    messageId: originalEmail.id || null,\n    meetingTopic: req.meetingTopic || '',\n    suggestedSlots: req.suggestedSlots || []\n  };\n}).filter(r => r.to && r.to.includes('@'));\n\nreturn { replies, replyCount: replies.length, summary: ai.summary || '' };"
+      }
+    },
+    {
+      "id": "sendReplies",
+      "name": "Send reply emails for meeting requests",
+      "type": "loop",
+      "if": "$.steps.prepareReplies.output.replies.length > 0",
+      "loop": {
+        "over": "$.steps.prepareReplies.output.replies",
+        "as": "reply",
+        "maxConcurrency": 2,
+        "steps": [
+          {
+            "id": "sendReply",
+            "name": "Send meeting slot suggestion email",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+              "connectionKey": "$.input.gmailKey",
+              "data": {
+                "to": "$.loop.reply.to",
+                "subject": "$.loop.reply.subject",
+                "body": "$.loop.reply.body",
+                "threadId": "$.loop.reply.threadId"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

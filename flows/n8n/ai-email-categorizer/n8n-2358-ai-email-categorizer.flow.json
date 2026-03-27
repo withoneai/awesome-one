@@ -1,0 +1,163 @@
+{
+  "key": "n8n-2358-ai-email-categorizer",
+  "name": "AI email categorizer with Gmail and Slack alerts",
+  "description": "Lists recent Gmail messages, uses Claude AI to categorize each email by type and priority, saves the categorized results to Google Sheets, and posts a summary to Slack.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 2358,
+    "url": "https://n8n.io/workflows/2358",
+    "originalName": "Advanced AI demo (presented at AI Developers #14 meetup)",
+    "totalViews": 26110,
+    "rank": 244,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for listing emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving categorized results",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for posting summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel ID for the categorization summary"
+    },
+    "maxEmails": {
+      "type": "number",
+      "required": false,
+      "default": 20,
+      "description": "Maximum number of recent emails to categorize (default 20)"
+    },
+    "categories": {
+      "type": "string",
+      "required": false,
+      "default": "Work, Personal, Marketing, Notifications, Urgent, Spam",
+      "description": "Comma-separated list of email categories to use"
+    }
+  },
+  "steps": [
+    {
+      "id": "listEmails",
+      "name": "List recent Gmail messages",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "conn_mod_def::GJ3odOE-fdw::ijLww5s-SCSplLQtLpxkrw",
+        "connectionKey": "$.input.gmailKey",
+        "data": {
+          "maxResults": "$.input.maxEmails",
+          "q": "newer_than:1d"
+        }
+      }
+    },
+    {
+      "id": "extractEmails",
+      "name": "Extract email metadata for categorization",
+      "type": "code",
+      "code": {
+        "source": "var messages = $.steps.listEmails.response.messages || [];\nvar emailList = '';\nmessages.slice(0, 30).forEach(function(m, i) {\n  var headers = m.payload && m.payload.headers ? m.payload.headers : [];\n  var subject = '';\n  var from = '';\n  var date = '';\n  headers.forEach(function(h) {\n    if (h.name === 'Subject') subject = h.value || '';\n    if (h.name === 'From') from = h.value || '';\n    if (h.name === 'Date') date = h.value || '';\n  });\n  var snippet = m.snippet || '';\n  emailList += (i + 1) + '. Subject: ' + subject + '\\n';\n  emailList += '   From: ' + from + '\\n';\n  emailList += '   Date: ' + date + '\\n';\n  emailList += '   Snippet: ' + snippet.slice(0, 200) + '\\n\\n';\n});\nreturn { emailList: emailList, emailCount: messages.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build AI prompt for email categorization",
+      "type": "code",
+      "code": {
+        "source": "var cats = $.input.categories || 'Work, Personal, Marketing, Notifications, Urgent, Spam';\nvar prompt = 'You are an email categorization AI. Analyze each email below and assign it a category, priority level, and brief summary.\\n\\n';\nprompt += 'AVAILABLE CATEGORIES: ' + cats + '\\n\\n';\nprompt += 'EMAILS TO CATEGORIZE (' + $.steps.extractEmails.output.emailCount + ' emails):\\n';\nprompt += $.steps.extractEmails.output.emailList + '\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- Assign exactly one category from the list above to each email\\n';\nprompt += '- Set priority: High, Medium, or Low\\n';\nprompt += '- Write a 1-sentence summary\\n';\nprompt += '- Flag any emails that need immediate attention\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"emails\": [\\n';\nprompt += '    { \"number\": 1, \"subject\": \"...\", \"from\": \"...\", \"category\": \"...\", \"priority\": \"High|Medium|Low\", \"summary\": \"...\", \"needsAttention\": true }\\n';\nprompt += '  ],\\n';\nprompt += '  \"stats\": { \"total\": 0, \"byCategory\": {}, \"highPriority\": 0 },\\n';\nprompt += '  \"topAction\": \"Most important email to address first\"\\n';\nprompt += '}';\nreturn { prompt: prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-2358-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiCategorize",
+      "name": "Run Claude AI to categorize emails",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-2358-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiCategorize.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { emails: [], stats: { total: 0, byCategory: {}, highPriority: 0 }, topAction: raw }; }"
+      }
+    },
+    {
+      "id": "formatSheetData",
+      "name": "Format categorized emails for Google Sheets",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar emails = ai.emails || [];\nvar date = new Date().toISOString().split('T')[0];\nvar sheetData = emails.map(function(e) {\n  return {\n    'Number': e.number || '',\n    'Subject': (e.subject || '').slice(0, 200),\n    'From': (e.from || '').slice(0, 100),\n    'Category': e.category || '',\n    'Priority': e.priority || '',\n    'Summary': (e.summary || '').slice(0, 300),\n    'Needs Attention': e.needsAttention ? 'Yes' : 'No',\n    'Date Categorized': date\n  };\n});\nreturn { sheetData: sheetData, emailCount: emails.length, date: date };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save categorized emails to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "title": "Email Categories - {{$.steps.formatSheetData.output.date}}",
+          "sheetTitle": "Categorized Emails",
+          "data": "$.steps.formatSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack Block Kit summary",
+      "type": "code",
+      "code": {
+        "source": "var ai = $.steps.parseAI.output;\nvar stats = ai.stats || {};\nvar blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Email Categorization Report', emoji: true } });\nvar byCategory = stats.byCategory || {};\nvar catLines = Object.keys(byCategory).map(function(k) { return k + ': ' + byCategory[k]; }).join(' | ');\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Total Emails:*\\n' + (stats.total || 0) },\n  { type: 'mrkdwn', text: '*High Priority:*\\n' + (stats.highPriority || 0) }\n] });\nif (catLines) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Categories:* ' + catLines } });\n}\nblocks.push({ type: 'divider' });\nif (ai.topAction) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Top Action:* ' + ai.topAction } });\n}\nvar emails = ai.emails || [];\nvar urgent = emails.filter(function(e) { return e.needsAttention; });\nif (urgent.length > 0) {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Needs Attention:*' } });\n  urgent.slice(0, 5).forEach(function(e) {\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '- *' + (e.subject || 'No subject') + '* from ' + (e.from || 'unknown') + '\\n  ' + (e.summary || '') } });\n  });\n}\nblocks.push({ type: 'divider' });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Categorized with Claude AI via One CLI' }] });\nvar fallback = 'Email Report: ' + (stats.total || 0) + ' emails categorized, ' + (stats.highPriority || 0) + ' high priority';\nreturn { blocks: blocks, fallback: fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post categorization summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

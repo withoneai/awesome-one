@@ -1,0 +1,274 @@
+{
+  "key": "n8n-7423-lead-generation-agent",
+  "name": "Lead generation agent: search, scrape, qualify, outreach",
+  "description": "Automated lead generation pipeline. Uses Exa to search for prospects, Firecrawl to scrape their websites, Claude AI to qualify leads and compose personalized outreach emails, sends via Gmail, and tracks everything in Google Sheets.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 7423,
+    "url": "https://n8n.io/workflows/7423",
+    "originalName": "Lead generation agent",
+    "totalViews": 56671,
+    "rank": 106,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "exaKey": {
+      "type": "string",
+      "required": true,
+      "description": "Exa connection key for prospect search",
+      "connection": {
+        "platform": "exa"
+      }
+    },
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for website scraping",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "gmailKey": {
+      "type": "string",
+      "required": true,
+      "description": "Gmail connection key for sending outreach emails",
+      "connection": {
+        "platform": "gmail"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for tracking",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for status notifications",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for lead gen notifications"
+    },
+    "industry": {
+      "type": "string",
+      "required": true,
+      "description": "Target industry (e.g. 'SaaS companies', 'dental clinics', 'e-commerce brands')"
+    },
+    "location": {
+      "type": "string",
+      "required": true,
+      "description": "Target location (e.g. 'San Francisco, CA', 'London, UK')"
+    },
+    "valueProposition": {
+      "type": "string",
+      "required": true,
+      "description": "Your value proposition for the outreach email (e.g. 'We help SaaS companies reduce churn by 40% with AI-powered analytics')"
+    },
+    "senderName": {
+      "type": "string",
+      "required": false,
+      "default": "Sales Team",
+      "description": "Name to use in outreach email signature"
+    },
+    "maxLeads": {
+      "type": "string",
+      "required": false,
+      "default": "10",
+      "description": "Maximum number of leads to process (1-20)"
+    }
+  },
+  "steps": [
+    {
+      "id": "searchProspects",
+      "name": "Search for prospects via Exa",
+      "type": "action",
+      "action": {
+        "platform": "exa",
+        "actionId": "conn_mod_def::GJ2b4zW5U4c::Zao7m0Q4QcGVRs0EMZuWnQ",
+        "connectionKey": "$.input.exaKey",
+        "data": {
+          "query": "{{$.input.industry}} in {{$.input.location}} company website contact",
+          "numResults": 20,
+          "type": "auto",
+          "contents": {
+            "text": {
+              "maxCharacters": 500
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "filterUrls",
+      "name": "Filter and deduplicate prospect URLs",
+      "type": "code",
+      "code": {
+        "source": "const results = $.steps.searchProspects.response.results || [];\nconst maxLeads = parseInt($.input.maxLeads || '10', 10);\n\nconst seen = new Set();\nconst skipDomains = ['yelp.com', 'yellowpages.com', 'facebook.com', 'linkedin.com', 'instagram.com', 'twitter.com', 'google.com', 'tripadvisor.com', 'bbb.org'];\n\nconst prospects = results.filter(r => {\n  try {\n    const hostname = new URL(r.url).hostname.replace('www.', '');\n    if (seen.has(hostname)) return false;\n    if (skipDomains.some(d => hostname.includes(d))) return false;\n    seen.add(hostname);\n    return true;\n  } catch(e) { return false; }\n}).slice(0, maxLeads);\n\nconst urls = prospects.map(p => p.url);\nconst prospectInfo = prospects.map((p, i) => ({ index: i + 1, title: p.title || '', url: p.url, snippet: (p.text || '').slice(0, 200) }));\n\nreturn { urls, prospectInfo, totalFound: results.length, selectedCount: urls.length };"
+      }
+    },
+    {
+      "id": "scrapeProspects",
+      "name": "Scrape prospect websites with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.filterUrls.output.urls",
+        "as": "url",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "scrapeSite",
+            "name": "Scrape prospect website",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.url",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileScrapedData",
+      "name": "Compile scraped data for AI qualification",
+      "type": "code",
+      "code": {
+        "source": "const prospectInfo = $.steps.filterUrls.output.prospectInfo;\nconst iterations = $.steps.scrapeProspects.response.iterations || [];\nconst urls = $.steps.filterUrls.output.urls;\n\nlet scrapedData = '';\niterations.forEach((iter, i) => {\n  const url = urls[i] || 'Unknown';\n  const info = prospectInfo[i] || {};\n  const resp = (iter.scrapeSite && iter.scrapeSite.response && iter.scrapeSite.response.data) ? iter.scrapeSite.response.data : {};\n  const md = resp.markdown || '';\n\n  scrapedData += '=== PROSPECT ' + (i + 1) + ' ===\\n';\n  scrapedData += 'URL: ' + url + '\\n';\n  scrapedData += 'Title: ' + (info.title || '') + '\\n';\n  scrapedData += 'Snippet: ' + (info.snippet || '') + '\\n';\n  scrapedData += 'Page content:\\n' + md.slice(0, 2000) + '\\n\\n';\n});\n\nreturn { scrapedData, scrapedCount: iterations.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for lead qualification and outreach",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileScrapedData.output;\nconst industry = $.input.industry;\nconst location = $.input.location;\nconst valueProp = $.input.valueProposition;\nconst sender = $.input.senderName || 'Sales Team';\n\nlet prompt = 'You are a B2B sales and lead qualification expert. Analyze the scraped prospect websites, qualify each lead, and compose personalized outreach emails.\\n\\n';\nprompt += 'TARGET INDUSTRY: ' + industry + '\\n';\nprompt += 'LOCATION: ' + location + '\\n';\nprompt += 'VALUE PROPOSITION: ' + valueProp + '\\n';\nprompt += 'SENDER NAME: ' + sender + '\\n\\n';\nprompt += 'SCRAPED PROSPECT DATA:\\n' + d.scrapedData + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '1. Extract contact info (emails, phones) from each prospect\\n';\nprompt += '2. Qualify each lead: A (decision-maker email found, good fit), B (general email, potential fit), C (no email or poor fit)\\n';\nprompt += '3. For grade A and B leads, compose a personalized outreach email that references their business specifics\\n';\nprompt += '4. Keep emails 80-150 words, professional, with a clear CTA\\n';\nprompt += '5. Use HTML formatting with <p> tags for email body\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"leads\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"businessName\": \"name\",\\n';\nprompt += '      \"website\": \"url\",\\n';\nprompt += '      \"email\": \"contact@example.com\",\\n';\nprompt += '      \"phone\": \"phone or empty\",\\n';\nprompt += '      \"leadGrade\": \"A|B|C\",\\n';\nprompt += '      \"qualificationNotes\": \"why this grade\",\\n';\nprompt += '      \"emailSubject\": \"personalized subject line\",\\n';\nprompt += '      \"emailBody\": \"<p>personalized HTML outreach email</p>\",\\n';\nprompt += '      \"personalizationHook\": \"what was personalized\"\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"summary\": { \"total\": 0, \"gradeA\": 0, \"gradeB\": 0, \"gradeC\": 0, \"withEmail\": 0 }\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-7423-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI for lead qualification",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-7423-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { leads: [], summary: { total: 0, gradeA: 0, gradeB: 0, gradeC: 0, withEmail: 0 }, error: raw }; }"
+      }
+    },
+    {
+      "id": "buildSheetData",
+      "name": "Build Google Sheets tracking data",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst leads = ai.leads || [];\nconst date = new Date().toISOString().split('T')[0];\n\nconst sheetData = leads.map((lead, i) => ({\n  '#': i + 1,\n  'Business Name': lead.businessName || '',\n  'Website': lead.website || '',\n  'Email': lead.email || '',\n  'Phone': lead.phone || '',\n  'Lead Grade': lead.leadGrade || 'C',\n  'Qualification Notes': lead.qualificationNotes || '',\n  'Email Sent': (lead.leadGrade === 'A' || lead.leadGrade === 'B') && lead.email ? 'Yes' : 'No',\n  'Date': date\n}));\n\nconst emailableLeads = leads.filter(l => (l.leadGrade === 'A' || l.leadGrade === 'B') && l.email && l.emailBody);\n\nreturn { sheetData, emailableLeads, leadCount: leads.length, summary: ai.summary || {} };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save leads to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "connectionKey": "$.input.sheetsKey",
+          "title": "Lead Gen - {{$.input.industry}} in {{$.input.location}} - {{$.steps.buildSheetData.output.leadCount}} leads",
+          "sheetTitle": "Leads",
+          "data": "$.steps.buildSheetData.output.sheetData"
+        }
+      }
+    },
+    {
+      "id": "sendOutreachEmails",
+      "name": "Send outreach emails to qualified leads",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.buildSheetData.output.emailableLeads",
+        "as": "lead",
+        "maxConcurrency": 1,
+        "steps": [
+          {
+            "id": "sendEmail",
+            "name": "Send outreach email",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "gmail",
+              "actionId": "conn_mod_def::GGXAjWkZO8U::uMc1LQIHTTKzeMm3rLL5gQ",
+              "connectionKey": "$.input.gmailKey",
+              "data": {
+                "to": "$.loop.lead.email",
+                "subject": "$.loop.lead.emailSubject",
+                "body": "$.loop.lead.emailBody",
+                "isHtml": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack summary notification",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst summary = $.steps.buildSheetData.output.summary;\nconst emailable = $.steps.buildSheetData.output.emailableLeads || [];\nconst leads = ai.leads || [];\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Lead Generation Complete' } });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Industry:*\\n' + $.input.industry },\n  { type: 'mrkdwn', text: '*Location:*\\n' + $.input.location }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Total Leads:*\\n' + leads.length },\n  { type: 'mrkdwn', text: '*Emails Sent:*\\n' + emailable.length }\n] });\nblocks.push({ type: 'section', fields: [\n  { type: 'mrkdwn', text: '*Grade A:*\\n' + (summary.gradeA || 0) },\n  { type: 'mrkdwn', text: '*Grade B:*\\n' + (summary.gradeB || 0) }\n] });\nblocks.push({ type: 'divider' });\n\nlet leadList = '';\nleads.slice(0, 8).forEach((l, i) => {\n  const emoji = l.leadGrade === 'A' ? ':star:' : l.leadGrade === 'B' ? ':large_blue_circle:' : ':white_circle:';\n  leadList += emoji + ' *' + (l.businessName || 'Unknown') + '* (' + l.leadGrade + ') - ' + (l.email || 'no email') + '\\n';\n});\nif (leads.length > 8) leadList += '... and ' + (leads.length - 8) + ' more';\n\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: leadList.slice(0, 1800) } });\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Powered by Exa + Firecrawl + Claude AI + Gmail + Sheets' }] });\n\nconst fallback = 'Lead gen complete: ' + leads.length + ' leads found, ' + emailable.length + ' emails sent';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post lead gen summary to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}

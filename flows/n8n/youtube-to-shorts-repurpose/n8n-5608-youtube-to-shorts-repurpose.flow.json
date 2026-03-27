@@ -1,0 +1,196 @@
+{
+  "key": "n8n-5608-youtube-to-shorts-repurpose",
+  "name": "Video Content Repurposing Planner",
+  "description": "Analyzes YouTube video pages via Firecrawl scraping, uses Claude AI to identify the best clip-worthy moments for short-form repurposing, and saves a detailed repurposing plan to Google Sheets with a summary to Slack. Adapted from n8n's YouTube-to-Shorts with Klap workflow.",
+  "version": "1.0.0",
+  "source": {
+    "platform": "n8n",
+    "id": 5608,
+    "url": "https://n8n.io/workflows/5608",
+    "originalName": "Convert YouTube videos to shorts with Klap & auto-post to multiple social platforms",
+    "totalViews": 20451,
+    "rank": 295,
+    "replicatedAt": "2026-03-25"
+  },
+  "inputs": {
+    "firecrawlKey": {
+      "type": "string",
+      "required": true,
+      "description": "Firecrawl connection key for scraping YouTube pages",
+      "connection": {
+        "platform": "firecrawl"
+      }
+    },
+    "sheetsKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key for saving repurposing plan",
+      "connection": {
+        "platform": "google-sheets"
+      }
+    },
+    "slackKey": {
+      "type": "string",
+      "required": true,
+      "description": "Slack connection key for summary",
+      "connection": {
+        "platform": "slack"
+      }
+    },
+    "videoUrls": {
+      "type": "string",
+      "required": true,
+      "description": "Comma-separated YouTube video URLs to analyze for repurposing"
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets spreadsheet ID for the repurposing plan"
+    },
+    "slackChannel": {
+      "type": "string",
+      "required": true,
+      "description": "Slack channel for summary"
+    },
+    "targetPlatforms": {
+      "type": "string",
+      "required": false,
+      "default": "YouTube Shorts, TikTok, Instagram Reels",
+      "description": "Target platforms for repurposed content"
+    }
+  },
+  "steps": [
+    {
+      "id": "parseUrls",
+      "name": "Parse video URL list",
+      "type": "code",
+      "code": {
+        "source": "const urlString = $.input.videoUrls || '';\nconst urls = urlString.split(',').map(u => u.trim()).filter(u => u.length > 0 && u.includes('youtube') || u.includes('youtu.be'));\nreturn { urls, urlCount: urls.length };"
+      }
+    },
+    {
+      "id": "scrapeVideos",
+      "name": "Scrape YouTube video pages with Firecrawl",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.parseUrls.output.urls",
+        "as": "videoUrl",
+        "maxConcurrency": 2,
+        "steps": [
+          {
+            "id": "scrapePage",
+            "name": "Scrape video page",
+            "type": "action",
+            "onError": {
+              "strategy": "continue"
+            },
+            "action": {
+              "platform": "firecrawl",
+              "actionId": "conn_mod_def::GJ2dOxYafzY::oV-TiF9nTQWwk8sfh0z0Nw",
+              "connectionKey": "$.input.firecrawlKey",
+              "data": {
+                "url": "$.loop.videoUrl",
+                "formats": [
+                  {
+                    "type": "markdown"
+                  }
+                ],
+                "onlyMainContent": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "compileVideoData",
+      "name": "Compile scraped video data",
+      "type": "code",
+      "code": {
+        "source": "const urls = $.steps.parseUrls.output.urls;\nconst iterations = $.steps.scrapeVideos.response.iterations || [];\nlet compiled = '';\nlet successCount = 0;\n\niterations.forEach((iter, i) => {\n  const url = urls[i] || '';\n  const data = (iter.scrapePage && iter.scrapePage.response && iter.scrapePage.response.data) ? iter.scrapePage.response.data : null;\n  compiled += '=== VIDEO ' + (i + 1) + ' ===\\n';\n  compiled += 'URL: ' + url + '\\n';\n  if (data && data.markdown) {\n    compiled += data.markdown.slice(0, 3000) + '\\n';\n    successCount++;\n  } else {\n    compiled += 'Failed to scrape\\n';\n  }\n  compiled += '\\n';\n});\n\nreturn { compiled: compiled.slice(0, 25000), successCount, totalVideos: urls.length };"
+      }
+    },
+    {
+      "id": "buildPrompt",
+      "name": "Build Claude prompt for video repurposing analysis",
+      "type": "code",
+      "code": {
+        "source": "const d = $.steps.compileVideoData.output;\nconst platforms = $.input.targetPlatforms || 'YouTube Shorts, TikTok, Instagram Reels';\n\nlet prompt = 'You are a video content repurposing strategist. Analyze the following YouTube video pages and create a detailed plan for converting them into short-form content.\\n\\n';\nprompt += 'TARGET PLATFORMS: ' + platforms + '\\n';\nprompt += 'VIDEOS ANALYZED: ' + d.successCount + ' of ' + d.totalVideos + '\\n\\n';\nprompt += d.compiled + '\\n\\n';\nprompt += 'INSTRUCTIONS:\\n';\nprompt += '- For each video, identify 3-5 clip-worthy moments based on the content\\n';\nprompt += '- Suggest optimal clip length (15s, 30s, 60s) for each platform\\n';\nprompt += '- Write a catchy hook/caption for each suggested clip\\n';\nprompt += '- Recommend hashtags and posting strategy per platform\\n';\nprompt += '- Score each clip idea for viral potential (1-10)\\n\\n';\nprompt += 'Return ONLY valid JSON:\\n';\nprompt += '{\\n';\nprompt += '  \"videos\": [\\n';\nprompt += '    {\\n';\nprompt += '      \"originalUrl\": \"url\",\\n';\nprompt += '      \"videoTitle\": \"inferred title\",\\n';\nprompt += '      \"clips\": [\\n';\nprompt += '        {\\n';\nprompt += '          \"clipIdea\": \"description of the clip moment\",\\n';\nprompt += '          \"hook\": \"attention-grabbing first line\",\\n';\nprompt += '          \"caption\": \"full caption for posting\",\\n';\nprompt += '          \"duration\": \"30s\",\\n';\nprompt += '          \"platform\": \"YouTube Shorts\",\\n';\nprompt += '          \"hashtags\": [\"tag1\"],\\n';\nprompt += '          \"viralScore\": 8\\n';\nprompt += '        }\\n';\nprompt += '      ]\\n';\nprompt += '    }\\n';\nprompt += '  ],\\n';\nprompt += '  \"totalClipsPlanned\": 0,\\n';\nprompt += '  \"postingStrategy\": \"recommended posting cadence\",\\n';\nprompt += '  \"topPicks\": [\"best clip ideas across all videos\"]\\n';\nprompt += '}';\n\nreturn { prompt };"
+      }
+    },
+    {
+      "id": "savePrompt",
+      "name": "Save prompt to temp file",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/n8n-5608-prompt.txt",
+        "content": "$.steps.buildPrompt.output.prompt"
+      }
+    },
+    {
+      "id": "aiAnalysis",
+      "name": "Run Claude AI video repurposing analysis",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/n8n-5608-prompt.txt | claude --print -",
+        "timeout": 180000,
+        "parseJson": false
+      }
+    },
+    {
+      "id": "parseAI",
+      "name": "Parse Claude output (strip code fences)",
+      "type": "code",
+      "code": {
+        "source": "let raw = $.steps.aiAnalysis.output || '';\nraw = raw.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '').trim();\ntry { return JSON.parse(raw); } catch(e) { return { videos: [], totalClipsPlanned: 0, postingStrategy: raw, topPicks: [] }; }"
+      }
+    },
+    {
+      "id": "buildSheetRows",
+      "name": "Build Sheets rows from repurposing plan",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst today = new Date().toISOString().slice(0, 10);\nconst rows = [];\nrows.push(['Date', 'Original Video', 'Clip Idea', 'Hook', 'Caption', 'Duration', 'Platform', 'Hashtags', 'Viral Score', 'Status']);\n(ai.videos || []).forEach(v => {\n  (v.clips || []).forEach(c => {\n    rows.push([today, v.videoTitle || '', c.clipIdea || '', c.hook || '', (c.caption || '').slice(0, 500), c.duration || '', c.platform || '', (c.hashtags || []).join(', '), String(c.viralScore || ''), 'Planned']);\n  });\n});\nreturn { rows, clipCount: rows.length - 1 };"
+      }
+    },
+    {
+      "id": "saveToSheets",
+      "name": "Save repurposing plan to Google Sheets",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GGSOaU3B4mE::TEyiNdZTTrOi7Ec5FSAQdg",
+        "connectionKey": "$.input.sheetsKey",
+        "data": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "Repurposing Plan",
+          "values": "$.steps.buildSheetRows.output.rows",
+          "valueInputOption": "USER_ENTERED"
+        }
+      }
+    },
+    {
+      "id": "buildSlackBlocks",
+      "name": "Build Slack summary",
+      "type": "code",
+      "code": {
+        "source": "const ai = $.steps.parseAI.output;\nconst clips = $.steps.buildSheetRows.output;\n\nconst blocks = [];\nblocks.push({ type: 'header', text: { type: 'plain_text', text: 'Video Repurposing Plan', emoji: true } });\nblocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Videos Analyzed:* ' + (ai.videos || []).length + ' | *Clips Planned:* ' + clips.clipCount } });\nblocks.push({ type: 'divider' });\n\nif (ai.topPicks && ai.topPicks.length > 0) {\n  let pickText = '*Top Clip Ideas:*\\n';\n  ai.topPicks.slice(0, 5).forEach((p, i) => { pickText += ':star: ' + (i + 1) + '. ' + p + '\\n'; });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: pickText.slice(0, 1800) } });\n  blocks.push({ type: 'divider' });\n}\n\n(ai.videos || []).slice(0, 3).forEach(v => {\n  let text = '*' + (v.videoTitle || 'Video') + '*\\n';\n  (v.clips || []).slice(0, 3).forEach(c => {\n    const icon = (c.viralScore || 0) >= 8 ? ':fire:' : ':chart_with_upwards_trend:';\n    text += icon + ' ' + c.clipIdea + ' (' + c.duration + ', ' + c.platform + ')\\n';\n  });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: text.slice(0, 1800) } });\n});\n\nif (ai.postingStrategy) {\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Posting Strategy:* ' + ai.postingStrategy.slice(0, 500) } });\n}\n\nblocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Plan saved to Google Sheets | Powered by Firecrawl + Claude AI' }] });\nconst fallback = 'Video Repurposing: ' + clips.clipCount + ' clips planned from ' + (ai.videos || []).length + ' videos';\nreturn { blocks, fallback };"
+      }
+    },
+    {
+      "id": "postToSlack",
+      "name": "Post repurposing plan to Slack",
+      "type": "action",
+      "action": {
+        "platform": "slack",
+        "actionId": "conn_mod_def::GJ7H84zBlaI::BCfuA16aTaGVIax5magsLA",
+        "connectionKey": "$.input.slackKey",
+        "data": {
+          "channel": "$.input.slackChannel",
+          "text": "$.steps.buildSlackBlocks.output.fallback",
+          "blocks": "$.steps.buildSlackBlocks.output.blocks"
+        }
+      }
+    }
+  ]
+}
