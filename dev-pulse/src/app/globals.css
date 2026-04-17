@@ -1,0 +1,383 @@
+@import "tailwindcss";
+
+/* ============================================================
+   ONE DESIGN SYSTEM — Replicated from core-ui/styles/globals.css
+   Warm Ivory (light) / Charcoal (dark) palette
+   ============================================================ */
+
+:root {
+  /* Base backgrounds */
+  --background: 60 23% 97%;
+  --background-secondary: 60 11% 93%;
+  --background-tertiary: 60 8% 88%;
+  --foreground: 0 0% 10%;
+
+  /* Card surfaces */
+  --card: 60 11% 93%;
+  --card-foreground: 0 0% 10%;
+  --card-elevated: 60 8% 88%;
+  --card-hover: 60 10% 90%;
+  --card-subtle: 60 23% 97%;
+
+  /* Popover */
+  --popover: 60 11% 93%;
+  --popover-foreground: 0 0% 10%;
+  --popover-border: 60 8% 88%;
+
+  /* Primary */
+  --primary: 0 0% 10%;
+  --primary-foreground: 60 23% 97%;
+  --primary-hover: 0 0% 20%;
+
+  /* Secondary */
+  --secondary: 60 8% 88%;
+  --secondary-foreground: 0 0% 10%;
+  --secondary-hover: 60 3% 74%;
+
+  /* Muted */
+  --muted: 60 10% 90%;
+  --muted-foreground: 60 2% 39%;
+
+  /* Accent */
+  --accent: 60 8% 88%;
+  --accent-foreground: 0 0% 10%;
+
+  /* Destructive */
+  --destructive: 5 57% 54%;
+  --destructive-foreground: 60 23% 97%;
+
+  /* Success / Warning / Info */
+  --success: 142 71% 45%;
+  --success-foreground: 142 71% 45%;
+  --success-muted: 142 76% 95%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 38 92% 40%;
+  --info: 217 91% 60%;
+  --info-foreground: 217 91% 50%;
+
+  /* Glassmorphism */
+  --glass-bg: rgba(255, 255, 255, 0.85);
+  --glass-border: rgba(228, 228, 223, 0.4);
+  --glass-blur: blur(24px);
+
+  /* Borders */
+  --border: 60 8% 88%;
+  --border-secondary: 60 3% 74%;
+  --border-strong: 60 3% 74%;
+  --input: 60 11% 93%;
+  --input-hover: 60 8% 88%;
+  --ring: 210 84% 66%;
+  --radius: 0.5rem;
+
+  /* Text scale */
+  --text-primary: 0 0% 10%;
+  --text-secondary: 60 2% 39%;
+  --text-muted: 60 1% 57%;
+  --text-subtle: 60 3% 74%;
+
+  /* Brand */
+  --one-yellow: 45 88% 62%;
+  --one-focus: 210 84% 66%;
+
+  /* Charcoal & Grey */
+  --charcoal-light: 60 2% 25%;
+  --charcoal-medium: 60 1% 17%;
+  --charcoal-dark: 0 0% 10%;
+  --grey-light: 60 3% 74%;
+  --grey-medium: 60 1% 57%;
+  --grey-dark: 60 2% 39%;
+
+  /* Chart */
+  --chart-grid: 0 0% 85%;
+  --chart-tick: 0 0% 40%;
+  --chart-blue: 217 100% 50%;
+  --chart-amber: 38 100% 50%;
+
+  /* Badge variants */
+  --badge-purple: 271 91% 65%;
+  --badge-purple-foreground: 271 81% 56%;
+  --badge-blue: 217 91% 60%;
+  --badge-blue-foreground: 221 83% 53%;
+  --badge-green: 142 71% 45%;
+  --badge-green-foreground: 142 76% 36%;
+
+  /* Status badges */
+  --status-badge-green: 142 76% 92%;
+  --status-badge-green-foreground: 142 60% 30%;
+  --status-badge-blue: 213 90% 93%;
+  --status-badge-blue-foreground: 213 70% 40%;
+
+  /* Platform accent colors */
+  --github: 271 91% 65%;
+  --linear: 217 91% 60%;
+  --calendar: 142 71% 45%;
+  --slack: 38 92% 50%;
+}
+
+.dark {
+  /* Base backgrounds */
+  --background: 0 0% 10%;
+  --background-secondary: 60 1% 14%;
+  --background-tertiary: 60 1% 17%;
+  --foreground: 60 23% 97%;
+
+  /* Card surfaces */
+  --card: 60 1% 17%;
+  --card-foreground: 60 23% 97%;
+  --card-elevated: 60 2% 25%;
+  --card-hover: 60 1% 21%;
+  --card-subtle: 60 1% 14%;
+
+  /* Popover */
+  --popover: 60 1% 17%;
+  --popover-foreground: 60 23% 97%;
+  --popover-border: 60 2% 25%;
+
+  /* Primary */
+  --primary: 60 23% 97%;
+  --primary-foreground: 0 0% 10%;
+  --primary-hover: 60 11% 93%;
+
+  /* Secondary */
+  --secondary: 60 2% 25%;
+  --secondary-foreground: 60 23% 97%;
+  --secondary-hover: 60 1% 33%;
+
+  /* Muted */
+  --muted: 60 1% 17%;
+  --muted-foreground: 60 1% 57%;
+
+  /* Accent */
+  --accent: 60 2% 25%;
+  --accent-foreground: 60 23% 97%;
+
+  /* Destructive */
+  --destructive: 5 57% 54%;
+  --destructive-foreground: 60 23% 97%;
+
+  /* Success / Warning / Info */
+  --success: 136 50% 12%;
+  --success-foreground: 136 41% 57%;
+  --success-muted: 136 45% 16%;
+  --warning: 31 100% 10%;
+  --warning-foreground: 40 91% 50%;
+  --info: 213 59% 15%;
+  --info-foreground: 210 67% 56%;
+
+  /* Glassmorphism */
+  --glass-bg: rgba(25, 25, 25, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-blur: blur(40px) saturate(1.5);
+
+  /* Borders */
+  --border: 60 2% 25%;
+  --border-secondary: 60 2% 39%;
+  --border-strong: 60 2% 39%;
+  --input: 60 1% 17%;
+  --input-hover: 60 2% 25%;
+  --ring: 210 84% 66%;
+
+  /* Text scale */
+  --text-primary: 60 23% 97%;
+  --text-secondary: 60 3% 74%;
+  --text-muted: 60 1% 57%;
+  --text-subtle: 60 2% 39%;
+
+  /* Brand */
+  --one-yellow: 45 88% 62%;
+  --one-focus: 210 84% 66%;
+
+  /* Charcoal & Grey */
+  --charcoal-light: 60 2% 25%;
+  --charcoal-medium: 60 1% 17%;
+  --charcoal-dark: 0 0% 10%;
+  --grey-light: 60 3% 74%;
+  --grey-medium: 60 1% 57%;
+  --grey-dark: 60 2% 39%;
+
+  /* Chart */
+  --chart-grid: 0 0% 20%;
+  --chart-tick: 0 0% 52%;
+
+  /* Badge variants */
+  --badge-purple-foreground: 270 95% 75%;
+  --badge-blue-foreground: 213 94% 68%;
+  --badge-green-foreground: 142 69% 58%;
+
+  /* Status badges */
+  --status-badge-green: 142 50% 12%;
+  --status-badge-green-foreground: 142 40% 57%;
+  --status-badge-blue: 213 59% 15%;
+  --status-badge-blue-foreground: 210 65% 56%;
+}
+
+/* ============================================================
+   TAILWIND v4 THEME — Map CSS variables to utility classes
+   ============================================================ */
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-background-secondary: hsl(var(--background-secondary));
+  --color-background-tertiary: hsl(var(--background-tertiary));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-card-elevated: hsl(var(--card-elevated));
+  --color-card-hover: hsl(var(--card-hover));
+  --color-card-subtle: hsl(var(--card-subtle));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-primary-hover: hsl(var(--primary-hover));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-secondary-hover: hsl(var(--secondary-hover));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-info: hsl(var(--info));
+  --color-info-foreground: hsl(var(--info-foreground));
+
+  --color-border: hsl(var(--border));
+  --color-border-secondary: hsl(var(--border-secondary));
+  --color-border-strong: hsl(var(--border-strong));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --color-text-primary: hsl(var(--text-primary));
+  --color-text-secondary: hsl(var(--text-secondary));
+  --color-text-muted: hsl(var(--text-muted));
+  --color-text-subtle: hsl(var(--text-subtle));
+
+  --color-one-yellow: hsl(var(--one-yellow));
+  --color-one-focus: hsl(var(--one-focus));
+
+  --color-charcoal-light: hsl(var(--charcoal-light));
+  --color-charcoal-medium: hsl(var(--charcoal-medium));
+  --color-charcoal-dark: hsl(var(--charcoal-dark));
+  --color-grey-light: hsl(var(--grey-light));
+  --color-grey-medium: hsl(var(--grey-medium));
+  --color-grey-dark: hsl(var(--grey-dark));
+
+  --color-chart-grid: hsl(var(--chart-grid));
+  --color-chart-tick: hsl(var(--chart-tick));
+  --color-chart-blue: hsl(var(--chart-blue));
+  --color-chart-amber: hsl(var(--chart-amber));
+
+  --color-github: hsl(var(--github));
+  --color-linear: hsl(var(--linear));
+  --color-calendar: hsl(var(--calendar));
+  --color-slack: hsl(var(--slack));
+
+  --color-badge-green: hsl(var(--badge-green));
+  --color-badge-green-foreground: hsl(var(--badge-green-foreground));
+  --color-badge-blue: hsl(var(--badge-blue));
+  --color-badge-blue-foreground: hsl(var(--badge-blue-foreground));
+  --color-badge-purple: hsl(var(--badge-purple));
+  --color-badge-purple-foreground: hsl(var(--badge-purple-foreground));
+
+  --color-status-badge-green: hsl(var(--status-badge-green));
+  --color-status-badge-green-foreground: hsl(var(--status-badge-green-foreground));
+  --color-status-badge-blue: hsl(var(--status-badge-blue));
+  --color-status-badge-blue-foreground: hsl(var(--status-badge-blue-foreground));
+
+  --font-sans: var(--font-dm-sans), system-ui, sans-serif;
+  --font-mono: var(--font-dm-mono), monospace;
+  --font-serif: var(--font-dm-serif), serif;
+}
+
+/* ============================================================
+   BASE STYLES
+   ============================================================ */
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: var(--font-sans);
+}
+
+/* Scrollbar — hidden by default, visible on hover */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background: hsl(var(--grey-light) / 0.3);
+}
+*:hover::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--grey-light) / 0.6);
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*:hover {
+  scrollbar-color: hsl(var(--grey-light) / 0.3) transparent;
+}
+
+/* Glassmorphism utility */
+.glass {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+/* Pulse animation for live indicator */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Fade-in for new events */
+@keyframes fade-in-down {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in-down {
+  animation: fade-in-down 0.3s ease-out;
+}
