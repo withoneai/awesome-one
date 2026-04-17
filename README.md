@@ -36,3 +36,15 @@ one flow execute n8n-1954-ai-agent-chat --input question="What is RAG?"
 **[Link](./link/)**
 
 *Drop-in connection onboarding page for agencies. Your customers connect their integrations (Gmail, Slack, etc.) through a branded card. Clone and deploy, or [paste a prompt](./link/PROMPT.md) into Lovable/Bolt/v0 to generate it instantly.*
+
+---
+
+**[Dev Pulse](./dev-pulse/)**
+
+*Real-time engineering command center. Connects GitHub, Linear, Slack, and Google Calendar with live webhook streaming, an AI chat panel powered by One's MCP server, and natural-language automations. Built with Next.js, Claude, and SQLite.*
+
+```bash
+cd dev-pulse && cp .env.example .env.local && npm install && npm run dev
+```
+
+[View Dev Pulse →](./dev-pulse/)
