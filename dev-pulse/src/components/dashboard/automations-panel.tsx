@@ -6,16 +6,16 @@ import {
   Lightning, Plus, Trash, ToggleLeft, ToggleRight,
   X, SpinnerGap, PaperPlaneTilt
 } from "@phosphor-icons/react";
-import { motion, AnimatePresence } from "framer-motion";
-
-interface Automation {
-  id: number;
-  trigger_platform: string;
-  trigger_event: string;
-  action_prompt: string;
-  enabled: number;
-  created_at: string;
-}
+import { motion } from "framer-motion";
+import type { Automation, ParsedAutomation } from "@/types/automations";
+import type { AutomationsPanelProps, AutomationsView } from "@/types/automations-ui";
+import {
+  createAutomation,
+  deleteAutomation,
+  getAutomations,
+  parseAutomation,
+  toggleAutomation,
+} from "@/lib/api/automations";
 
 const PLATFORM_NAMES: Record<string, string> = {
   github: "GitHub",
@@ -68,30 +68,19 @@ const TEMPLATES = [
   },
 ];
 
-interface AutomationsPanelProps {
-  open: boolean;
-  onClose: () => void;
-}
-
 export function AutomationsPanel({ open, onClose }: AutomationsPanelProps) {
   const [automations, setAutomations] = useState<Automation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<"list" | "custom">("list");
+  const [view, setView] = useState<AutomationsView>("list");
   const [input, setInput] = useState("");
   const [parsing, setParsing] = useState(false);
-  const [parsed, setParsed] = useState<{
-    trigger_platform: string;
-    trigger_event: string;
-    action_prompt: string;
-    summary: string;
-  } | null>(null);
+  const [parsed, setParsed] = useState<ParsedAutomation | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    fetch("/api/automations")
-      .then((r) => r.json())
+    getAutomations()
       .then(setAutomations)
       .catch(() => setAutomations([]))
       .finally(() => setLoading(false));
@@ -108,17 +97,12 @@ export function AutomationsPanel({ open, onClose }: AutomationsPanelProps) {
   // Save a template directly — no LLM parsing needed
   const handleSaveTemplate = async (template: typeof TEMPLATES[0]) => {
     setSaving(true);
-    await fetch("/api/automations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        trigger_platform: template.trigger_platform,
-        trigger_event: template.trigger_event,
-        action_prompt: template.action_prompt,
-      }),
+    await createAutomation({
+      trigger_platform: template.trigger_platform,
+      trigger_event: template.trigger_event,
+      action_prompt: template.action_prompt,
     });
-    const res = await fetch("/api/automations");
-    setAutomations(await res.json());
+    setAutomations(await getAutomations());
     setSaving(false);
   };
 
@@ -128,12 +112,7 @@ export function AutomationsPanel({ open, onClose }: AutomationsPanelProps) {
     setParsing(true);
     setParsed(null);
     try {
-      const res = await fetch("/api/automations/parse", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description: input.trim() }),
-      });
-      const data = await res.json();
+      const data = await parseAutomation(input.trim());
       if (data.trigger_platform) setParsed(data);
     } catch { /* ignore */ }
     finally { setParsing(false); }
@@ -142,17 +121,12 @@ export function AutomationsPanel({ open, onClose }: AutomationsPanelProps) {
   const handleSaveCustom = async () => {
     if (!parsed) return;
     setSaving(true);
-    await fetch("/api/automations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        trigger_platform: parsed.trigger_platform,
-        trigger_event: parsed.trigger_event,
-        action_prompt: parsed.action_prompt,
-      }),
+    await createAutomation({
+      trigger_platform: parsed.trigger_platform,
+      trigger_event: parsed.trigger_event,
+      action_prompt: parsed.action_prompt,
     });
-    const res = await fetch("/api/automations");
-    setAutomations(await res.json());
+    setAutomations(await getAutomations());
     setView("list");
     setInput("");
     setParsed(null);
@@ -160,18 +134,14 @@ export function AutomationsPanel({ open, onClose }: AutomationsPanelProps) {
   };
 
   const handleToggle = async (id: number, enabled: boolean) => {
-    await fetch("/api/automations", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, enabled }),
-    });
+    await toggleAutomation(id, enabled);
     setAutomations((prev) =>
       prev.map((a) => (a.id === id ? { ...a, enabled: enabled ? 1 : 0 } : a))
     );
   };
 
   const handleDelete = async (id: number) => {
-    await fetch(`/api/automations?id=${id}`, { method: "DELETE" });
+    await deleteAutomation(id);
     setAutomations((prev) => prev.filter((a) => a.id !== id));
   };
 
@@ -190,7 +160,7 @@ export function AutomationsPanel({ open, onClose }: AutomationsPanelProps) {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         onClick={onClose}
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-overlay/60 backdrop-blur-sm"
       />
 
       <motion.div

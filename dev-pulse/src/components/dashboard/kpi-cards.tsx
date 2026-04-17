@@ -1,13 +1,7 @@
 "use client";
 
 import Image from "next/image";
-
-interface KPICardsProps {
-  prsMerged: number;
-  issuesClosed: number;
-  sprintProgress: number;
-  meetingHours: number;
-}
+import type { KPICardsProps } from "@/types/dashboard-ui";
 
 const cards = [
   {

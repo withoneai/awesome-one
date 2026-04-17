@@ -11,32 +11,9 @@ import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useTheme } from "next-themes";
-
-// ── Types ──
-
-interface ToolStep {
-  tool: string;
-  status: "running" | "done" | "error";
-  platform?: string;
-  result?: unknown;
-  input?: Record<string, unknown>;
-}
-
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  toolSteps?: ToolStep[];
-  timestamp: number;
-}
-
-interface ActionGroup {
-  platform: string;
-  summary: string;
-  knowledgeChips: { title: string; platform: string }[];
-  result: unknown;
-  status: "done" | "error";
-}
+import type { ToolStep, ChatMessage, ActionGroup, ThinkingLine } from "@/types/chat-ui";
+import { clearMessages, getMessages, saveMessage } from "@/lib/api/messages";
+import { streamChat } from "@/lib/api/chat";
 
 // ── Helpers ──
 
@@ -68,13 +45,6 @@ function isExecuteSuccess(result: any): boolean {
     if (text.startsWith("MCP error") || text.includes("Failed to execute")) return false;
     return true;
   } catch { return false; }
-}
-
-// Build readable lines from tool steps for the thinking block
-interface ThinkingLine {
-  text: string;
-  platform?: string;
-  type: "search" | "knowledge" | "execute";
 }
 
 function buildThinkingLines(steps: ToolStep[]): ThinkingLine[] {
@@ -394,10 +364,9 @@ export function ChatPanel() {
   const streamStartRef = useRef<number | null>(null);
 
   useEffect(() => {
-    fetch("/api/messages")
-      .then((r) => r.json())
+    getMessages()
       .then((rows) => {
-        const loaded = rows.map((r: { id: string; role: string; content: string; tool_steps: string | null; timestamp: number }) => ({
+        const loaded: ChatMessage[] = rows.map((r) => ({
           id: r.id,
           role: r.role,
           content: r.content,
@@ -431,20 +400,18 @@ export function ChatPanel() {
     setThinkingDuration(undefined);
     streamStartRef.current = null;
 
-    fetch("/api/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: userMsg.id, role: userMsg.role, content: userMsg.content, tool_steps: null, timestamp: userMsg.timestamp }),
+    saveMessage({
+      id: userMsg.id,
+      role: userMsg.role,
+      content: userMsg.content,
+      tool_steps: null,
+      timestamp: userMsg.timestamp,
     }).catch(() => {});
     setCurrentSteps([]);
 
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: updatedMessages.map((m) => ({ role: m.role, content: m.content })),
-        }),
+      const res = await streamChat({
+        messages: updatedMessages.map((m) => ({ role: m.role, content: m.content })),
       });
 
       const reader = res.body?.getReader();
@@ -507,16 +474,12 @@ export function ChatPanel() {
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
-      fetch("/api/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: assistantMsg.id,
-          role: assistantMsg.role,
-          content: assistantMsg.content,
-          tool_steps: JSON.stringify(assistantMsg.toolSteps),
-          timestamp: assistantMsg.timestamp,
-        }),
+      saveMessage({
+        id: assistantMsg.id,
+        role: assistantMsg.role,
+        content: assistantMsg.content,
+        tool_steps: JSON.stringify(assistantMsg.toolSteps),
+        timestamp: assistantMsg.timestamp,
       }).catch(() => {});
     } catch (err) {
       setMessages((prev) => [
@@ -538,7 +501,7 @@ export function ChatPanel() {
 
   const clearChat = () => {
     setMessages([]);
-    fetch("/api/messages", { method: "DELETE" }).catch(() => {});
+    clearMessages().catch(() => {});
   };
 
   return (

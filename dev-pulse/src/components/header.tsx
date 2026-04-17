@@ -6,14 +6,7 @@ import { Moon, Sun, Plus, CheckCircle, WebhooksLogo, Lightning, X } from "@phosp
 import Image from "next/image";
 import Link from "next/link";
 import { PLATFORMS } from "@/lib/constants";
-
-interface HeaderProps {
-  connections: Record<string, { key: string; platform: string }>;
-  onConnect: (platform: string) => void;
-  onDisconnect?: (platform: string) => void;
-  onConfigureWebhooks?: () => void;
-  onConfigureAutomations?: () => void;
-}
+import type { HeaderProps } from "@/types/header-ui";
 
 export function Header({ connections, onConnect, onDisconnect, onConfigureWebhooks, onConfigureAutomations }: HeaderProps) {
   const { theme, setTheme, resolvedTheme } = useTheme();
@@ -82,7 +75,7 @@ export function Header({ connections, onConnect, onDisconnect, onConfigureWebhoo
                 {isConnected && onDisconnect && (
                   <button
                     onClick={() => onDisconnect(p.id)}
-                    className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-destructive text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                     title={`Disconnect ${p.name}`}
                   >
                     <X className="w-2.5 h-2.5" weight="bold" />

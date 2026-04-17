@@ -1,14 +1,7 @@
 import { saveEvent as dbSaveEvent, getEvents as dbGetEvents } from "./db";
+import type { PulseEvent } from "@/types/events";
 
-export interface PulseEvent {
-  id: string;
-  platform: string;
-  eventType: string;
-  title: string;
-  description: string;
-  timestamp: string;
-  payload?: unknown;
-}
+export type { PulseEvent };
 
 // SSE clients for real-time broadcasting
 const clients = new Set<ReadableStreamDefaultController>();

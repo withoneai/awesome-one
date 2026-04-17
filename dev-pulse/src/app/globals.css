@@ -112,6 +112,9 @@
   --linear: 217 91% 60%;
   --calendar: 142 71% 45%;
   --slack: 38 92% 50%;
+
+  /* Modal backdrop — dark in both themes by design */
+  --overlay: 0 0% 0%;
 }
 
 .dark {
@@ -209,6 +212,9 @@
   --status-badge-green-foreground: 142 40% 57%;
   --status-badge-blue: 213 59% 15%;
   --status-badge-blue-foreground: 210 65% 56%;
+
+  /* Modal backdrop — dark in both themes by design */
+  --overlay: 0 0% 0%;
 }
 
 /* ============================================================
@@ -296,6 +302,8 @@
   --color-status-badge-green-foreground: hsl(var(--status-badge-green-foreground));
   --color-status-badge-blue: hsl(var(--status-badge-blue));
   --color-status-badge-blue-foreground: hsl(var(--status-badge-blue-foreground));
+
+  --color-overlay: hsl(var(--overlay));
 
   --font-sans: var(--font-dm-sans), system-ui, sans-serif;
   --font-mono: var(--font-dm-mono), monospace;

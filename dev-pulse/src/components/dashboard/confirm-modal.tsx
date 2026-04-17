@@ -2,16 +2,7 @@
 
 import { Warning, X } from "@phosphor-icons/react";
 import { motion } from "framer-motion";
-
-interface ConfirmModalProps {
-  open: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-  title: string;
-  description: string;
-  confirmLabel?: string;
-  destructive?: boolean;
-}
+import type { ConfirmModalProps } from "@/types/confirm-modal-ui";
 
 export function ConfirmModal({
   open,
@@ -30,7 +21,7 @@ export function ConfirmModal({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         onClick={onClose}
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-overlay/60 backdrop-blur-sm"
       />
 
       <motion.div

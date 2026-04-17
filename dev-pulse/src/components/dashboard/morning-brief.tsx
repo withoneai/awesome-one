@@ -2,18 +2,7 @@
 
 import Image from "next/image";
 import { Sun } from "@phosphor-icons/react";
-
-interface BriefItem {
-  platform: string;
-  icon: string;
-  text: string;
-  count?: number;
-  action?: string;
-}
-
-interface MorningBriefProps {
-  items: BriefItem[];
-}
+import type { MorningBriefProps } from "@/types/dashboard-ui";
 
 export function MorningBrief({ items }: MorningBriefProps) {
   const greeting = new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 17 ? "Good afternoon" : "Good evening";

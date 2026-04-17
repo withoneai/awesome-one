@@ -5,33 +5,18 @@ import { useOneAuth } from "@withone/auth";
 import { Header } from "@/components/header";
 import { KPICards } from "@/components/dashboard/kpi-cards";
 import { LiveFeed } from "@/components/dashboard/live-feed";
-import { CalendarSidebar, type CalendarEvent } from "@/components/dashboard/calendar-sidebar";
+import { CalendarSidebar } from "@/components/dashboard/calendar-sidebar";
 import { MorningBrief } from "@/components/dashboard/morning-brief";
 import { WebhookConfigModal } from "@/components/dashboard/webhook-config-modal";
 import { AutomationsPanel } from "@/components/dashboard/automations-panel";
 import { ChatPanel } from "@/components/dashboard/chat-panel";
 import { ConfirmModal } from "@/components/dashboard/confirm-modal";
+import type { Connection } from "@/types/connections";
+import type { BriefItem, DashboardData } from "@/types/dashboard-ui";
+import { deleteConnection, getConnections, syncConnections } from "@/lib/api/connections";
+import { getCalendarKpis, getGithubKpis, getLinearKpis } from "@/lib/api/dashboard";
 
 const REFRESH_INTERVAL_MS = 60_000;
-
-interface DashboardData {
-  prsMerged: number;
-  issuesClosed: number;
-  sprintProgress: number;
-  meetingHours: number;
-  calendarEvents: CalendarEvent[];
-  briefItems: Array<{
-    platform: string;
-    icon: string;
-    text: string;
-    count?: number;
-  }>;
-}
-
-interface Connection {
-  key: string;
-  platform: string;
-}
 
 // ── Skeleton Components ──
 
@@ -130,15 +115,9 @@ export default function Dashboard() {
 
   // Load connections from vault
   useEffect(() => {
-    async function loadConnections() {
-      try {
-        const res = await fetch("/api/connections");
-        if (res.ok) setConnections(await res.json());
-      } catch (err) {
-        console.error("Failed to load connections:", err);
-      }
-    }
-    loadConnections();
+    getConnections()
+      .then(setConnections)
+      .catch((err) => console.error("Failed to load connections:", err));
   }, []);
 
   // Auth hook
@@ -153,8 +132,7 @@ export default function Dashboard() {
     onSuccess: async () => {
       // Sync from vault to get the real UUID, then refresh
       try {
-        const res = await fetch("/api/connections?sync=true");
-        if (res.ok) setConnections(await res.json());
+        setConnections(await syncConnections());
       } catch { /* ignore */ }
       setConnecting(null);
     },
@@ -181,37 +159,30 @@ export default function Dashboard() {
       const linearKey = connections.linear?.key || "";
       const calendarKey = connections["google-calendar"]?.key || "";
 
-      const [githubRes, linearRes, calendarRes] = await Promise.allSettled([
-        githubKey ? fetch(`/api/data/github?connectionKey=${encodeURIComponent(githubKey)}`) : Promise.resolve(null),
-        linearKey ? fetch(`/api/data/linear?connectionKey=${encodeURIComponent(linearKey)}`) : Promise.resolve(null),
-        calendarKey ? fetch(`/api/data/calendar?connectionKey=${encodeURIComponent(calendarKey)}`) : Promise.resolve(null),
+      const [github, linear, calendar] = await Promise.all([
+        githubKey ? getGithubKpis(githubKey) : Promise.resolve({ prsMerged: 0 }),
+        linearKey ? getLinearKpis(linearKey) : Promise.resolve({ issuesClosed: 0, sprintProgress: 0 }),
+        calendarKey ? getCalendarKpis(calendarKey) : Promise.resolve({ events: [], meetingHours: 0 }),
       ]);
 
-      const github = githubRes.status === "fulfilled" && githubRes.value && (githubRes.value as Response).ok
-        ? await (githubRes.value as Response).json() : { prsMerged: 0 };
-      const linear = linearRes.status === "fulfilled" && linearRes.value && (linearRes.value as Response).ok
-        ? await (linearRes.value as Response).json() : { issuesClosed: 0, sprintProgress: 0 };
-      const calendar = calendarRes.status === "fulfilled" && calendarRes.value && (calendarRes.value as Response).ok
-        ? await (calendarRes.value as Response).json() : { events: [], meetingHours: 0 };
-
-      const briefItems = [];
+      const briefItems: BriefItem[] = [];
       if (github.prsMerged > 0) briefItems.push({ platform: "github", icon: "github", text: "PRs merged this week", count: github.prsMerged });
       if (linear.issuesClosed > 0) briefItems.push({ platform: "linear", icon: "linear", text: "Issues closed this week", count: linear.issuesClosed });
       // Count only today's timed meetings for the brief
       const todayStr = new Date().toDateString();
-      const todayMeetings = (calendar.events || []).filter((e: { startTime: string }) => {
+      const todayMeetings = calendar.events.filter((e) => {
         try { return new Date(e.startTime).toDateString() === todayStr; } catch { return false; }
       });
       if (todayMeetings.length > 0) briefItems.push({ platform: "calendar", icon: "google-calendar", text: "Meetings today", count: todayMeetings.length });
-      if (calendar.events?.length > todayMeetings.length) briefItems.push({ platform: "calendar", icon: "google-calendar", text: "Meetings this week", count: calendar.events.length });
+      if (calendar.events.length > todayMeetings.length) briefItems.push({ platform: "calendar", icon: "google-calendar", text: "Meetings this week", count: calendar.events.length });
       if (linear.sprintProgress > 0) briefItems.push({ platform: "linear", icon: "linear", text: `Sprint progress: ${linear.sprintProgress}%` });
 
       setData({
-        prsMerged: github.prsMerged || 0,
-        issuesClosed: linear.issuesClosed || 0,
-        sprintProgress: linear.sprintProgress || 0,
-        meetingHours: calendar.meetingHours || 0,
-        calendarEvents: calendar.events || [],
+        prsMerged: github.prsMerged,
+        issuesClosed: linear.issuesClosed,
+        sprintProgress: linear.sprintProgress,
+        meetingHours: calendar.meetingHours,
+        calendarEvents: calendar.events,
         briefItems,
       });
     }
@@ -317,11 +288,10 @@ export default function Dashboard() {
         destructive
         onConfirm={async () => {
           if (!disconnecting) return;
-          const conn = connections[disconnecting] as { id?: string };
+          const conn = connections[disconnecting];
           if (!conn?.id) return;
-          await fetch(`/api/connections?id=${encodeURIComponent(conn.id)}`, { method: "DELETE" });
-          const res = await fetch("/api/connections?sync=true");
-          if (res.ok) setConnections(await res.json());
+          await deleteConnection(conn.id);
+          setConnections(await syncConnections());
         }}
       />
     </div>

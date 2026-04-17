@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import Image from "next/image";
 import { Pulse } from "@phosphor-icons/react";
-import type { PulseEvent } from "@/lib/event-store";
+import type { PulseEvent } from "@/types/events";
 
 const MAX_EVENTS = 50;
 

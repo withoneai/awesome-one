@@ -5,50 +5,37 @@ import Image from "next/image";
 import { X, Check, SpinnerGap, CaretRight, WebhooksLogo, Plus, MagnifyingGlass } from "@phosphor-icons/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { WEBHOOK_PLATFORMS } from "@/lib/constants";
-
-interface WebhookConfigModalProps {
-  open: boolean;
-  onClose: () => void;
-  connections: Record<string, { key: string; platform: string }>;
-}
-
-interface ActiveRelay {
-  id: string;
-  description: string;
-  eventFilters: string[];
-  metadata: Record<string, string>;
-  createdAt: string;
-}
-
-type View = "list" | "platform" | "events" | "metadata" | "creating";
+import type { ActiveRelay, WebhookFormField, PlatformContext } from "@/types/webhooks";
+import type { WebhookConfigModalProps, WebhookView, WebhookResultState } from "@/types/webhooks-ui";
+import {
+  createRelay,
+  getEventTypes,
+  getPlatformContext,
+  getWebhookConfig,
+  listRelays,
+} from "@/lib/api/webhooks";
 
 export function WebhookConfigModal({ open, onClose, connections }: WebhookConfigModalProps) {
-  const [view, setView] = useState<View>("list");
+  const [view, setView] = useState<WebhookView>("list");
   const [activeRelays, setActiveRelays] = useState<ActiveRelay[]>([]);
   const [loadingRelays, setLoadingRelays] = useState(true);
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
   const [eventTypes, setEventTypes] = useState<string[]>([]);
   const [selectedEvents, setSelectedEvents] = useState<string[]>([]);
-  const [formData, setFormData] = useState<Array<{ name: string; label: string; type: string; placeholder: string }>>([]);
+  const [formData, setFormData] = useState<WebhookFormField[]>([]);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
-  const [dynamicContext, setDynamicContext] = useState<{
-    field?: string;
-    label?: string;
-    items: Array<{ value: string; label: string; extra?: Record<string, string> }>;
-    fields?: Array<{ field: string; label: string; items: Array<{ value: string; label: string; extra?: Record<string, string> }> }>;
-  } | null>(null);
+  const [dynamicContext, setDynamicContext] = useState<PlatformContext | null>(null);
   const [loadingContext, setLoadingContext] = useState(false);
   const [creating, setCreating] = useState(false);
   const [eventSearch, setEventSearch] = useState("");
-  const [result, setResult] = useState<{ success: boolean; message: string; warning?: string } | null>(null);
+  const [result, setResult] = useState<WebhookResultState | null>(null);
 
   // Load active relays
   useEffect(() => {
     if (!open) return;
     setLoadingRelays(true);
-    fetch("/api/webhooks/list")
-      .then((r) => r.json())
-      .then((data) => setActiveRelays(data))
+    listRelays()
+      .then(setActiveRelays)
       .catch(() => setActiveRelays([]))
       .finally(() => setLoadingRelays(false));
   }, [open]);
@@ -70,13 +57,11 @@ export function WebhookConfigModal({ open, onClose, connections }: WebhookConfig
   // Fetch event types when platform selected
   useEffect(() => {
     if (!selectedPlatform) return;
-    fetch(`/api/webhooks/event-types?platform=${selectedPlatform}`)
-      .then((r) => r.json())
-      .then((data) => setEventTypes(data))
+    getEventTypes(selectedPlatform)
+      .then(setEventTypes)
       .catch(() => setEventTypes([]));
 
-    fetch(`/api/webhooks/config?platform=${selectedPlatform}`)
-      .then((r) => r.json())
+    getWebhookConfig(selectedPlatform)
       .then((data) => setFormData(data?.formData || []))
       .catch(() => setFormData([]));
 
@@ -84,13 +69,12 @@ export function WebhookConfigModal({ open, onClose, connections }: WebhookConfig
     const connKey = connections[selectedPlatform]?.key;
     if (connKey) {
       setLoadingContext(true);
-      fetch(`/api/webhooks/platform-context?platform=${selectedPlatform}&connectionKey=${encodeURIComponent(connKey)}`)
-        .then((r) => r.json())
+      getPlatformContext(selectedPlatform, connKey)
         .then((data) => {
           setDynamicContext(data);
           // Auto-select if only one item
           if (data.field && data.items?.length === 1) {
-            setFormValues((prev) => ({ ...prev, [data.field]: data.items[0].value }));
+            setFormValues((prev) => ({ ...prev, [data.field!]: data.items[0].value }));
           }
           if (data.fields) {
             for (const f of data.fields) {
@@ -147,18 +131,13 @@ export function WebhookConfigModal({ open, onClose, connections }: WebhookConfig
       const connectionKey = connections[selectedPlatform]?.key;
       if (!connectionKey) throw new Error("Platform not connected");
 
-      const res = await fetch("/api/setup/relay", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          connectionKey,
-          platform: selectedPlatform,
-          eventFilters: selectedEvents.length > 0 ? selectedEvents : undefined,
-          metadata: Object.keys(formValues).length > 0 ? formValues : undefined,
-        }),
+      const data = await createRelay({
+        connectionKey,
+        platform: selectedPlatform,
+        eventFilters: selectedEvents.length > 0 ? selectedEvents : undefined,
+        metadata: Object.keys(formValues).length > 0 ? formValues : undefined,
       });
 
-      const data = await res.json();
       setResult({
         success: !!data.success,
         message: data.success
@@ -169,8 +148,7 @@ export function WebhookConfigModal({ open, onClose, connections }: WebhookConfig
 
       // Refresh list
       if (data.success) {
-        const listRes = await fetch("/api/webhooks/list");
-        setActiveRelays(await listRes.json());
+        setActiveRelays(await listRelays());
       }
     } catch (err) {
       setResult({ success: false, message: err instanceof Error ? err.message : "Unknown error" });
@@ -198,7 +176,7 @@ export function WebhookConfigModal({ open, onClose, connections }: WebhookConfig
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         onClick={onClose}
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-overlay/60 backdrop-blur-sm"
       />
 
       <motion.div

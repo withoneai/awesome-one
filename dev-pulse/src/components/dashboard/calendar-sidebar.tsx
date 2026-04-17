@@ -2,19 +2,7 @@
 
 import Image from "next/image";
 import { VideoCamera, Users, CalendarBlank, Clock } from "@phosphor-icons/react";
-
-export interface CalendarEvent {
-  id: string;
-  title: string;
-  startTime: string;
-  endTime: string;
-  attendees: number;
-  isVideo: boolean;
-}
-
-interface CalendarSidebarProps {
-  events: CalendarEvent[];
-}
+import type { CalendarSidebarProps } from "@/types/calendar-ui";
 
 function formatTime(iso: string): string {
   try {
@@ -117,7 +105,7 @@ export function CalendarSidebar({ events }: CalendarSidebarProps) {
                   {formatDay(event.startTime)} {formatTime(event.startTime)}
                 </span>
                 {current && (
-                  <span className="text-[10px] font-semibold bg-[hsl(var(--badge-blue))] text-white px-1.5 py-0.5 rounded">NOW</span>
+                  <span className="text-[10px] font-semibold bg-[hsl(var(--badge-blue))] text-primary-foreground px-1.5 py-0.5 rounded">NOW</span>
                 )}
                 {!current && soon && (
                   <span className="text-[10px] font-medium text-one-yellow bg-one-yellow/10 px-1.5 py-0.5 rounded">{soon}</span>
