@@ -1,14 +1,11 @@
 import type { ParsedEvent } from "./index";
 
-// Covers the 9 recommended repo-level webhook events:
-// push, pull_request, pull_request_review, pull_request_review_comment,
-// issues, issue_comment, create, delete, release
+// Only parse events verified from real webhook payloads.
+// Returns null for unverified events → generic fallback handles them.
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function parseGitHubEvent(eventType: string, payload: Record<string, any>): ParsedEvent {
+export function parseGitHubEvent(eventType: string, payload: Record<string, any>): ParsedEvent | null {
   const action = payload.action as string;
-  const repo = payload.repository;
-  const sender = payload.sender;
 
   switch (eventType) {
     case "push": {
@@ -33,29 +30,6 @@ export function parseGitHubEvent(eventType: string, payload: Record<string, any>
       };
     }
 
-    case "pull_request_review": {
-      const pr = payload.pull_request;
-      const review = payload.review;
-      const state = review?.state || action; // "approved", "changes_requested", "commented"
-      return {
-        platform: "github",
-        eventType: `pull_request_review.${action}`,
-        title: `Review ${state} on PR #${pr?.number}`,
-        description: `by ${review?.user?.login || sender?.login || "unknown"}`,
-      };
-    }
-
-    case "pull_request_review_comment": {
-      const pr = payload.pull_request;
-      const comment = payload.comment;
-      return {
-        platform: "github",
-        eventType: `pull_request_review_comment.${action}`,
-        title: `Review comment on PR #${pr?.number}`,
-        description: (comment?.body || "").slice(0, 100),
-      };
-    }
-
     case "issues": {
       const issue = payload.issue;
       return {
@@ -66,55 +40,7 @@ export function parseGitHubEvent(eventType: string, payload: Record<string, any>
       };
     }
 
-    case "issue_comment": {
-      const issue = payload.issue;
-      const comment = payload.comment;
-      return {
-        platform: "github",
-        eventType: `issue_comment.${action}`,
-        title: `Comment on #${issue?.number}`,
-        description: (comment?.body || "").slice(0, 100),
-      };
-    }
-
-    case "create": {
-      const refType = payload.ref_type; // "branch", "tag"
-      const ref = payload.ref;
-      return {
-        platform: "github",
-        eventType: "create",
-        title: `${refType === "tag" ? "Tag" : "Branch"} created: ${ref}`,
-        description: repo?.full_name || "",
-      };
-    }
-
-    case "delete": {
-      const refType = payload.ref_type;
-      const ref = payload.ref;
-      return {
-        platform: "github",
-        eventType: "delete",
-        title: `${refType === "tag" ? "Tag" : "Branch"} deleted: ${ref}`,
-        description: repo?.full_name || "",
-      };
-    }
-
-    case "release": {
-      const release = payload.release;
-      return {
-        platform: "github",
-        eventType: `release.${action}`,
-        title: `Release ${release?.tag_name || ""} ${action}`,
-        description: release?.name || release?.tag_name || "",
-      };
-    }
-
     default:
-      return {
-        platform: "github",
-        eventType,
-        title: `GitHub ${eventType}`,
-        description: action || eventType,
-      };
+      return null;
   }
 }

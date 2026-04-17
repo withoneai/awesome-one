@@ -1,5 +1,6 @@
 // Platform-specific webhook payload parsers.
 // Each parser transforms a raw webhook payload into a display-friendly event.
+// Parsers return null for unverified event types → generic fallback handles them.
 // To add a new platform: create a new file, export a parser, register it here.
 
 import type { PulseEvent } from "@/lib/event-store";
@@ -10,7 +11,7 @@ import { parseCalendarEvent } from "./calendar";
 export type ParsedEvent = Omit<PulseEvent, "id" | "timestamp">;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type EventParser = (eventType: string, payload: Record<string, any>) => ParsedEvent;
+type EventParser = (eventType: string, payload: Record<string, any>) => ParsedEvent | null;
 
 const parsers: Record<string, EventParser> = {
   github: parseGitHubEvent,
@@ -33,13 +34,14 @@ export function parseWebhookEvent(
   const parser = parsers[platform];
   if (parser) {
     try {
-      return parser(eventType, payload);
+      const result = parser(eventType, payload);
+      if (result) return result;
     } catch {
       // Parser threw — fall through to generic fallback
     }
   }
 
-  // Generic fallback for unregistered platforms or parser errors — title case
+  // Generic fallback — title case, works for any platform
   const action = payload?.action as string;
   return {
     platform,
