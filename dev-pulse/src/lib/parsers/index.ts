@@ -31,10 +31,16 @@ export function parseWebhookEvent(
   payload: Record<string, any>
 ): ParsedEvent {
   const parser = parsers[platform];
-  if (parser) return parser(eventType, payload);
+  if (parser) {
+    try {
+      return parser(eventType, payload);
+    } catch {
+      // Parser threw — fall through to generic fallback
+    }
+  }
 
-  // Generic fallback for unregistered platforms — title case
-  const action = payload.action as string;
+  // Generic fallback for unregistered platforms or parser errors — title case
+  const action = payload?.action as string;
   return {
     platform,
     eventType,
