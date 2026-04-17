@@ -1,16 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { passthrough } from "@/lib/one-passthrough";
-
-// Stable action IDs for GitHub REST API
-const LIST_REPOS = "conn_mod_def::GJ3aJv0FLn0::-lTycDc4TMG2EV3FIxpXVA";
-const LIST_PRS = "conn_mod_def::GJ3ZxjBXxMQ::_MimZcghS8q0ydHS-ZafJg";
+import { ACTION_IDS } from "@/lib/action-ids";
 
 export async function GET(req: NextRequest) {
   const connectionKey = req.nextUrl.searchParams.get("connectionKey");
   if (!connectionKey) return NextResponse.json({ prsMerged: 0 });
 
   try {
-    const repos = await passthrough("user/repos", connectionKey, LIST_REPOS, {
+    const repos = await passthrough("user/repos", connectionKey, ACTION_IDS.github.listRepos, {
       queryParams: { per_page: "5", sort: "pushed", direction: "desc" },
     });
 
@@ -24,7 +21,7 @@ export async function GET(req: NextRequest) {
         const prs = await passthrough(
           `repos/${owner}/${name}/pulls`,
           connectionKey,
-          LIST_PRS,
+          ACTION_IDS.github.listPRs,
           { queryParams: { state: "closed", per_page: "20", sort: "updated", direction: "desc" } }
         );
 

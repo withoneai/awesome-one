@@ -5,10 +5,10 @@ import { generateText, stepCountIs } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { getOneMCPTools } from "@/lib/one-mcp";
 import { passthrough } from "@/lib/one-passthrough";
+import { ACTION_IDS } from "@/lib/action-ids";
+import { parseWebhookEvent } from "@/lib/parsers";
 import crypto from "crypto";
 import { createHmac, timingSafeEqual } from "crypto";
-
-const CALENDAR_LIST_EVENTS = "conn_mod_def::GJ6RlnIYK20::YzuWSmaVQgurletRDNJavA";
 
 function verifySignature(body: string, signature: string | null, secret: string): boolean {
   // Dev mode: no secret configured, accept all webhooks
@@ -17,31 +17,6 @@ function verifySignature(body: string, signature: string | null, secret: string)
   if (!signature) return false;
   const expected = "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
   return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
-}
-
-function parseGitHubEvent(eventType: string, payload: Record<string, unknown>): Omit<PulseEvent, "id" | "timestamp"> {
-  const action = payload.action as string;
-  if (eventType === "pull_request") {
-    const pr = payload.pull_request as Record<string, unknown>;
-    return { platform: "github", eventType: `pull_request.${action}`, title: `PR #${pr.number} ${action}`, description: (pr.title as string) || "" };
-  }
-  if (eventType === "push") {
-    const commits = payload.commits as Array<unknown>;
-    const ref = (payload.ref as string).replace("refs/heads/", "");
-    return { platform: "github", eventType: "push", title: `Push to ${ref}`, description: `${commits?.length || 0} commit(s)` };
-  }
-  if (eventType === "issues") {
-    const issue = payload.issue as Record<string, unknown>;
-    return { platform: "github", eventType: `issues.${action}`, title: `Issue #${issue.number} ${action}`, description: (issue.title as string) || "" };
-  }
-  return { platform: "github", eventType, title: `GitHub ${eventType}`, description: action || eventType };
-}
-
-function parseLinearEvent(eventType: string, payload: Record<string, unknown>): Omit<PulseEvent, "id" | "timestamp"> {
-  const data = payload.data as Record<string, unknown> | undefined;
-  const title = (data?.title as string) || eventType;
-  const state = (data?.state as Record<string, unknown>)?.name as string;
-  return { platform: "linear", eventType, title: state ? `${title} → ${state}` : title, description: (data?.identifier as string) || eventType };
 }
 
 // Calendar webhooks just say "something changed" — fetch recent events and diff
@@ -64,7 +39,7 @@ async function fetchCalendarChanges(): Promise<void> {
     const data = await passthrough(
       "calendars/{calendarId}/events",
       conn.key,
-      CALENDAR_LIST_EVENTS,
+      ACTION_IDS.calendar.listEvents,
       {
         pathVariables: { calendarId: "primary" },
         queryParams: {
@@ -143,12 +118,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ received: true, eventId, automationsTriggered: 0 });
   }
 
-  let parsed: Omit<PulseEvent, "id" | "timestamp">;
-  switch (platform) {
-    case "github": parsed = parseGitHubEvent(eventType, eventPayload); break;
-    case "linear": parsed = parseLinearEvent(eventType, eventPayload); break;
-    default: parsed = { platform, eventType, title: `${platform} event`, description: eventType };
-  }
+  const parsed = parseWebhookEvent(platform, eventType, eventPayload);
 
   const event: PulseEvent = { ...parsed, id: eventId, timestamp: new Date().toISOString(), payload: eventPayload };
   addEvent(event);

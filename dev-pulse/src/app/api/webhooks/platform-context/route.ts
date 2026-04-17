@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { passthrough } from "@/lib/one-passthrough";
-
-// Known action IDs for fetching platform context
-const LINEAR_LIST_TEAMS = "conn_mod_def::GJ4vO-Ddh7M::KSYGS5jiTo66YMeRWLjeSQ";
-const GITHUB_LIST_REPOS = "conn_mod_def::GJ3aJv0FLn0::-lTycDc4TMG2EV3FIxpXVA";
+import { ACTION_IDS } from "@/lib/action-ids";
 
 export async function GET(req: NextRequest) {
   const platform = req.nextUrl.searchParams.get("platform");
@@ -15,7 +12,7 @@ export async function GET(req: NextRequest) {
 
   try {
     if (platform === "linear") {
-      const result = await passthrough("graphql", connectionKey, LINEAR_LIST_TEAMS, {
+      const result = await passthrough("graphql", connectionKey, ACTION_IDS.linear.listTeams, {
         method: "POST",
         data: { query: "{ teams { nodes { id name key } } }" },
       });
@@ -32,7 +29,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (platform === "github") {
-      const repos = await passthrough("user/repos", connectionKey, GITHUB_LIST_REPOS, {
+      const repos = await passthrough("user/repos", connectionKey, ACTION_IDS.github.listRepos, {
         queryParams: { per_page: "20", sort: "pushed", direction: "desc" },
       });
 

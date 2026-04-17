@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { passthrough } from "@/lib/one-passthrough";
-
-const CALENDAR_LIST_EVENTS = "conn_mod_def::GJ6RlnIYK20::YzuWSmaVQgurletRDNJavA";
+import { ACTION_IDS } from "@/lib/action-ids";
 
 export async function GET(req: NextRequest) {
   const connectionKey = req.nextUrl.searchParams.get("connectionKey");
@@ -15,7 +14,7 @@ export async function GET(req: NextRequest) {
     const data = await passthrough(
       "calendars/{calendarId}/events",
       connectionKey,
-      CALENDAR_LIST_EVENTS,
+      ACTION_IDS.calendar.listEvents,
       {
         pathVariables: { calendarId: "primary" },
         queryParams: {

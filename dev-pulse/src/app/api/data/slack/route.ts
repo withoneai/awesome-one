@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { passthrough } from "@/lib/one-passthrough";
-
-const SLACK_LIST_CONVERSATIONS = "conn_mod_def::GJ7H9zmRFIk::1RxrzeicS-ibnXF4sFC5Ww";
+import { ACTION_IDS } from "@/lib/action-ids";
 
 export async function GET(req: NextRequest) {
   const connectionKey = req.nextUrl.searchParams.get("connectionKey");
   if (!connectionKey) return NextResponse.json({ messages: [], channelCount: 0 });
 
   try {
-    const data = await passthrough("conversations.list", connectionKey, SLACK_LIST_CONVERSATIONS, {
+    const data = await passthrough("conversations.list", connectionKey, ACTION_IDS.slack.listConversations, {
       queryParams: { limit: "20", types: "public_channel" },
     });
 

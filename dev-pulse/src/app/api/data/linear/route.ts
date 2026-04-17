@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { passthrough } from "@/lib/one-passthrough";
-
-const LINEAR_GRAPHQL = "conn_mod_def::GJ4vJTdCQPY::f4IhKVnuTv6Us2d-GwWvCw";
+import { ACTION_IDS } from "@/lib/action-ids";
 
 export async function GET(req: NextRequest) {
   const connectionKey = req.nextUrl.searchParams.get("connectionKey");
@@ -9,7 +8,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-    const result = await passthrough("graphql", connectionKey, LINEAR_GRAPHQL, {
+    const result = await passthrough("graphql", connectionKey, ACTION_IDS.linear.graphql, {
       method: "POST",
       data: {
         query: `{
