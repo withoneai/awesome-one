@@ -135,7 +135,8 @@ function groupToolSteps(steps: ToolStep[]): ActionGroup[] {
     if (!actionId) continue;
 
     const platform = step.platform || "unknown";
-    const title = titleByActionId[actionId] || actionId;
+    const title = titleByActionId[actionId];
+    if (!title) continue; // skip executes with no knowledge title (plumbing calls)
 
     if (!attemptsByActionId[actionId]) {
       attemptsByActionId[actionId] = [];
