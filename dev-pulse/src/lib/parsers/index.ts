@@ -5,6 +5,7 @@
 import type { PulseEvent } from "@/lib/event-store";
 import { parseGitHubEvent } from "./github";
 import { parseLinearEvent } from "./linear";
+import { parseCalendarEvent } from "./calendar";
 
 export type ParsedEvent = Omit<PulseEvent, "id" | "timestamp">;
 
@@ -14,7 +15,14 @@ type EventParser = (eventType: string, payload: Record<string, any>) => ParsedEv
 const parsers: Record<string, EventParser> = {
   github: parseGitHubEvent,
   linear: parseLinearEvent,
+  "google-calendar": parseCalendarEvent,
 };
+
+function toTitleCase(str: string): string {
+  return str
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export function parseWebhookEvent(
   platform: string,
@@ -25,12 +33,12 @@ export function parseWebhookEvent(
   const parser = parsers[platform];
   if (parser) return parser(eventType, payload);
 
-  // Generic fallback for unregistered platforms
+  // Generic fallback for unregistered platforms — title case
   const action = payload.action as string;
   return {
     platform,
     eventType,
-    title: `${platform} ${eventType}`,
-    description: action || eventType,
+    title: `${toTitleCase(platform)} ${toTitleCase(eventType)}`,
+    description: action ? toTitleCase(action) : "",
   };
 }
