@@ -19,22 +19,16 @@ function verifySignature(body: string, signature: string | null, secret: string)
   return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
-// Calendar webhooks just say "something changed" — fetch recent events and diff
-// Track seen events by id:updated to avoid duplicates across webhook bursts
-const seenCalendarKeys = new Set<string>();
-const CALENDAR_SEEN_MAX = 1000;
+// Calendar webhooks just say "something changed" — fetch recently updated events
 const CALENDAR_LOOKBACK_MS = 5 * 60 * 1000;
 
 async function fetchCalendarChanges(): Promise<void> {
   const conn = getConnectionByPlatform("google-calendar");
-  if (!conn) {
-    console.error("Calendar sync: no google-calendar connection found");
-    return;
-  }
+  if (!conn) return;
 
   try {
     const now = new Date();
-    const weekFromNow = new Date(now.getTime() + 7 * 86400000);
+    const weekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
     const data = await passthrough(
       "calendars/{calendarId}/events",
@@ -55,25 +49,18 @@ async function fetchCalendarChanges(): Promise<void> {
 
     const items = data?.items || [];
 
-    // Prevent unbounded memory growth — clear the set if it gets too large
-    if (seenCalendarKeys.size > CALENDAR_SEEN_MAX) {
-      seenCalendarKeys.clear();
-    }
-
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const item of items) {
       const evt = item as any;
-      const key = `${evt.id}:${evt.updated || evt.created}`;
-
-      // Skip if we already surfaced this exact version
-      if (seenCalendarKeys.has(key)) continue;
-      seenCalendarKeys.add(key);
-
       const summary = evt.summary || "Untitled event";
       const startTime = evt.start?.dateTime || evt.start?.date;
 
+      // Use calendar event ID + updated timestamp as our event ID
+      // SQLite INSERT OR IGNORE prevents duplicates naturally
+      const eventId = `cal-${evt.id}-${evt.updated || evt.created}`;
+
       addEvent({
-        id: `cal-${evt.id}-${Date.now()}`,
+        id: eventId,
         platform: "google-calendar",
         eventType: "event.created",
         title: summary,
@@ -82,7 +69,7 @@ async function fetchCalendarChanges(): Promise<void> {
       });
     }
   } catch (err) {
-    console.error(`Calendar sync failed (connection: ${conn.id}, platform: ${conn.platform}):`, err);
+    console.error("Calendar sync failed:", err);
   }
 }
 
