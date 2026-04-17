@@ -12,6 +12,9 @@ export async function POST(req: Request) {
   // Get tools from One's MCP server (proper MCP protocol)
   const tools = await getOneMCPTools();
 
+  // Track action titles from knowledge steps — keyed by actionId
+  const titleByActionId: Record<string, string> = {};
+
   const result = streamText({
     model: anthropic("claude-sonnet-4-20250514"),
     system: `You are Dev Pulse, an engineering command center.
@@ -32,11 +35,31 @@ export async function POST(req: Request) {
       if (!toolResults) return;
 
       for (const tr of toolResults) {
-        if (tr.toolName !== "execute_one_action") continue;
-
-        // AI SDK v6 stores tool output under 'output', not 'result'
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const trAny = tr as any;
+
+        // Collect action titles from knowledge steps
+        if (tr.toolName === "get_one_action_knowledge") {
+          const output = trAny.output ?? trAny.result;
+          if (output) {
+            try {
+              let parsed = output;
+              if (typeof parsed === "string") parsed = JSON.parse(parsed);
+              const text = parsed?.content?.[0]?.text || (typeof parsed === "string" ? parsed : "");
+              const match = text.match(/^#\s*(?:Action:\s*)?\n*(.+)/m);
+              const title = match?.[1]?.trim();
+              const actionId = trAny.input?.actionId as string;
+              if (title && actionId) {
+                titleByActionId[actionId] = title;
+              }
+            } catch { /* ignore */ }
+          }
+          continue;
+        }
+
+        // Only process execute actions
+        if (tr.toolName !== "execute_one_action") continue;
+
         const rawResult = trAny.output ?? trAny.result ?? trAny.content;
         if (!rawResult) continue;
 
@@ -45,7 +68,7 @@ export async function POST(req: Request) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           let parsed: any = rawResult;
           if (typeof parsed === "string") {
-            try { parsed = JSON.parse(parsed); } catch { /* keep as string */ }
+            try { parsed = JSON.parse(parsed); } catch { /* keep */ }
           }
           if (parsed?.content && Array.isArray(parsed.content)) {
             const text = parsed.content[0]?.text;
@@ -57,54 +80,18 @@ export async function POST(req: Request) {
           // Skip MCP errors
           if (parsed?.raw?.startsWith?.("MCP error")) continue;
 
-          const responseData = parsed?.responseData?.data || parsed?.responseData || parsed;
-          const requestConfig = parsed?.requestConfig;
+          // Get platform and action title from the tool input (not from response parsing)
+          const platform = (trAny.input?.platform as string) || "unknown";
+          const actionId = trAny.input?.actionId as string;
+          const title = actionId ? titleByActionId[actionId] : null;
 
-          // Detect platform from request path
-          const path: string = requestConfig?.path || requestConfig?.url || "";
-          let platform = "unknown";
-          if (path.includes("slack") || path.includes("chat.post")) platform = "slack";
-          else if (path.includes("linear") || path.includes("graphql")) platform = "linear";
-          else if (path.includes("github")) platform = "github";
-          else if (path.includes("calendar")) platform = "google-calendar";
-          else if (path.includes("adyen") || path.includes("/v3/") || path.includes("/v71/")) platform = "adyen";
-
-          // Build a generic title from the response
-          let title = "";
-          let description = "";
-
-          // Try common response patterns
-          if (responseData?.issueCreate?.success) {
-            const issue = responseData.issueCreate.issue;
-            title = `Created ${issue.identifier}: ${issue.title}`;
-            platform = "linear";
-          } else if (responseData?.ok === true && responseData?.channel) {
-            title = "Message sent to Slack";
-            description = `Channel: ${responseData.channel}`;
-            platform = "slack";
-          } else if (responseData?.kind === "calendar#event") {
-            title = `Scheduled: ${responseData.summary}`;
-            platform = "google-calendar";
-          } else if (responseData?.number && responseData?.html_url) {
-            title = `Opened #${responseData.number}: ${responseData.title}`;
-            platform = "github";
-          } else if (responseData?.id && responseData?.merchantId) {
-            title = `Created store: ${responseData.description || responseData.id}`;
-            platform = "adyen";
-          } else if (responseData?.url?.includes?.("adyen.link")) {
-            title = "Created payment link";
-            description = responseData.url;
-            platform = "adyen";
-          }
-
-          // Only add to feed if we could identify something meaningful
           if (title) {
             addEvent({
               id: crypto.randomUUID(),
               platform,
               eventType: "action.executed",
               title,
-              description,
+              description: "",
               timestamp: new Date().toISOString(),
             });
           }
