@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const ONE_API_BASE = "https://api.withone.ai/v1";
+import { ONE_API_BASE } from "@/lib/constants";
 
 export async function GET(req: NextRequest) {
   const platform = req.nextUrl.searchParams.get("platform");

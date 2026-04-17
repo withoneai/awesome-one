@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const ONE_API_BASE = process.env.ONE_API_BASE || "https://api.withone.ai/v1";
+import { ONE_API_BASE } from "@/lib/constants";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",

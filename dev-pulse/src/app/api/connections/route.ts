@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getConnections, saveConnection, deleteConnection as dbDeleteConnection } from "@/lib/db";
 
-const ONE_API_BASE = "https://api.withone.ai/v1";
+import { ONE_API_BASE } from "@/lib/constants";
 
 // GET: Return connections from SQLite. Syncs from vault on first load or when ?sync=true.
 export async function GET(req: NextRequest) {

@@ -2,7 +2,7 @@
 // Used for KPI data fetching where action IDs are known and deterministic
 // Docs: https://withone.ai/docs — see passthrough API section
 
-const ONE_API_BASE = "https://api.withone.ai/v1";
+import { ONE_API_BASE } from "@/lib/constants";
 
 export async function passthrough(
   path: string,
