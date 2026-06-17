@@ -1,0 +1,70 @@
+{
+  "key": "google-sheets-append-rows",
+  "name": "Append Rows to Google Sheets",
+  "description": "Append rows of data to a Google Sheets spreadsheet. Handles the value range formatting and append semantics (inserts after the last row with data).",
+  "version": "1",
+  "inputs": {
+    "googleSheetsConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Sheets connection key",
+      "connection": { "platform": "google-sheets" }
+    },
+    "spreadsheetId": {
+      "type": "string",
+      "required": true,
+      "description": "Spreadsheet ID (from the URL)"
+    },
+    "range": {
+      "type": "string",
+      "required": false,
+      "default": "Sheet1",
+      "description": "Sheet name or A1 range notation (e.g., 'Sheet1' or 'Sheet1!A:Z')"
+    },
+    "values": {
+      "type": "array",
+      "required": true,
+      "description": "2D array of values. Each inner array is a row. Example: [[\"Name\",\"Email\"],[\"Alice\",\"alice@example.com\"]]"
+    },
+    "valueInputOption": {
+      "type": "string",
+      "required": false,
+      "default": "USER_ENTERED",
+      "description": "'USER_ENTERED' (parsed like typing in the UI) or 'RAW' (stored as-is)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPayload",
+      "name": "Validate and build request",
+      "type": "code",
+      "code": {
+        "source": "const { values, range, valueInputOption } = $.input;\nif (!values || !Array.isArray(values) || values.length === 0) throw new Error('values must be a non-empty 2D array');\nconst formatted = values.map(row => Array.isArray(row) ? row : [row]);\nreturn {\n  body: { range: range || 'Sheet1', majorDimension: 'ROWS', values: formatted },\n  queryParams: { valueInputOption: valueInputOption || 'USER_ENTERED', insertDataOption: 'INSERT_ROWS' }\n};"
+      }
+    },
+    {
+      "id": "appendValues",
+      "name": "Append values via Sheets API",
+      "type": "action",
+      "action": {
+        "platform": "google-sheets",
+        "actionId": "conn_mod_def::GJ30kKk8ogk::hCE5XVrgQ3m0ip3lGzJRfQ",
+        "connectionKey": "$.input.googleSheetsConnectionKey",
+        "pathVars": {
+          "spreadsheetId": "$.input.spreadsheetId",
+          "range": "$.input.range"
+        },
+        "queryParams": "$.steps.buildPayload.output.queryParams",
+        "data": "$.steps.buildPayload.output.body"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.appendValues.response || {};\nconst updates = resp.updates || {};\nreturn {\n  spreadsheetId: resp.spreadsheetId || $.input.spreadsheetId,\n  updatedRange: updates.updatedRange || resp.tableRange || '',\n  updatedRows: updates.updatedRows || 0,\n  updatedColumns: updates.updatedColumns || 0,\n  updatedCells: updates.updatedCells || 0,\n  summary: `Appended ${updates.updatedRows || 0} row${(updates.updatedRows || 0) === 1 ? '' : 's'} to ${$.input.range || 'Sheet1'}`\n};"
+      }
+    }
+  ]
+}

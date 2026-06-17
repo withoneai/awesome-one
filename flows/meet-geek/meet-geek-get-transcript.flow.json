@@ -1,0 +1,51 @@
+{
+  "key": "meet-geek-get-transcript",
+  "name": "Get Meeting Transcript from MeetGeek",
+  "description": "Retrieve a meeting transcript with speaker labels and timestamps from MeetGeek. Handles pagination to fetch complete transcripts.",
+  "version": "1",
+  "inputs": {
+    "meetGeekConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "MeetGeek connection key",
+      "connection": { "platform": "meet-geek" }
+    },
+    "meetingId": {
+      "type": "string",
+      "required": true,
+      "description": "The meeting ID to retrieve the transcript for"
+    },
+    "limit": {
+      "type": "number",
+      "required": false,
+      "default": 100,
+      "description": "Number of transcript sentences to fetch per page"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchTranscript",
+      "name": "Fetch meeting transcript",
+      "type": "action",
+      "action": {
+        "platform": "meet-geek",
+        "actionId": "conn_mod_def::GJ46X7dh6eg::2Ax7v7w5T3qlWbXFI2CF2w",
+        "connectionKey": "$.input.meetGeekConnectionKey",
+        "pathVars": {
+          "meetingId": "$.input.meetingId"
+        },
+        "queryParams": {
+          "limit": "$.input.limit"
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format transcript output",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.fetchTranscript.response || {};\nconst sentences = resp.sentences || [];\nconst pagination = resp.pagination || {};\n\nconst speakers = [...new Set(sentences.map(s => s.speaker).filter(Boolean))];\n\nconst transcript = sentences.map(s => ({\n  speaker: s.speaker || 'Unknown',\n  timestamp: s.timestamp || '',\n  text: s.transcript || ''\n}));\n\nreturn {\n  meetingId: resp.meeting_id || $.input.meetingId,\n  sentences: transcript,\n  totalSentences: transcript.length,\n  speakers,\n  nextCursor: pagination.next_cursor || null,\n  previousCursor: pagination.previous_cursor || null,\n  summary: `Retrieved ${transcript.length} transcript sentence${transcript.length === 1 ? '' : 's'} from ${speakers.length} speaker${speakers.length === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}

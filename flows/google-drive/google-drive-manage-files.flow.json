@@ -1,0 +1,95 @@
+{
+  "key": "google-drive-manage-files",
+  "name": "List and Create Files in Google Drive",
+  "description": "Search for files in Google Drive or create a new file/folder. Supports Drive search query syntax for filtering.",
+  "version": "1",
+  "inputs": {
+    "googleDriveConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Drive connection key",
+      "connection": { "platform": "google-drive" }
+    },
+    "operation": {
+      "type": "string",
+      "required": true,
+      "description": "Operation: 'list' to search/list files, 'create' to create a file or folder"
+    },
+    "query": {
+      "type": "string",
+      "required": false,
+      "description": "Drive search query for list operation (e.g., \"name contains 'report'\" or \"mimeType='application/vnd.google-apps.folder'\")"
+    },
+    "name": {
+      "type": "string",
+      "required": false,
+      "description": "File or folder name (for create operation)"
+    },
+    "mimeType": {
+      "type": "string",
+      "required": false,
+      "description": "MIME type. Use 'application/vnd.google-apps.folder' for folders."
+    },
+    "parents": {
+      "type": "array",
+      "required": false,
+      "description": "Parent folder IDs (for create operation)"
+    },
+    "pageSize": {
+      "type": "number",
+      "required": false,
+      "default": 20,
+      "description": "Number of files to return (list operation, max 1000)"
+    }
+  },
+  "steps": [
+    {
+      "id": "routeOperation",
+      "name": "Determine which operation to run",
+      "type": "code",
+      "code": {
+        "source": "const op = ($.input.operation || '').toLowerCase();\nif (op !== 'list' && op !== 'create') throw new Error('operation must be \"list\" or \"create\"');\nreturn { op };"
+      }
+    },
+    {
+      "id": "listFiles",
+      "name": "List/search files in Google Drive",
+      "type": "action",
+      "if": "$.steps.routeOperation.output.op === 'list'",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6Rzy_a8J8::5DPVGp3fTXegRgMN4v11tA",
+        "connectionKey": "$.input.googleDriveConnectionKey",
+        "queryParams": {
+          "q": "$.input.query",
+          "pageSize": "$.input.pageSize",
+          "fields": "files(id,name,mimeType,createdTime,modifiedTime,size,webViewLink,parents),nextPageToken"
+        }
+      }
+    },
+    {
+      "id": "createFile",
+      "name": "Create a file or folder",
+      "type": "action",
+      "if": "$.steps.routeOperation.output.op === 'create'",
+      "action": {
+        "platform": "google-drive",
+        "actionId": "conn_mod_def::GJ6RzlNn1fs::1Qlp0KgqQbGF7WVXdC5wsw",
+        "connectionKey": "$.input.googleDriveConnectionKey",
+        "data": {
+          "name": "$.input.name",
+          "mimeType": "$.input.mimeType",
+          "parents": "$.input.parents"
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const op = $.steps.routeOperation.output.op;\nif (op === 'list') {\n  const resp = $.steps.listFiles?.response || {};\n  const files = resp.files || [];\n  return {\n    files: files.map(f => ({ id: f.id, name: f.name, mimeType: f.mimeType, modifiedTime: f.modifiedTime, webViewLink: f.webViewLink })),\n    count: files.length,\n    nextPageToken: resp.nextPageToken || null,\n    summary: `Found ${files.length} file${files.length === 1 ? '' : 's'}`\n  };\n} else {\n  const resp = $.steps.createFile?.response || {};\n  const isFolder = (resp.mimeType || '').includes('folder');\n  return {\n    id: resp.id || '',\n    name: resp.name || $.input.name,\n    mimeType: resp.mimeType || '',\n    webViewLink: resp.webViewLink || '',\n    created: !!resp.id,\n    summary: resp.id ? `Created ${isFolder ? 'folder' : 'file'} \"${resp.name || $.input.name}\"` : 'Failed to create'\n  };\n}"
+      }
+    }
+  ]
+}

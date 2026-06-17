@@ -1,0 +1,78 @@
+{
+  "key": "attio-upsert-person",
+  "name": "Upsert a Person in Attio",
+  "description": "Creates or updates a person record in Attio CRM by matching on email address. If a person with the given email exists, their record is updated; otherwise a new person is created.",
+  "version": "1",
+  "inputs": {
+    "attioConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Attio connection key",
+      "connection": { "platform": "attio" }
+    },
+    "email": {
+      "type": "string",
+      "required": true,
+      "description": "Email address of the person (used as the matching attribute)"
+    },
+    "firstName": {
+      "type": "string",
+      "required": false,
+      "description": "First name"
+    },
+    "lastName": {
+      "type": "string",
+      "required": false,
+      "description": "Last name"
+    },
+    "phone": {
+      "type": "string",
+      "required": false,
+      "description": "Phone number"
+    },
+    "description": {
+      "type": "string",
+      "required": false,
+      "description": "Description or bio"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPayload",
+      "name": "Build the values payload for the person record",
+      "type": "code",
+      "code": {
+        "source": "const { email, firstName, lastName, phone, description } = $.input;\n\nif (!email) throw new Error('email is required');\n\nconst values = {\n  email_addresses: [{ email_address: email }]\n};\n\nif (firstName || lastName) {\n  const name = {};\n  if (firstName) name.first_name = firstName;\n  if (lastName) name.last_name = lastName;\n  values.name = [name];\n}\n\nif (phone) {\n  values.phone_numbers = [{ original_phone_number: phone }];\n}\n\nif (description) {\n  values.description = [{ value: description }];\n}\n\nreturn { values };"
+      }
+    },
+    {
+      "id": "upsertPerson",
+      "name": "Assert (upsert) the person record via Attio API",
+      "type": "action",
+      "action": {
+        "platform": "attio",
+        "actionId": "conn_mod_def::GJ0CaZyhaFQ::Kzy79dY6TWW-84Z-BA-awA",
+        "connectionKey": "$.input.attioConnectionKey",
+        "pathVars": {
+          "object": "people"
+        },
+        "queryParams": {
+          "matching_attribute": "email_addresses"
+        },
+        "data": {
+          "data": {
+            "values": "$.steps.buildPayload.output.values"
+          }
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.upsertPerson.response || {};\nconst data = resp.data || {};\nconst id = data.id || {};\n\nreturn {\n  recordId: id.record_id || '',\n  objectId: id.object_id || '',\n  webUrl: data.web_url || '',\n  createdAt: data.created_at || '',\n  email: $.input.email,\n  summary: id.record_id\n    ? `Upserted person ${$.input.email} (${id.record_id})`\n    : 'Failed to upsert person'\n};"
+      }
+    }
+  ]
+}

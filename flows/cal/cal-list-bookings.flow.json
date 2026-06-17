@@ -1,0 +1,58 @@
+{
+  "key": "cal-list-bookings",
+  "name": "List Bookings from Cal.com",
+  "description": "List and filter bookings from Cal.com. Supports filtering by status and date range.",
+  "version": "1",
+  "inputs": {
+    "calConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Cal.com connection key",
+      "connection": { "platform": "cal-com" }
+    },
+    "status": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by status: 'upcoming', 'past', 'cancelled', 'unconfirmed'"
+    },
+    "afterStart": {
+      "type": "string",
+      "required": false,
+      "description": "Filter bookings after this ISO 8601 date"
+    },
+    "beforeEnd": {
+      "type": "string",
+      "required": false,
+      "description": "Filter bookings before this ISO 8601 date"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const { status, afterStart, beforeEnd } = $.input;\nconst params = {};\nif (status) params.status = status;\nif (afterStart) params['afterStart'] = afterStart;\nif (beforeEnd) params['beforeEnd'] = beforeEnd;\nreturn { params };"
+      }
+    },
+    {
+      "id": "listBookings",
+      "name": "List bookings via Cal.com API",
+      "type": "action",
+      "action": {
+        "platform": "cal-com",
+        "actionId": "conn_mod_def::GJ1ABacT6P4::TQSYRwLQT02RtPGc25_8Qg",
+        "connectionKey": "$.input.calConnectionKey",
+        "queryParams": "$.steps.buildQuery.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listBookings.response || {};\nconst bookings = resp.data?.bookings || resp.bookings || resp.data || [];\nconst list = Array.isArray(bookings) ? bookings : [];\nreturn {\n  bookings: list.map(b => ({\n    id: b.id,\n    uid: b.uid,\n    title: b.title,\n    startTime: b.startTime,\n    endTime: b.endTime,\n    status: b.status,\n    attendees: (b.attendees || []).map(a => ({ name: a.name, email: a.email }))\n  })),\n  count: list.length,\n  summary: `Found ${list.length} booking${list.length === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}

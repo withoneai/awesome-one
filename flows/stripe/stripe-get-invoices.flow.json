@@ -1,0 +1,84 @@
+{
+  "key": "stripe-get-invoices",
+  "name": "List Stripe Invoices",
+  "description": "Lists Stripe invoices with filtering by status, customer, date range, and collection method. Compresses the response by removing 30+ verbose fields per invoice while preserving all actionable data.",
+  "version": "1",
+  "inputs": {
+    "stripeConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Stripe connection key",
+      "connection": { "platform": "stripe" }
+    },
+    "status": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by status: 'draft', 'open', 'paid', 'uncollectible', or 'void'"
+    },
+    "customer": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by customer ID"
+    },
+    "subscription": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by subscription ID"
+    },
+    "collectionMethod": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by collection method: 'charge_automatically' or 'send_invoice'"
+    },
+    "createdAfter": {
+      "type": "number",
+      "required": false,
+      "description": "Filter invoices created after this Unix timestamp"
+    },
+    "createdBefore": {
+      "type": "number",
+      "required": false,
+      "description": "Filter invoices created before this Unix timestamp"
+    },
+    "limit": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Number of invoices to return (1-100)"
+    },
+    "startingAfter": {
+      "type": "string",
+      "required": false,
+      "description": "Cursor for pagination (invoice ID to start after)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build query parameters with date filters",
+      "type": "code",
+      "code": {
+        "source": "const { status, customer, subscription, collectionMethod, createdAfter, createdBefore, limit, startingAfter } = $.input;\n\nconst params = {};\nif (status) params.status = status;\nif (customer) params.customer = customer;\nif (subscription) params.subscription = subscription;\nif (collectionMethod) params.collection_method = collectionMethod;\nif (createdAfter) params['created[gte]'] = String(createdAfter);\nif (createdBefore) params['created[lte]'] = String(createdBefore);\nif (limit) params.limit = String(Math.max(1, Math.min(100, limit)));\nif (startingAfter) params.starting_after = startingAfter;\n\nreturn { params };"
+      }
+    },
+    {
+      "id": "listInvoices",
+      "name": "Fetch invoices from Stripe",
+      "type": "action",
+      "action": {
+        "platform": "stripe",
+        "actionId": "conn_mod_def::GHEgA9sdkqQ::GSd3xL1zTvSpx3JBvnVIJQ",
+        "connectionKey": "$.input.stripeConnectionKey",
+        "queryParams": "$.steps.buildQuery.output.params"
+      }
+    },
+    {
+      "id": "compressResults",
+      "name": "Strip verbose fields from each invoice and its line items",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listInvoices.response || {};\nconst invoices = resp.data || [];\n\nconst invoiceKeysToRemove = [\n  'object', 'account_tax_ids', 'amount_overpaid', 'application',\n  'application_fee_amount', 'attempt_count', 'attempted', 'auto_advance',\n  'automatically_finalizes_at', 'charge', 'confirmation_secret',\n  'custom_fields', 'customer_address', 'customer_phone', 'customer_shipping',\n  'customer_tax_exempt', 'customer_tax_ids', 'default_payment_method',\n  'default_source', 'default_tax_rates', 'discount', 'effective_at',\n  'ending_balance', 'footer', 'from_invoice', 'last_finalization_error',\n  'latest_revision', 'livemode', 'metadata', 'next_payment_attempt',\n  'on_behalf_of', 'parent', 'payment_settings', 'payments',\n  'post_payment_credit_notes_amount', 'pre_payment_credit_notes_amount',\n  'quote', 'receipt_number', 'rendering', 'shipping_cost', 'shipping_details',\n  'starting_balance', 'statement_descriptor', 'test_clock', 'threshold_reason',\n  'total_pretax_credit_amounts', 'webhooks_delivered_at'\n];\n\nconst lineKeysToRemove = ['object', 'livemode', 'metadata', 'parent', 'pretax_credit_amounts', 'pricing', 'taxes'];\n\nfunction compressInvoice(inv) {\n  const c = { ...inv };\n  invoiceKeysToRemove.forEach(k => delete c[k]);\n\n  if (c.lines && c.lines.data) {\n    c.lines.data = c.lines.data.map(line => {\n      const l = { ...line };\n      lineKeysToRemove.forEach(k => delete l[k]);\n      return l;\n    });\n  }\n\n  return c;\n}\n\nconst compressed = invoices.map(compressInvoice);\n\nreturn {\n  invoices: compressed,\n  totalReturned: compressed.length,\n  hasMore: resp.has_more || false,\n  summary: `Retrieved ${compressed.length} invoice${compressed.length === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}

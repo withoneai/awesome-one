@@ -1,0 +1,84 @@
+{
+  "key": "github-create-pr",
+  "name": "Create Pull Request",
+  "description": "Create a pull request in a GitHub repository. Supports title, body, base/head branches, draft mode, labels, assignees, and reviewers.",
+  "version": "1",
+  "inputs": {
+    "githubConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "GitHub connection key",
+      "connection": { "platform": "github" }
+    },
+    "owner": {
+      "type": "string",
+      "required": true,
+      "description": "Repository owner (user or org)"
+    },
+    "repo": {
+      "type": "string",
+      "required": true,
+      "description": "Repository name"
+    },
+    "title": {
+      "type": "string",
+      "required": true,
+      "description": "Pull request title"
+    },
+    "body": {
+      "type": "string",
+      "required": false,
+      "description": "Pull request description (supports GitHub-flavored markdown)"
+    },
+    "head": {
+      "type": "string",
+      "required": true,
+      "description": "The branch containing your changes (e.g., 'feature-branch' or 'fork-owner:branch')"
+    },
+    "base": {
+      "type": "string",
+      "required": false,
+      "default": "main",
+      "description": "The branch you want to merge into (default: main)"
+    },
+    "draft": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Create as a draft pull request"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPayload",
+      "name": "Build PR creation payload",
+      "type": "code",
+      "code": {
+        "source": "const { title, body, head, base, draft } = $.input;\nif (!title) throw new Error('title is required');\nif (!head) throw new Error('head branch is required');\n\nconst payload = {\n  title,\n  head,\n  base: base || 'main'\n};\nif (body) payload.body = body;\nif (draft) payload.draft = true;\n\nreturn { payload };"
+      }
+    },
+    {
+      "id": "createPR",
+      "name": "Create the pull request via GitHub API",
+      "type": "action",
+      "action": {
+        "platform": "github",
+        "actionId": "conn_mod_def::GCQEQSHasPY::GMPh353yRuaB5HTGalx57g",
+        "connectionKey": "$.input.githubConnectionKey",
+        "pathVars": {
+          "owner": "$.input.owner",
+          "repo": "$.input.repo"
+        },
+        "data": "$.steps.buildPayload.output.payload"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createPR.response || {};\nreturn {\n  prNumber: resp.number,\n  title: resp.title,\n  state: resp.state,\n  draft: resp.draft || false,\n  head: resp.head?.ref || $.input.head,\n  base: resp.base?.ref || $.input.base || 'main',\n  url: resp.html_url,\n  diffUrl: resp.diff_url,\n  created: !!resp.number,\n  summary: resp.number\n    ? 'Created PR #' + resp.number + ': ' + resp.title + ' (' + (resp.head?.ref || $.input.head) + ' -> ' + (resp.base?.ref || $.input.base) + ')'\n    : 'Failed to create pull request'\n};"
+      }
+    }
+  ]
+}

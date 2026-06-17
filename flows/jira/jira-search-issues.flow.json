@@ -1,0 +1,73 @@
+{
+  "key": "jira-search-issues",
+  "name": "Search Jira Issues via JQL",
+  "description": "Searches for Jira issues using JQL (Jira Query Language). Returns issue keys, summaries, statuses, assignees, and other fields. Handles pagination automatically.",
+  "version": "1",
+  "inputs": {
+    "jiraConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Jira connection key",
+      "connection": { "platform": "jira" }
+    },
+    "jiraCloudId": {
+      "type": "string",
+      "required": true,
+      "description": "Jira Cloud site ID (UUID). Get it via the Get Sites action."
+    },
+    "jql": {
+      "type": "string",
+      "required": true,
+      "description": "JQL query string. Must be bounded (include a search restriction). Examples: 'project = ENG AND status = Open', 'assignee = currentUser() ORDER BY updated DESC'"
+    },
+    "maxResults": {
+      "type": "number",
+      "required": false,
+      "default": 20,
+      "description": "Max issues to return (1-100, default 20)"
+    },
+    "fields": {
+      "type": "string",
+      "required": false,
+      "default": "summary,status,assignee,priority,created,updated",
+      "description": "Comma-separated field list. Use '*all' for all fields, '*navigable' for navigable fields."
+    },
+    "nextPageToken": {
+      "type": "string",
+      "required": false,
+      "description": "Pagination token from a previous response"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const { jql, maxResults, fields, nextPageToken } = $.input;\n\nif (!jql) throw new Error('jql query is required');\n\nconst max = Math.max(1, Math.min(100, maxResults || 20));\nconst fieldList = fields || 'summary,status,assignee,priority,created,updated';\n\nconst params = {\n  jql: jql,\n  maxResults: String(max),\n  fields: fieldList\n};\n\nif (nextPageToken) params.nextPageToken = nextPageToken;\n\nreturn { params, jql, max };"
+      }
+    },
+    {
+      "id": "searchIssues",
+      "name": "Search issues via JQL",
+      "type": "action",
+      "action": {
+        "platform": "jira",
+        "actionId": "conn_mod_def::GJ4qbdtRYhI::S3uWGiHPRMCzy6qMTxFe1A",
+        "connectionKey": "$.input.jiraConnectionKey",
+        "pathVars": {
+          "jiraCloudId": "$.input.jiraCloudId"
+        },
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Extract and format issue results",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.searchIssues.response || {};\nconst issues = (resp.issues || []).map(issue => {\n  const f = issue.fields || {};\n  return {\n    id: issue.id,\n    key: issue.key,\n    summary: f.summary || '',\n    status: f.status ? f.status.name : '',\n    statusCategory: f.status && f.status.statusCategory ? f.status.statusCategory.name : '',\n    assignee: f.assignee ? f.assignee.displayName : 'Unassigned',\n    assigneeAccountId: f.assignee ? f.assignee.accountId : null,\n    priority: f.priority ? f.priority.name : '',\n    created: f.created || '',\n    updated: f.updated || ''\n  };\n});\n\nconst result = {\n  issues,\n  totalFound: issues.length,\n  isLast: resp.isLast !== false,\n  jql: $.steps.buildParams.output.jql,\n  summary: `Found ${issues.length} issue${issues.length === 1 ? '' : 's'} matching JQL query`\n};\n\nif (resp.nextPageToken) result.nextPageToken = resp.nextPageToken;\n\nreturn result;"
+      }
+    }
+  ]
+}

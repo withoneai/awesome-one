@@ -1,0 +1,56 @@
+{
+  "key": "shippo-track-package",
+  "name": "Track Package via Shippo",
+  "description": "Get tracking status and history for a package. Automatically detects Shippo test tracking numbers (SHIPPO_*) and routes them correctly.",
+  "version": "1",
+  "inputs": {
+    "shippoConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Shippo connection key",
+      "connection": { "platform": "shippo" }
+    },
+    "carrier": {
+      "type": "string",
+      "required": true,
+      "description": "Carrier name in lowercase (e.g., usps, fedex, ups, dhl_express, shippo for test)"
+    },
+    "trackingNumber": {
+      "type": "string",
+      "required": true,
+      "description": "Tracking number for the shipment"
+    }
+  },
+  "steps": [
+    {
+      "id": "resolveCarrier",
+      "name": "Auto-detect test tracking numbers",
+      "type": "code",
+      "code": {
+        "source": "let carrier = $.input.carrier.toLowerCase();\nconst trackingNumber = $.input.trackingNumber;\n\n// Auto-detect Shippo test tracking numbers\nif (trackingNumber.startsWith('SHIPPO_')) carrier = 'shippo';\n\nreturn { carrier, trackingNumber };"
+      }
+    },
+    {
+      "id": "getTracking",
+      "name": "Fetch tracking status",
+      "type": "action",
+      "action": {
+        "platform": "shippo",
+        "actionId": "conn_mod_def::GEf3AzbqJoI::Qg5-X5sFReKlrZ8OAcXnig",
+        "connectionKey": "$.input.shippoConnectionKey",
+        "pathVars": {
+          "Carrier": "$.steps.resolveCarrier.output.carrier",
+          "TrackingNumber": "$.steps.resolveCarrier.output.trackingNumber"
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format tracking result",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.getTracking.response || {};\nconst status = resp.tracking_status || {};\nconst history = (resp.tracking_history || []).map(h => ({\n  status: h.status || '',\n  details: h.status_details || '',\n  date: h.status_date || '',\n  location: h.location ? `${h.location.city || ''}, ${h.location.state || ''} ${h.location.zip || ''}`.trim() : ''\n}));\n\nreturn {\n  trackingNumber: resp.tracking_number || $.input.trackingNumber,\n  carrier: resp.carrier || $.input.carrier,\n  status: status.status || 'UNKNOWN',\n  statusDetails: status.status_details || '',\n  statusDate: status.status_date || '',\n  location: status.location ? `${status.location.city || ''}, ${status.location.state || ''}` : '',\n  eta: resp.eta || '',\n  servicelevel: resp.servicelevel?.name || '',\n  history,\n  summary: `${resp.tracking_number || $.input.trackingNumber}: ${status.status || 'UNKNOWN'} - ${status.status_details || 'No details available'}`\n};"
+      }
+    }
+  ]
+}

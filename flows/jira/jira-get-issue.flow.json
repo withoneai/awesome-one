@@ -1,0 +1,68 @@
+{
+  "key": "jira-get-issue",
+  "name": "Get a Jira Issue",
+  "description": "Retrieves full details for a Jira issue by ID or key. Returns a clean, structured response with key fields extracted (summary, status, assignee, priority, description, comments, etc.).",
+  "version": "1",
+  "inputs": {
+    "jiraConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Jira connection key",
+      "connection": { "platform": "jira" }
+    },
+    "jiraCloudId": {
+      "type": "string",
+      "required": true,
+      "description": "Jira Cloud site ID (UUID). Get it via the Get Sites action."
+    },
+    "issueIdOrKey": {
+      "type": "string",
+      "required": true,
+      "description": "Issue ID or key (e.g., 'PROJ-123' or '10001')"
+    },
+    "fields": {
+      "type": "string",
+      "required": false,
+      "default": "*navigable",
+      "description": "Comma-separated field list. '*all' for all, '*navigable' for navigable fields. Prefix with '-' to exclude."
+    },
+    "expand": {
+      "type": "string",
+      "required": false,
+      "description": "Comma-separated expand options: renderedFields, names, transitions, changelog, editmeta"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const params = {};\nconst fields = $.input.fields || '*navigable';\nparams.fields = fields;\nif ($.input.expand) params.expand = $.input.expand;\nreturn { params };"
+      }
+    },
+    {
+      "id": "getIssue",
+      "name": "Fetch issue details from Jira",
+      "type": "action",
+      "action": {
+        "platform": "jira",
+        "actionId": "conn_mod_def::GJ4qe6eIMMg::dTjGYNwLTBu34ueB7q45TA",
+        "connectionKey": "$.input.jiraConnectionKey",
+        "pathVars": {
+          "jiraCloudId": "$.input.jiraCloudId",
+          "issueIdOrKey": "$.input.issueIdOrKey"
+        },
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Extract and format key issue fields",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.getIssue.response || {};\nconst f = resp.fields || {};\n\n// Extract plain text from ADF body\nfunction adfToText(adf) {\n  if (!adf || !adf.content) return '';\n  return adf.content.map(block => {\n    if (block.content) return block.content.map(node => node.text || '').join('');\n    return '';\n  }).join('\\n');\n}\n\nconst description = typeof f.description === 'string'\n  ? f.description\n  : adfToText(f.description);\n\nconst comments = (f.comment && f.comment.comments || []).slice(-5).map(c => ({\n  id: c.id,\n  author: c.author ? c.author.displayName : '',\n  body: typeof c.body === 'string' ? c.body : adfToText(c.body),\n  created: c.created\n}));\n\nreturn {\n  id: resp.id || '',\n  key: resp.key || '',\n  self: resp.self || '',\n  summary: f.summary || '',\n  status: f.status ? f.status.name : '',\n  statusCategory: f.status && f.status.statusCategory ? f.status.statusCategory.name : '',\n  assignee: f.assignee ? f.assignee.displayName : 'Unassigned',\n  assigneeAccountId: f.assignee ? f.assignee.accountId : null,\n  reporter: f.reporter ? f.reporter.displayName : '',\n  priority: f.priority ? f.priority.name : '',\n  issueType: f.issuetype ? f.issuetype.name : '',\n  project: f.project ? { key: f.project.key, name: f.project.name } : {},\n  description: description.length > 2000 ? description.substring(0, 2000) + '...' : description,\n  labels: f.labels || [],\n  created: f.created || '',\n  updated: f.updated || '',\n  resolution: f.resolution ? f.resolution.name : null,\n  recentComments: comments,\n  transitions: resp.transitions || [],\n  summary_text: `${resp.key}: \"${f.summary || ''}\" [${f.status ? f.status.name : 'unknown'}] assigned to ${f.assignee ? f.assignee.displayName : 'nobody'}`\n};"
+      }
+    }
+  ]
+}

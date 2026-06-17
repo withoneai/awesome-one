@@ -1,0 +1,95 @@
+{
+  "key": "apollo-people-search",
+  "name": "Search for People (Net-New Prospecting)",
+  "description": "Search Apollo's database of 270M+ people by title, seniority, location, employer domain, technologies, and more. Returns demographic data without emails/phones (use enrichment flows to get contact details).",
+  "version": "1",
+  "inputs": {
+    "apolloConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Apollo connection key",
+      "connection": { "platform": "apollo" }
+    },
+    "personTitles": {
+      "type": "array",
+      "required": false,
+      "description": "Job titles to search for (matches similar titles by default). Examples: ['sales development representative', 'marketing manager']"
+    },
+    "personSeniorities": {
+      "type": "array",
+      "required": false,
+      "description": "Seniority levels. Allowed: owner, founder, c_suite, partner, vp, head, director, manager, senior, entry, intern"
+    },
+    "personLocations": {
+      "type": "array",
+      "required": false,
+      "description": "Where people live (cities, states, countries). Examples: ['california', 'ireland']"
+    },
+    "organizationDomains": {
+      "type": "array",
+      "required": false,
+      "description": "Employer domains (up to 1000). Examples: ['apollo.io', 'microsoft.com']"
+    },
+    "organizationLocations": {
+      "type": "array",
+      "required": false,
+      "description": "Employer HQ locations. Examples: ['texas', 'tokyo']"
+    },
+    "employeeRanges": {
+      "type": "array",
+      "required": false,
+      "description": "Employer headcount ranges as 'min,max' strings. Examples: ['1,10', '250,500']"
+    },
+    "technologies": {
+      "type": "array",
+      "required": false,
+      "description": "Technologies used by employer (any match). Use underscores for spaces. Examples: ['salesforce', 'google_analytics']"
+    },
+    "keywords": {
+      "type": "string",
+      "required": false,
+      "description": "Free-text keyword filter across results"
+    },
+    "page": {
+      "type": "number",
+      "required": false,
+      "default": 1,
+      "description": "Page number (1-500)"
+    },
+    "perPage": {
+      "type": "number",
+      "required": false,
+      "default": 25,
+      "description": "Results per page (1-100)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build query parameters from inputs",
+      "type": "code",
+      "code": {
+        "source": "const i = $.input;\nconst params = {};\nconst page = Math.max(1, Math.min(500, i.page || 1));\nconst perPage = Math.max(1, Math.min(100, i.perPage || 25));\nparams.page = String(page);\nparams.per_page = String(perPage);\n\nif (i.personTitles && i.personTitles.length) {\n  i.personTitles.forEach((t, idx) => { params['person_titles[' + idx + ']'] = t; });\n}\nif (i.personSeniorities && i.personSeniorities.length) {\n  i.personSeniorities.forEach((s, idx) => { params['person_seniorities[' + idx + ']'] = s; });\n}\nif (i.personLocations && i.personLocations.length) {\n  i.personLocations.forEach((l, idx) => { params['person_locations[' + idx + ']'] = l; });\n}\nif (i.organizationDomains && i.organizationDomains.length) {\n  i.organizationDomains.forEach((d, idx) => { params['q_organization_domains_list[' + idx + ']'] = d; });\n}\nif (i.organizationLocations && i.organizationLocations.length) {\n  i.organizationLocations.forEach((l, idx) => { params['organization_locations[' + idx + ']'] = l; });\n}\nif (i.employeeRanges && i.employeeRanges.length) {\n  i.employeeRanges.forEach((r, idx) => { params['organization_num_employees_ranges[' + idx + ']'] = r; });\n}\nif (i.technologies && i.technologies.length) {\n  i.technologies.forEach((t, idx) => { params['currently_using_any_of_technology_uids[' + idx + ']'] = t; });\n}\nif (i.keywords) params.q_keywords = i.keywords;\n\nreturn { params, page, perPage };"
+      }
+    },
+    {
+      "id": "searchPeople",
+      "name": "Search Apollo people database",
+      "type": "action",
+      "action": {
+        "platform": "apollo",
+        "actionId": "conn_mod_def::GJz2AmtsIH8::-KnLbk4nSHurCgEJXsodwA",
+        "connectionKey": "$.input.apolloConnectionKey",
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResults",
+      "name": "Format and summarize results",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.searchPeople.response || {};\nconst people = (resp.people || []).map(p => ({\n  id: p.id,\n  firstName: p.first_name,\n  lastName: p.last_name_obfuscated || '',\n  title: p.title || '',\n  hasEmail: p.has_email || false,\n  hasPhone: p.has_direct_phone === 'Yes',\n  organization: p.organization ? p.organization.name : '',\n  location: [p.has_city && 'city', p.has_state && 'state', p.has_country && 'country'].filter(Boolean).length > 0\n}));\n\nconst totalEntries = resp.total_entries || 0;\nconst page = $.steps.buildParams.output.page;\nconst perPage = $.steps.buildParams.output.perPage;\n\nreturn {\n  people,\n  totalEntries,\n  page,\n  perPage,\n  totalPages: Math.ceil(totalEntries / perPage),\n  count: people.length,\n  summary: totalEntries > 0\n    ? `Found ${totalEntries.toLocaleString()} people (showing page ${page}, ${people.length} results)`\n    : 'No people matched your search criteria'\n};"
+      }
+    }
+  ]
+}

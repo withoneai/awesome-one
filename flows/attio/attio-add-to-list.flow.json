@@ -1,0 +1,65 @@
+{
+  "key": "attio-add-to-list",
+  "name": "Add a Record to an Attio List",
+  "description": "Adds a person, company, or other record to an Attio list. Useful for managing sales pipelines, onboarding lists, or any workflow list.",
+  "version": "1",
+  "inputs": {
+    "attioConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Attio connection key",
+      "connection": { "platform": "attio" }
+    },
+    "list": {
+      "type": "string",
+      "required": true,
+      "description": "List slug or UUID (e.g., 'enterprise_sales')"
+    },
+    "parentObject": {
+      "type": "string",
+      "required": true,
+      "description": "Object slug the record belongs to (e.g., 'people', 'companies')"
+    },
+    "parentRecordId": {
+      "type": "string",
+      "required": true,
+      "description": "UUID of the record to add to the list"
+    },
+    "entryValues": {
+      "type": "object",
+      "required": false,
+      "default": {},
+      "description": "Optional attribute values for the list entry. Map of attribute slug to array of values."
+    }
+  },
+  "steps": [
+    {
+      "id": "addEntry",
+      "name": "Create list entry via Attio API",
+      "type": "action",
+      "action": {
+        "platform": "attio",
+        "actionId": "conn_mod_def::GJ0CWgKBjg0::vDH4_yvrQymWm020xEcQyg",
+        "connectionKey": "$.input.attioConnectionKey",
+        "pathVars": {
+          "list": "$.input.list"
+        },
+        "data": {
+          "data": {
+            "parent_record_id": "$.input.parentRecordId",
+            "parent_object": "$.input.parentObject",
+            "entry_values": "$.input.entryValues"
+          }
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.addEntry.response || {};\nconst data = resp.data || {};\nconst id = data.id || {};\n\nreturn {\n  entryId: id.entry_id || '',\n  listId: id.list_id || '',\n  parentRecordId: data.parent_record_id || $.input.parentRecordId,\n  parentObject: data.parent_object || $.input.parentObject,\n  createdAt: data.created_at || '',\n  summary: id.entry_id\n    ? `Added ${$.input.parentObject} record ${$.input.parentRecordId} to list ${$.input.list}`\n    : 'Failed to add record to list'\n};"
+      }
+    }
+  ]
+}

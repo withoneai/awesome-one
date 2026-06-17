@@ -1,0 +1,84 @@
+{
+  "key": "stripe-get-checkout-sessions",
+  "name": "List Stripe Checkout Sessions",
+  "description": "Lists Stripe Checkout sessions with filtering and response compression. Strips verbose fields (consent, shipping, branding, etc.) to return only actionable data.",
+  "version": "1",
+  "inputs": {
+    "stripeConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Stripe connection key",
+      "connection": { "platform": "stripe" }
+    },
+    "customer": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by customer ID"
+    },
+    "status": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by status: 'complete', 'expired', or 'open'"
+    },
+    "paymentIntent": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by payment intent ID"
+    },
+    "subscription": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by subscription ID"
+    },
+    "customerEmail": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by customer email address"
+    },
+    "limit": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Number of sessions to return (1-100)"
+    },
+    "startingAfter": {
+      "type": "string",
+      "required": false,
+      "description": "Cursor for pagination (session ID to start after)"
+    },
+    "expand": {
+      "type": "array",
+      "required": false,
+      "description": "Fields to expand (e.g., ['data.line_items', 'data.customer'])"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const { customer, status, paymentIntent, subscription, customerEmail, limit, startingAfter, expand } = $.input;\n\nconst params = {};\nif (customer) params.customer = customer;\nif (status) params.status = status;\nif (paymentIntent) params.payment_intent = paymentIntent;\nif (subscription) params.subscription = subscription;\nif (customerEmail) params['customer_details[email]'] = customerEmail;\nif (limit) params.limit = String(Math.max(1, Math.min(100, limit)));\nif (startingAfter) params.starting_after = startingAfter;\n\nif (expand && expand.length > 0) {\n  expand.forEach((field, i) => {\n    params[`expand[${i}]`] = field;\n  });\n}\n\nreturn { params };"
+      }
+    },
+    {
+      "id": "listSessions",
+      "name": "Fetch checkout sessions from Stripe",
+      "type": "action",
+      "action": {
+        "platform": "stripe",
+        "actionId": "conn_mod_def::GHEfo0fqxOg::gT8BU_pcQ-edqwUALv8Khw",
+        "connectionKey": "$.input.stripeConnectionKey",
+        "queryParams": "$.steps.buildQuery.output.params"
+      }
+    },
+    {
+      "id": "compressResults",
+      "name": "Strip verbose fields and compress the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listSessions.response || {};\nconst sessions = resp.data || [];\n\nconst sessionKeysToRemove = [\n  'object', 'adaptive_pricing', 'after_expiration', 'branding_settings',\n  'client_secret', 'collected_information', 'consent', 'consent_collection',\n  'currency_conversion', 'custom_fields', 'custom_text', 'customer_creation',\n  'customer_details', 'discounts', 'excluded_payment_method_types',\n  'invoice_creation', 'livemode', 'locale', 'name_collection',\n  'optional_items', 'origin_context', 'payment_method_configuration_details',\n  'payment_method_options', 'permissions', 'presentment_details',\n  'recovered_from', 'redirect_on_completion', 'return_url',\n  'saved_payment_method_options', 'shipping_address_collection',\n  'shipping_cost', 'shipping_details', 'shipping_options', 'submit_type',\n  'tax_id_collection', 'total_details', 'ui_mode', 'wallet_options'\n];\n\nconst lineItemKeysToRemove = ['object', 'amount_discount', 'amount_tax', 'discounts', 'price', 'taxes'];\n\nfunction compress(session) {\n  const s = { ...session };\n  sessionKeysToRemove.forEach(k => delete s[k]);\n\n  if (s.line_items && s.line_items.data) {\n    delete s.line_items.has_more;\n    delete s.line_items.url;\n    s.line_items.data = s.line_items.data.map(item => {\n      const li = { ...item };\n      lineItemKeysToRemove.forEach(k => delete li[k]);\n      return li;\n    });\n  }\n\n  if (s.automatic_tax) {\n    delete s.automatic_tax.liability;\n    delete s.automatic_tax.provider;\n  }\n\n  return s;\n}\n\nconst compressed = sessions.map(compress);\n\nreturn {\n  sessions: compressed,\n  totalReturned: compressed.length,\n  hasMore: resp.has_more || false,\n  summary: `Retrieved ${compressed.length} checkout session${compressed.length === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}

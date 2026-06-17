@@ -1,0 +1,73 @@
+{
+  "key": "zendesk-create-ticket",
+  "name": "Create Zendesk Ticket",
+  "description": "Create a new support ticket in Zendesk. Supports subject, body (plain text or HTML), priority, tags, and custom fields.",
+  "version": "1",
+  "inputs": {
+    "zendeskConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Zendesk connection key",
+      "connection": { "platform": "zendesk" }
+    },
+    "subject": {
+      "type": "string",
+      "required": false,
+      "description": "Ticket subject"
+    },
+    "body": {
+      "type": "string",
+      "required": true,
+      "description": "Ticket description/comment body (plain text)"
+    },
+    "htmlBody": {
+      "type": "string",
+      "required": false,
+      "description": "HTML body (overrides body if provided, use for rich formatting)"
+    },
+    "priority": {
+      "type": "string",
+      "required": false,
+      "description": "Priority: low, normal, high, urgent"
+    },
+    "type": {
+      "type": "string",
+      "required": false,
+      "description": "Ticket type: problem, incident, question, task"
+    },
+    "tags": {
+      "type": "array",
+      "required": false,
+      "description": "Array of tags to apply to the ticket"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildBody",
+      "name": "Build ticket creation payload",
+      "type": "code",
+      "code": {
+        "source": "const { subject, body, htmlBody, priority, type, tags } = $.input;\nif (!body && !htmlBody) throw new Error('body or htmlBody is required');\n\nconst comment = {};\nif (htmlBody) comment.html_body = htmlBody;\nelse comment.body = body;\n\nconst ticket = { comment };\nif (subject) ticket.subject = subject;\nif (priority) ticket.priority = priority;\nif (type) ticket.type = type;\nif (tags && tags.length) ticket.tags = tags;\n\nreturn { body: { ticket } };"
+      }
+    },
+    {
+      "id": "createTicket",
+      "name": "Create ticket via Zendesk API",
+      "type": "action",
+      "action": {
+        "platform": "zendesk",
+        "actionId": "conn_mod_def::F6215yeST_g::ciFVh_4gQEeQhIGnAExeLQ",
+        "connectionKey": "$.input.zendeskConnectionKey",
+        "data": "$.steps.buildBody.output.body"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format ticket result",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createTicket.response || {};\nconst ticket = resp.ticket || {};\nreturn {\n  ticketId: ticket.id || '',\n  subject: ticket.subject || $.input.subject || '',\n  status: ticket.status || '',\n  priority: ticket.priority || '',\n  url: ticket.url || '',\n  createdAt: ticket.created_at || '',\n  tags: ticket.tags || [],\n  summary: ticket.id ? `Created ticket #${ticket.id}: \"${ticket.subject || 'No subject'}\" (${ticket.status || 'open'})` : 'Failed to create ticket'\n};"
+      }
+    }
+  ]
+}

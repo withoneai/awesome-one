@@ -1,0 +1,80 @@
+{
+  "key": "vercel-create-deployment",
+  "name": "Create Vercel Deployment",
+  "description": "Create a new deployment on Vercel. Supports static file deployments, git-based deployments, and redeployments of previous deployments.",
+  "version": "1",
+  "inputs": {
+    "vercelConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Vercel connection key",
+      "connection": { "platform": "vercel" }
+    },
+    "projectName": {
+      "type": "string",
+      "required": true,
+      "description": "Project name for the deployment URL"
+    },
+    "target": {
+      "type": "string",
+      "required": false,
+      "default": "preview",
+      "description": "Deployment target: production, staging, or preview"
+    },
+    "teamId": {
+      "type": "string",
+      "required": false,
+      "description": "Team ID to deploy on behalf of"
+    },
+    "deploymentId": {
+      "type": "string",
+      "required": false,
+      "description": "Previous deployment ID to redeploy"
+    },
+    "files": {
+      "type": "array",
+      "required": false,
+      "description": "Array of file objects: [{file: 'index.html', data: '<html>...</html>', encoding: 'utf-8'}]"
+    },
+    "framework": {
+      "type": "string",
+      "required": false,
+      "description": "Framework: nextjs, gatsby, nuxtjs, etc."
+    },
+    "buildCommand": {
+      "type": "string",
+      "required": false,
+      "description": "Custom build command"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildRequest",
+      "name": "Build deployment request",
+      "type": "code",
+      "code": {
+        "source": "const { projectName, target, deploymentId, files, framework, buildCommand, teamId } = $.input;\nif (!projectName) throw new Error('projectName is required');\n\nconst body = { name: projectName };\nif (target && target !== 'preview') body.target = target;\nif (deploymentId) body.deploymentId = deploymentId;\nif (files && files.length) body.files = files;\n\nconst projectSettings = {};\nif (framework) projectSettings.framework = framework;\nif (buildCommand) projectSettings.buildCommand = buildCommand;\nif (Object.keys(projectSettings).length) body.projectSettings = projectSettings;\n\nconst params = {};\nif (teamId) params.teamId = teamId;\n\nreturn { body, params };"
+      }
+    },
+    {
+      "id": "createDeployment",
+      "name": "Create Vercel deployment",
+      "type": "action",
+      "action": {
+        "platform": "vercel",
+        "actionId": "conn_mod_def::GIi152aO03U::KTvTF_0ZTaS3tObzavwy0g",
+        "connectionKey": "$.input.vercelConnectionKey",
+        "data": "$.steps.buildRequest.output.body",
+        "queryParams": "$.steps.buildRequest.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format deployment result",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createDeployment.response || {};\nreturn {\n  deploymentId: resp.id || '',\n  url: resp.url || '',\n  status: resp.status || resp.readyState || '',\n  target: resp.target || 'preview',\n  projectName: resp.name || $.input.projectName,\n  aliases: resp.alias || [],\n  regions: resp.regions || [],\n  createdAt: resp.createdAt ? new Date(resp.createdAt).toISOString() : '',\n  summary: resp.id ? `Deployment ${resp.id} created at ${resp.url || 'pending'} (${resp.status || resp.readyState || 'queued'})` : 'Failed to create deployment'\n};"
+      }
+    }
+  ]
+}

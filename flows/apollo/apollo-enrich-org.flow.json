@@ -1,0 +1,50 @@
+{
+  "key": "apollo-enrich-org",
+  "name": "Enrich an Organization by Domain",
+  "description": "Get comprehensive company data from Apollo by domain. Returns industry, revenue, funding history, employee count, technologies used, departmental headcount, and more.",
+  "version": "1",
+  "inputs": {
+    "apolloConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Apollo connection key",
+      "connection": { "platform": "apollo" }
+    },
+    "domain": {
+      "type": "string",
+      "required": true,
+      "description": "Company domain to enrich (no www. or @). Example: apollo.io"
+    }
+  },
+  "steps": [
+    {
+      "id": "validateDomain",
+      "name": "Validate and clean domain input",
+      "type": "code",
+      "code": {
+        "source": "let domain = $.input.domain.trim().toLowerCase();\ndomain = domain.replace(/^(https?:\\/\\/)?(www\\.)?/, '').replace(/\\/$/, '').replace(/^@/, '');\nif (!domain || !domain.includes('.')) throw new Error('Invalid domain. Provide a bare domain like \"apollo.io\"');\nreturn { domain };"
+      }
+    },
+    {
+      "id": "enrichOrg",
+      "name": "Call Apollo Organization Enrichment API",
+      "type": "action",
+      "action": {
+        "platform": "apollo",
+        "actionId": "conn_mod_def::GJz1-vQqfEI::rFgxNc8wQFWyV5kX88UBpg",
+        "connectionKey": "$.input.apolloConnectionKey",
+        "queryParams": {
+          "domain": "$.steps.validateDomain.output.domain"
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Extract and format organization data",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.enrichOrg.response || {};\nconst org = resp.organization;\n\nif (!org) return { found: false, summary: 'No organization found for domain: ' + $.steps.validateDomain.output.domain };\n\nconst funding = (org.funding_events || []).map(f => ({\n  type: f.type,\n  date: f.date,\n  amount: f.amount,\n  currency: f.currency,\n  investors: f.investors\n}));\n\nconst technologies = org.technology_names || [];\nconst deptHeadcount = org.departmental_head_count || {};\n\nreturn {\n  found: true,\n  organization: {\n    id: org.id,\n    name: org.name,\n    domain: org.primary_domain,\n    website: org.website_url,\n    industry: org.industry,\n    industries: org.industries || [],\n    description: org.short_description || org.seo_description || '',\n    employees: org.estimated_num_employees,\n    revenue: org.annual_revenue_printed,\n    revenueNumeric: org.annual_revenue,\n    totalFunding: org.total_funding_printed,\n    latestFundingStage: org.latest_funding_stage,\n    latestFundingDate: org.latest_funding_round_date,\n    foundedYear: org.founded_year,\n    location: {\n      address: org.raw_address,\n      city: org.city,\n      state: org.state,\n      country: org.country,\n      postalCode: org.postal_code\n    },\n    social: {\n      linkedin: org.linkedin_url,\n      twitter: org.twitter_url,\n      facebook: org.facebook_url\n    },\n    keywords: org.keywords || []\n  },\n  funding,\n  technologies,\n  departmentHeadcount: deptHeadcount,\n  summary: `${org.name} | ${org.industry || 'Unknown industry'} | ${org.estimated_num_employees || '?'} employees | ${org.annual_revenue_printed || '?'} revenue | ${org.latest_funding_stage || 'No funding data'}`\n};"
+      }
+    }
+  ]
+}

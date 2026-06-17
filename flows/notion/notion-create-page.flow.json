@@ -1,0 +1,73 @@
+{
+  "key": "notion-create-page",
+  "name": "Create a Page in Notion",
+  "description": "Create a new page in a Notion database or as a child of another page. Supports setting database properties and adding content blocks.",
+  "version": "1",
+  "inputs": {
+    "notionConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Notion connection key",
+      "connection": { "platform": "notion" }
+    },
+    "parentType": {
+      "type": "string",
+      "required": true,
+      "description": "'database' to create a page in a database, or 'page' to create a sub-page"
+    },
+    "parentId": {
+      "type": "string",
+      "required": true,
+      "description": "Database ID or parent page ID"
+    },
+    "title": {
+      "type": "string",
+      "required": true,
+      "description": "Page title"
+    },
+    "properties": {
+      "type": "object",
+      "required": false,
+      "description": "Database properties (for database parent). Example: {\"Status\": {\"select\": {\"name\": \"In Progress\"}}}"
+    },
+    "content": {
+      "type": "string",
+      "required": false,
+      "description": "Plain text content to add as a paragraph block"
+    },
+    "children": {
+      "type": "array",
+      "required": false,
+      "description": "Array of Notion block objects. Overrides 'content' if provided."
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPage",
+      "name": "Build page payload",
+      "type": "code",
+      "code": {
+        "source": "const { parentType, parentId, title, properties, content, children } = $.input;\nif (!parentType || !parentId || !title) throw new Error('parentType, parentId, and title are required');\n\nconst body = {};\n\n// Set parent\nif (parentType === 'database') {\n  body.parent = { database_id: parentId };\n  // For database pages, title goes in properties\n  body.properties = properties ? { ...properties } : {};\n  // Find the title property or default to 'Name' or 'title'\n  const titleProp = body.properties.Name ? 'Name' : (body.properties.title ? 'title' : 'Name');\n  if (!body.properties[titleProp]) {\n    body.properties[titleProp] = { title: [{ text: { content: title } }] };\n  }\n} else {\n  body.parent = { page_id: parentId };\n  body.properties = { title: [{ text: { content: title } }] };\n}\n\n// Set children (content blocks)\nif (children && children.length > 0) {\n  body.children = children;\n} else if (content) {\n  body.children = [{\n    object: 'block',\n    type: 'paragraph',\n    paragraph: {\n      rich_text: [{ type: 'text', text: { content } }]\n    }\n  }];\n}\n\nreturn body;"
+      }
+    },
+    {
+      "id": "createPage",
+      "name": "Create page via Notion API",
+      "type": "action",
+      "action": {
+        "platform": "notion",
+        "actionId": "conn_mod_def::GJ5EnlW1AEk::mEAQjNttT1GjVqNeMTvDiw",
+        "connectionKey": "$.input.notionConnectionKey",
+        "data": "$.steps.buildPage.output"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createPage.response || {};\nconst url = resp.url || '';\nreturn {\n  pageId: resp.id || '',\n  url,\n  parentType: $.input.parentType,\n  title: $.input.title,\n  created: !!resp.id,\n  createdTime: resp.created_time || '',\n  summary: resp.id\n    ? `Created page \"${$.input.title}\" in Notion`\n    : 'Failed to create page'\n};"
+      }
+    }
+  ]
+}

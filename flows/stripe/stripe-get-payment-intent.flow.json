@@ -1,0 +1,61 @@
+{
+  "key": "stripe-get-payment-intent",
+  "name": "Get Stripe Payment Intent Detail",
+  "description": "Retrieves a single Stripe payment intent by ID. Compresses the response by removing internal fields while preserving amount, status, currency, customer, and payment method data.",
+  "version": "1",
+  "inputs": {
+    "stripeConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Stripe connection key",
+      "connection": { "platform": "stripe" }
+    },
+    "intentId": {
+      "type": "string",
+      "required": true,
+      "description": "The payment intent ID (e.g., 'pi_1abc...')"
+    },
+    "clientSecret": {
+      "type": "string",
+      "required": false,
+      "description": "Client secret for client-side retrieval"
+    },
+    "expand": {
+      "type": "array",
+      "required": false,
+      "description": "Fields to expand (e.g., ['customer', 'payment_method', 'latest_charge'])"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build query params",
+      "type": "code",
+      "code": {
+        "source": "const { intentId, clientSecret, expand } = $.input;\nif (!intentId) throw new Error('intentId is required');\n\nconst params = {};\nif (clientSecret) params.client_secret = clientSecret;\nif (expand && expand.length > 0) {\n  expand.forEach((field, i) => {\n    params[`expand[${i}]`] = field;\n  });\n}\n\nreturn { params, intentId };"
+      }
+    },
+    {
+      "id": "getPaymentIntent",
+      "name": "Fetch the payment intent from Stripe",
+      "type": "action",
+      "action": {
+        "platform": "stripe",
+        "actionId": "conn_mod_def::GHEgMHGJRig::7H_NNpAYQeeIFiENuhk-HA",
+        "connectionKey": "$.input.stripeConnectionKey",
+        "pathVars": {
+          "intent": "$.steps.buildQuery.output.intentId"
+        },
+        "queryParams": "$.steps.buildQuery.output.params"
+      }
+    },
+    {
+      "id": "compressResult",
+      "name": "Strip verbose internal fields",
+      "type": "code",
+      "code": {
+        "source": "const intent = $.steps.getPaymentIntent.response || {};\n\nif (intent.error) {\n  return { success: false, error: intent.error.message || 'Failed to retrieve payment intent', details: intent.error };\n}\n\nconst keysToRemove = [\n  'object', 'amount_details', 'application', 'application_fee_amount',\n  'canceled_at', 'cancellation_reason', 'client_secret', 'confirmation_method',\n  'invoice', 'last_payment_error', 'latest_charge', 'livemode', 'next_action',\n  'on_behalf_of', 'payment_method_options', 'processing', 'receipt_email',\n  'review', 'setup_future_usage', 'shipping', 'source', 'statement_descriptor',\n  'statement_descriptor_suffix', 'transfer_data', 'transfer_group'\n];\n\nconst c = { ...intent };\nkeysToRemove.forEach(k => delete c[k]);\n\nconst amountStr = ((c.amount || 0) / 100).toFixed(2);\nconst currency = (c.currency || 'usd').toUpperCase();\n\nreturn {\n  success: true,\n  paymentIntent: c,\n  summary: `Payment intent ${c.id}: ${c.status || 'unknown'} - ${currency} ${amountStr}`\n};"
+      }
+    }
+  ]
+}

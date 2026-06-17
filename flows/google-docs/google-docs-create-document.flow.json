@@ -1,0 +1,71 @@
+{
+  "key": "google-docs-create-document",
+  "name": "Create a Google Document",
+  "description": "Create a new Google Doc with a title and optional body content. Handles the two-step pattern: create the document, then batch-update to insert content.",
+  "version": "1",
+  "inputs": {
+    "googleDocsConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Docs connection key",
+      "connection": { "platform": "google-docs" }
+    },
+    "title": {
+      "type": "string",
+      "required": true,
+      "description": "Document title"
+    },
+    "content": {
+      "type": "string",
+      "required": false,
+      "description": "Plain text content to insert into the document body"
+    }
+  },
+  "steps": [
+    {
+      "id": "createDoc",
+      "name": "Create empty Google Doc with title",
+      "type": "action",
+      "action": {
+        "platform": "google-docs",
+        "actionId": "conn_mod_def::GDa4Clf2NGc::S3KS03muT-2hTeHnkQ_w8g",
+        "connectionKey": "$.input.googleDocsConnectionKey",
+        "data": {
+          "title": "$.input.title"
+        }
+      }
+    },
+    {
+      "id": "insertContent",
+      "name": "Insert text content into the document",
+      "type": "action",
+      "if": "$.input.content",
+      "action": {
+        "platform": "google-docs",
+        "actionId": "conn_mod_def::GDa4EqlqkCk::00RtyUaHQDSsZ_E3h5_c2A",
+        "connectionKey": "$.input.googleDocsConnectionKey",
+        "pathVars": {
+          "documentId": "$.steps.createDoc.response.documentId"
+        },
+        "data": {
+          "requests": [
+            {
+              "insertText": {
+                "location": { "index": 1 },
+                "text": "$.input.content"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const doc = $.steps.createDoc.response || {};\nconst docUrl = doc.documentId ? `https://docs.google.com/document/d/${doc.documentId}/edit` : '';\nreturn {\n  documentId: doc.documentId || '',\n  title: doc.title || $.input.title,\n  url: docUrl,\n  created: !!doc.documentId,\n  hasContent: !!$.input.content,\n  summary: doc.documentId ? `Created document \"${doc.title || $.input.title}\"` : 'Failed to create document'\n};"
+      }
+    }
+  ]
+}

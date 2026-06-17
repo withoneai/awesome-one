@@ -1,0 +1,79 @@
+{
+  "key": "cal-create-booking",
+  "name": "Create a Booking on Cal.com",
+  "description": "Create a new booking on Cal.com by specifying an event type, attendee info, start time, and optional metadata.",
+  "version": "1",
+  "inputs": {
+    "calConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Cal.com connection key",
+      "connection": { "platform": "cal-com" }
+    },
+    "eventTypeId": {
+      "type": "number",
+      "required": true,
+      "description": "Event type ID to book"
+    },
+    "start": {
+      "type": "string",
+      "required": true,
+      "description": "Start time in ISO 8601 format (e.g., '2024-03-15T10:00:00Z')"
+    },
+    "attendeeName": {
+      "type": "string",
+      "required": true,
+      "description": "Attendee's full name"
+    },
+    "attendeeEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Attendee's email address"
+    },
+    "attendeeTimeZone": {
+      "type": "string",
+      "required": false,
+      "default": "America/New_York",
+      "description": "Attendee's time zone (e.g., 'America/New_York')"
+    },
+    "notes": {
+      "type": "string",
+      "required": false,
+      "description": "Booking notes or message from the attendee"
+    },
+    "metadata": {
+      "type": "object",
+      "required": false,
+      "description": "Custom metadata key-value pairs"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildBooking",
+      "name": "Build booking payload",
+      "type": "code",
+      "code": {
+        "source": "const { eventTypeId, start, attendeeName, attendeeEmail, attendeeTimeZone, notes, metadata } = $.input;\nif (!eventTypeId || !start || !attendeeName || !attendeeEmail) throw new Error('eventTypeId, start, attendeeName, and attendeeEmail are required');\nconst body = {\n  eventTypeId,\n  start,\n  attendee: {\n    name: attendeeName,\n    email: attendeeEmail,\n    timeZone: attendeeTimeZone || 'America/New_York'\n  }\n};\nif (notes) body.notes = notes;\nif (metadata) body.metadata = metadata;\nreturn body;"
+      }
+    },
+    {
+      "id": "createBooking",
+      "name": "Create booking via Cal.com API",
+      "type": "action",
+      "action": {
+        "platform": "cal-com",
+        "actionId": "conn_mod_def::GJ1AAj_wmBI::YGhi0tsiQrup-PPSYLzi_Q",
+        "connectionKey": "$.input.calConnectionKey",
+        "data": "$.steps.buildBooking.output"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createBooking.response || {};\nconst booking = resp.data || resp;\nreturn {\n  bookingId: booking.id || booking.uid || '',\n  uid: booking.uid || '',\n  title: booking.title || '',\n  startTime: booking.startTime || $.input.start,\n  endTime: booking.endTime || '',\n  status: booking.status || '',\n  created: !!(booking.id || booking.uid),\n  summary: (booking.id || booking.uid)\n    ? `Booked \"${booking.title || 'event'}\" for ${$.input.attendeeName}`\n    : 'Failed to create booking'\n};"
+      }
+    }
+  ]
+}

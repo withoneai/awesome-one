@@ -1,0 +1,120 @@
+{
+  "key": "trello-manage-cards",
+  "name": "Create and List Trello Cards",
+  "description": "Create a new card on a Trello board or list all cards on a board. Handles the common pattern of needing a list ID to create a card by first fetching lists from a board.",
+  "version": "1",
+  "inputs": {
+    "trelloConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Trello connection key",
+      "connection": { "platform": "trello" }
+    },
+    "boardId": {
+      "type": "string",
+      "required": true,
+      "description": "Trello board ID (24-character hex string)"
+    },
+    "action": {
+      "type": "string",
+      "required": true,
+      "description": "Action to perform: 'create' to add a card, 'list' to get all cards"
+    },
+    "listName": {
+      "type": "string",
+      "required": false,
+      "description": "Name of the list to create the card in (used with action=create, matched case-insensitively)"
+    },
+    "listId": {
+      "type": "string",
+      "required": false,
+      "description": "Direct list ID to create the card in (overrides listName)"
+    },
+    "cardName": {
+      "type": "string",
+      "required": false,
+      "description": "Card name/title (required for action=create)"
+    },
+    "cardDesc": {
+      "type": "string",
+      "required": false,
+      "description": "Card description (Markdown supported)"
+    },
+    "due": {
+      "type": "string",
+      "required": false,
+      "description": "Due date in ISO format"
+    },
+    "pos": {
+      "type": "string",
+      "required": false,
+      "description": "Position: top, bottom, or a positive number"
+    }
+  },
+  "steps": [
+    {
+      "id": "getLists",
+      "name": "Fetch board lists (needed to resolve list names)",
+      "type": "action",
+      "action": {
+        "platform": "trello",
+        "actionId": "conn_mod_def::GD17HL-ngQQ::Y25T18b0RBKdfZC0EfuMAQ",
+        "connectionKey": "$.input.trelloConnectionKey",
+        "pathVars": {
+          "id": "$.input.boardId"
+        },
+        "queryParams": {
+          "filter": "open"
+        }
+      }
+    },
+    {
+      "id": "resolveListAndRoute",
+      "name": "Resolve list ID and determine action",
+      "type": "code",
+      "code": {
+        "source": "const lists = $.steps.getLists.response || [];\nconst action = $.input.action;\nconst listName = $.input.listName;\nconst listId = $.input.listId;\n\nconst listMap = (Array.isArray(lists) ? lists : []).map(l => ({ id: l.id, name: l.name }));\n\nlet resolvedListId = listId;\nif (!resolvedListId && listName) {\n  const match = listMap.find(l => l.name.toLowerCase() === listName.toLowerCase());\n  if (match) resolvedListId = match.id;\n  else throw new Error(`List \"${listName}\" not found. Available lists: ${listMap.map(l => l.name).join(', ')}`);\n}\n\nreturn { action, resolvedListId, listMap, isCreate: action === 'create' };"
+      }
+    },
+    {
+      "id": "getCards",
+      "name": "Get all cards on the board",
+      "type": "action",
+      "if": "$.steps.resolveListAndRoute.output.action !== 'create'",
+      "action": {
+        "platform": "trello",
+        "actionId": "conn_mod_def::GD17G10GifA::ShEy6D00QdizAbzmsK3e-Q",
+        "connectionKey": "$.input.trelloConnectionKey",
+        "pathVars": {
+          "id": "$.input.boardId"
+        }
+      }
+    },
+    {
+      "id": "createCard",
+      "name": "Create a new card",
+      "type": "action",
+      "if": "$.steps.resolveListAndRoute.output.action === 'create'",
+      "action": {
+        "platform": "trello",
+        "actionId": "conn_mod_def::GD17eEXfV5Y::KmRsMXHgRBKLphQif7Jrow",
+        "connectionKey": "$.input.trelloConnectionKey",
+        "queryParams": {
+          "idList": "$.steps.resolveListAndRoute.output.resolvedListId",
+          "name": "$.input.cardName",
+          "desc": "$.input.cardDesc",
+          "due": "$.input.due",
+          "pos": "$.input.pos"
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format response",
+      "type": "code",
+      "code": {
+        "source": "const action = $.steps.resolveListAndRoute.output.action;\nconst listMap = $.steps.resolveListAndRoute.output.listMap;\n\nif (action === 'create') {\n  const card = $.steps.createCard?.response || {};\n  return {\n    action: 'create',\n    card: {\n      id: card.id || '',\n      name: card.name || '',\n      url: card.shortUrl || card.url || '',\n      list: listMap.find(l => l.id === card.idList)?.name || card.idList || '',\n      due: card.due || null\n    },\n    summary: card.id ? `Created card \"${card.name}\" on list \"${listMap.find(l => l.id === card.idList)?.name || 'unknown'}\"` : 'Failed to create card'\n  };\n} else {\n  const cards = $.steps.getCards?.response || [];\n  const formatted = (Array.isArray(cards) ? cards : []).map(c => ({\n    id: c.id || '',\n    name: c.name || '',\n    list: listMap.find(l => l.id === c.idList)?.name || c.idList || '',\n    url: c.shortUrl || c.url || '',\n    due: c.due || null,\n    closed: c.closed || false\n  }));\n  return {\n    action: 'list',\n    cards: formatted,\n    totalCards: formatted.length,\n    lists: listMap,\n    summary: `Found ${formatted.length} card${formatted.length === 1 ? '' : 's'} across ${listMap.length} list${listMap.length === 1 ? '' : 's'}`\n  };\n}"
+      }
+    }
+  ]
+}

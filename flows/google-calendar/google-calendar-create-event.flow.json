@@ -1,0 +1,94 @@
+{
+  "key": "google-calendar-create-event",
+  "name": "Create a Google Calendar Event",
+  "description": "Create an event on Google Calendar with support for attendees, location, description, reminders, and all-day events.",
+  "version": "1",
+  "inputs": {
+    "googleCalendarConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Google Calendar connection key",
+      "connection": { "platform": "google-calendar" }
+    },
+    "calendarId": {
+      "type": "string",
+      "required": false,
+      "default": "primary",
+      "description": "Calendar ID (default: 'primary')"
+    },
+    "summary": {
+      "type": "string",
+      "required": true,
+      "description": "Event title"
+    },
+    "description": {
+      "type": "string",
+      "required": false,
+      "description": "Event description (supports HTML)"
+    },
+    "location": {
+      "type": "string",
+      "required": false,
+      "description": "Event location"
+    },
+    "startDateTime": {
+      "type": "string",
+      "required": true,
+      "description": "Start time in ISO 8601 format (e.g., '2024-03-15T10:00:00-07:00') or date for all-day events ('2024-03-15')"
+    },
+    "endDateTime": {
+      "type": "string",
+      "required": true,
+      "description": "End time in ISO 8601 format or date for all-day events"
+    },
+    "timeZone": {
+      "type": "string",
+      "required": false,
+      "description": "Time zone (e.g., 'America/Los_Angeles'). Defaults to calendar's time zone."
+    },
+    "attendees": {
+      "type": "string",
+      "required": false,
+      "description": "Comma-separated email addresses of attendees"
+    },
+    "sendUpdates": {
+      "type": "string",
+      "required": false,
+      "default": "none",
+      "description": "Whether to send notifications: 'all', 'externalOnly', or 'none'"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildEvent",
+      "name": "Build event payload",
+      "type": "code",
+      "code": {
+        "source": "const { summary, description, location, startDateTime, endDateTime, timeZone, attendees, sendUpdates } = $.input;\nif (!summary || !startDateTime || !endDateTime) throw new Error('summary, startDateTime, and endDateTime are required');\n\nconst isAllDay = /^\\d{4}-\\d{2}-\\d{2}$/.test(startDateTime);\nconst event = { summary };\n\nif (description) event.description = description;\nif (location) event.location = location;\n\nif (isAllDay) {\n  event.start = { date: startDateTime };\n  event.end = { date: endDateTime };\n} else {\n  event.start = { dateTime: startDateTime };\n  event.end = { dateTime: endDateTime };\n  if (timeZone) {\n    event.start.timeZone = timeZone;\n    event.end.timeZone = timeZone;\n  }\n}\n\nif (attendees) {\n  event.attendees = attendees.split(',').map(e => ({ email: e.trim() })).filter(a => a.email);\n}\n\nconst queryParams = {};\nif (sendUpdates) queryParams.sendUpdates = sendUpdates;\n\nreturn { event, queryParams };"
+      }
+    },
+    {
+      "id": "createEvent",
+      "name": "Create event via Google Calendar API",
+      "type": "action",
+      "action": {
+        "platform": "google-calendar",
+        "actionId": "conn_mod_def::GJ6RlnjZAh4::CSya4eHtRbeXRM7PHiXuRA",
+        "connectionKey": "$.input.googleCalendarConnectionKey",
+        "pathVars": {
+          "calendarId": "$.input.calendarId"
+        },
+        "queryParams": "$.steps.buildEvent.output.queryParams",
+        "data": "$.steps.buildEvent.output.event"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createEvent.response || {};\nreturn {\n  eventId: resp.id || '',\n  htmlLink: resp.htmlLink || '',\n  summary: resp.summary || $.input.summary,\n  start: resp.start || {},\n  end: resp.end || {},\n  status: resp.status || '',\n  created: !!resp.id,\n  result: resp.id ? `Created event \"${resp.summary || $.input.summary}\"` : 'Failed to create event'\n};"
+      }
+    }
+  ]
+}

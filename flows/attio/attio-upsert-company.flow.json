@@ -1,0 +1,68 @@
+{
+  "key": "attio-upsert-company",
+  "name": "Upsert a Company in Attio",
+  "description": "Creates or updates a company record in Attio CRM by matching on domain. If a company with the given domain exists, their record is updated; otherwise a new company is created.",
+  "version": "1",
+  "inputs": {
+    "attioConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Attio connection key",
+      "connection": { "platform": "attio" }
+    },
+    "domain": {
+      "type": "string",
+      "required": true,
+      "description": "Company domain (e.g., 'acme.com') used as the matching attribute"
+    },
+    "name": {
+      "type": "string",
+      "required": false,
+      "description": "Company name"
+    },
+    "description": {
+      "type": "string",
+      "required": false,
+      "description": "Description of the company"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPayload",
+      "name": "Build the values payload for the company record",
+      "type": "code",
+      "code": {
+        "source": "const { domain, name, description } = $.input;\n\nif (!domain) throw new Error('domain is required');\n\nconst values = {\n  domains: [{ domain: domain, root_domain: domain }]\n};\n\nif (name) {\n  values.name = [{ value: name }];\n}\n\nif (description) {\n  values.description = [{ value: description }];\n}\n\nreturn { values };"
+      }
+    },
+    {
+      "id": "upsertCompany",
+      "name": "Assert (upsert) the company record via Attio API",
+      "type": "action",
+      "action": {
+        "platform": "attio",
+        "actionId": "conn_mod_def::GJ0CaZyhaFQ::Kzy79dY6TWW-84Z-BA-awA",
+        "connectionKey": "$.input.attioConnectionKey",
+        "pathVars": {
+          "object": "companies"
+        },
+        "queryParams": {
+          "matching_attribute": "domains"
+        },
+        "data": {
+          "data": {
+            "values": "$.steps.buildPayload.output.values"
+          }
+        }
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.upsertCompany.response || {};\nconst data = resp.data || {};\nconst id = data.id || {};\n\nreturn {\n  recordId: id.record_id || '',\n  objectId: id.object_id || '',\n  webUrl: data.web_url || '',\n  createdAt: data.created_at || '',\n  domain: $.input.domain,\n  summary: id.record_id\n    ? `Upserted company ${$.input.domain} (${id.record_id})`\n    : 'Failed to upsert company'\n};"
+      }
+    }
+  ]
+}

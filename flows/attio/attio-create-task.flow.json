@@ -1,0 +1,68 @@
+{
+  "key": "attio-create-task",
+  "name": "Create a Task in Attio",
+  "description": "Creates a task in Attio CRM, optionally linked to a person or company record and assigned to a workspace member.",
+  "version": "1",
+  "inputs": {
+    "attioConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Attio connection key",
+      "connection": { "platform": "attio" }
+    },
+    "content": {
+      "type": "string",
+      "required": true,
+      "description": "Task description (plaintext, max 2000 chars)"
+    },
+    "deadlineAt": {
+      "type": "string",
+      "required": false,
+      "description": "Deadline in ISO 8601 format (e.g., '2025-06-01T00:00:00.000Z'), or null"
+    },
+    "assigneeEmail": {
+      "type": "string",
+      "required": false,
+      "description": "Email of the workspace member to assign the task to"
+    },
+    "linkedObject": {
+      "type": "string",
+      "required": false,
+      "description": "Object slug of linked record (e.g., 'people', 'companies')"
+    },
+    "linkedRecordId": {
+      "type": "string",
+      "required": false,
+      "description": "UUID of the record to link to the task"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPayload",
+      "name": "Build the task payload",
+      "type": "code",
+      "code": {
+        "source": "const { content, deadlineAt, assigneeEmail, linkedObject, linkedRecordId } = $.input;\n\nif (!content) throw new Error('content is required');\n\nconst data = {\n  content: content,\n  format: 'plaintext',\n  deadline_at: deadlineAt || null,\n  is_completed: false,\n  linked_records: [],\n  assignees: []\n};\n\nif (linkedObject && linkedRecordId) {\n  data.linked_records.push({\n    target_object: linkedObject,\n    target_record_id: linkedRecordId\n  });\n}\n\nif (assigneeEmail) {\n  data.assignees.push({\n    workspace_member_email_address: assigneeEmail\n  });\n}\n\nreturn { data };"
+      }
+    },
+    {
+      "id": "createTask",
+      "name": "Create the task via Attio API",
+      "type": "action",
+      "action": {
+        "platform": "attio",
+        "actionId": "conn_mod_def::GJ0CchbSRbc::m93snD2gRyC3NxGNhTSPEA",
+        "connectionKey": "$.input.attioConnectionKey",
+        "data": "$.steps.buildPayload.output"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createTask.response || {};\nconst data = resp.data || {};\nconst id = data.id || {};\n\nreturn {\n  taskId: id.task_id || '',\n  content: data.content_plaintext || $.input.content,\n  deadlineAt: data.deadline_at || null,\n  isCompleted: data.is_completed || false,\n  createdAt: data.created_at || '',\n  summary: id.task_id\n    ? `Created task \"${$.input.content.substring(0, 60)}\" (${id.task_id})`\n    : 'Failed to create task'\n};"
+      }
+    }
+  ]
+}

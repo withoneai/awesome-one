@@ -1,0 +1,60 @@
+{
+  "key": "shippo-create-label",
+  "name": "Create Shipping Label via Shippo",
+  "description": "Purchase a shipping label for a rate obtained from a shipment. Returns label URL, tracking number, and tracking status.",
+  "version": "1",
+  "inputs": {
+    "shippoConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Shippo connection key",
+      "connection": { "platform": "shippo" }
+    },
+    "rateId": {
+      "type": "string",
+      "required": true,
+      "description": "Rate object ID from a shipment (returned by shippo-create-shipment flow)"
+    },
+    "labelFileType": {
+      "type": "string",
+      "required": false,
+      "default": "PDF",
+      "description": "Label format: PNG, PDF, PDF_4x6, PDF_4x8, PDF_A4, ZPLII"
+    },
+    "async": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Create label asynchronously"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildBody",
+      "name": "Build label purchase body",
+      "type": "code",
+      "code": {
+        "source": "const body = { rate: $.input.rateId };\nif ($.input.labelFileType && $.input.labelFileType !== 'PDF') body.label_file_type = $.input.labelFileType;\nif ($.input.async) body.async = true;\nreturn { body };"
+      }
+    },
+    {
+      "id": "createLabel",
+      "name": "Purchase shipping label",
+      "type": "action",
+      "action": {
+        "platform": "shippo",
+        "actionId": "conn_mod_def::GEf2JxxcO-0::CtOe988KTDu8o91yzx8n0Q",
+        "connectionKey": "$.input.shippoConnectionKey",
+        "data": "$.steps.buildBody.output.body"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format label result",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createLabel.response || {};\nreturn {\n  labelId: resp.object_id || '',\n  state: resp.object_state || '',\n  trackingNumber: resp.tracking_number || '',\n  labelUrl: resp.label_url || '',\n  commercialInvoiceUrl: resp.commercial_invoice_url || '',\n  eta: resp.eta || '',\n  summary: resp.object_id ? `Label ${resp.object_id} created (tracking: ${resp.tracking_number || 'pending'})` : 'Failed to create label'\n};"
+      }
+    }
+  ]
+}

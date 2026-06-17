@@ -1,0 +1,68 @@
+{
+  "key": "stripe-create-webhook",
+  "name": "Create Stripe Webhook Endpoint",
+  "description": "Creates a Stripe webhook endpoint. Handles form-encoding of enabled events, metadata, and expand parameters that Stripe's API requires.",
+  "version": "1",
+  "inputs": {
+    "stripeConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Stripe connection key",
+      "connection": { "platform": "stripe" }
+    },
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "The URL the webhook will POST events to"
+    },
+    "enabledEvents": {
+      "type": "array",
+      "required": true,
+      "description": "List of event types to subscribe to (e.g., ['charge.succeeded', 'invoice.paid']). Use ['*'] for all events."
+    },
+    "description": {
+      "type": "string",
+      "required": false,
+      "description": "Human-readable description for this webhook endpoint"
+    },
+    "connect": {
+      "type": "boolean",
+      "required": false,
+      "description": "Whether to receive events from connected accounts (Stripe Connect)"
+    },
+    "metadata": {
+      "type": "object",
+      "required": false,
+      "description": "Key-value metadata to attach to the webhook endpoint"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildFormData",
+      "name": "Build form-encoded data for Stripe's webhook API",
+      "type": "code",
+      "code": {
+        "source": "const { url, enabledEvents, description, connect, metadata } = $.input;\n\nif (!url) throw new Error('url is required');\nif (!enabledEvents || !enabledEvents.length) throw new Error('enabledEvents is required');\n\nconst formData = { url };\n\nenabledEvents.forEach((event, i) => {\n  formData[`enabled_events[${i}]`] = event;\n});\n\nif (description) formData.description = description;\nif (connect !== undefined) formData.connect = String(connect);\n\nif (metadata && typeof metadata === 'object') {\n  Object.entries(metadata).forEach(([key, value]) => {\n    formData[`metadata[${key}]`] = String(value);\n  });\n}\n\nreturn { formData };"
+      }
+    },
+    {
+      "id": "createWebhook",
+      "name": "Create the webhook endpoint via Stripe API",
+      "type": "action",
+      "action": {
+        "platform": "stripe",
+        "actionId": "conn_mod_def::GHEhAhiY8zw::Balmyr0TQvuRV-kJGUO1Zw",
+        "connectionKey": "$.input.stripeConnectionKey",
+        "data": "$.steps.buildFormData.output.formData"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response with webhook secret",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createWebhook.response || {};\n\nif (resp.error) {\n  return {\n    success: false,\n    error: resp.error.message || 'Failed to create webhook endpoint',\n    details: resp.error\n  };\n}\n\nreturn {\n  success: true,\n  webhookId: resp.id || '',\n  secret: resp.secret || '',\n  url: resp.url || '',\n  status: resp.status || '',\n  enabledEvents: resp.enabled_events || [],\n  livemode: resp.livemode || false,\n  summary: resp.id\n    ? `Created webhook ${resp.id} for ${(resp.enabled_events || []).length} event type(s). SAVE THE SECRET -- it won't be shown again.`\n    : 'Failed to create webhook endpoint'\n};"
+      }
+    }
+  ]
+}

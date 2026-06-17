@@ -1,0 +1,165 @@
+{
+  "key": "apollo-prospect-to-sequence",
+  "name": "Prospect People and Add to Sequence",
+  "description": "End-to-end outbound workflow: search for people matching your ICP, create them as contacts in Apollo, and add them to an outreach sequence. Handles the full prospect -> contact -> sequence pipeline.",
+  "version": "1",
+  "inputs": {
+    "apolloConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Apollo connection key",
+      "connection": { "platform": "apollo" }
+    },
+    "personTitles": {
+      "type": "array",
+      "required": false,
+      "description": "Job titles to search for. Examples: ['VP of Engineering', 'CTO']"
+    },
+    "personSeniorities": {
+      "type": "array",
+      "required": false,
+      "description": "Seniority levels. Allowed: owner, founder, c_suite, partner, vp, head, director, manager, senior, entry, intern"
+    },
+    "personLocations": {
+      "type": "array",
+      "required": false,
+      "description": "Where people live. Examples: ['california', 'new york']"
+    },
+    "organizationDomains": {
+      "type": "array",
+      "required": false,
+      "description": "Employer domains. Examples: ['stripe.com', 'shopify.com']"
+    },
+    "employeeRanges": {
+      "type": "array",
+      "required": false,
+      "description": "Employer headcount ranges. Examples: ['50,200', '200,1000']"
+    },
+    "technologies": {
+      "type": "array",
+      "required": false,
+      "description": "Technologies used by employer. Examples: ['salesforce', 'hubspot']"
+    },
+    "maxContacts": {
+      "type": "number",
+      "required": false,
+      "default": 25,
+      "description": "Maximum number of people to prospect and add (1-100)"
+    },
+    "sequenceId": {
+      "type": "string",
+      "required": true,
+      "description": "Apollo sequence (emailer campaign) ID to add contacts to"
+    },
+    "emailAccountId": {
+      "type": "string",
+      "required": true,
+      "description": "Apollo email account ID to send emails from"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildSearchParams",
+      "name": "Build people search parameters",
+      "type": "code",
+      "code": {
+        "source": "const i = $.input;\nconst perPage = Math.max(1, Math.min(100, i.maxContacts || 25));\nconst params = { page: '1', per_page: String(perPage) };\n\nif (i.personTitles && i.personTitles.length) {\n  i.personTitles.forEach((t, idx) => { params['person_titles[' + idx + ']'] = t; });\n}\nif (i.personSeniorities && i.personSeniorities.length) {\n  i.personSeniorities.forEach((s, idx) => { params['person_seniorities[' + idx + ']'] = s; });\n}\nif (i.personLocations && i.personLocations.length) {\n  i.personLocations.forEach((l, idx) => { params['person_locations[' + idx + ']'] = l; });\n}\nif (i.organizationDomains && i.organizationDomains.length) {\n  i.organizationDomains.forEach((d, idx) => { params['q_organization_domains_list[' + idx + ']'] = d; });\n}\nif (i.employeeRanges && i.employeeRanges.length) {\n  i.employeeRanges.forEach((r, idx) => { params['organization_num_employees_ranges[' + idx + ']'] = r; });\n}\nif (i.technologies && i.technologies.length) {\n  i.technologies.forEach((t, idx) => { params['currently_using_any_of_technology_uids[' + idx + ']'] = t; });\n}\n\nreturn { params, perPage };"
+      }
+    },
+    {
+      "id": "searchPeople",
+      "name": "Search Apollo for matching people",
+      "type": "action",
+      "action": {
+        "platform": "apollo",
+        "actionId": "conn_mod_def::GJz2AmtsIH8::-KnLbk4nSHurCgEJXsodwA",
+        "connectionKey": "$.input.apolloConnectionKey",
+        "queryParams": "$.steps.buildSearchParams.output.params"
+      }
+    },
+    {
+      "id": "extractPeople",
+      "name": "Extract people from search results",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.searchPeople.response || {};\nconst people = resp.people || [];\nif (people.length === 0) throw new Error('No people found matching your criteria. Try broadening your search filters.');\nreturn { people, count: people.length, totalAvailable: resp.total_entries || 0 };"
+      }
+    },
+    {
+      "id": "createContacts",
+      "name": "Create Apollo contacts from search results",
+      "type": "loop",
+      "loop": {
+        "over": "$.steps.extractPeople.output.people",
+        "as": "person",
+        "maxConcurrency": 3,
+        "steps": [
+          {
+            "id": "createContact",
+            "name": "Create contact in Apollo",
+            "type": "action",
+            "onError": { "strategy": "continue" },
+            "action": {
+              "platform": "apollo",
+              "actionId": "conn_mod_def::GJz18_qaRlg::Vlkwc7g2RQynN5-X7YAr7w",
+              "connectionKey": "$.input.apolloConnectionKey",
+              "data": {
+                "first_name": "$.loop.person.first_name",
+                "last_name": "$.loop.person.last_name",
+                "title": "$.loop.person.title",
+                "organization_name": "$.loop.person.organization.name",
+                "run_dedupe": true
+              }
+            }
+          },
+          {
+            "id": "extractContactId",
+            "name": "Extract contact ID from response",
+            "type": "code",
+            "code": {
+              "source": "const resp = $.steps.createContact?.response;\nif (!resp || !resp.contact) return { contactId: null, skipped: true };\nreturn { contactId: resp.contact.id, name: resp.contact.name, skipped: false };"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "collectContactIds",
+      "name": "Collect created contact IDs",
+      "type": "code",
+      "code": {
+        "source": "const iterations = $.steps.createContacts?.response?.iterations || [];\nconst contactIds = iterations\n  .map(r => r?.extractContactId?.output)\n  .filter(o => o && !o.skipped && o.contactId)\n  .map(o => o.contactId);\n\nif (contactIds.length === 0) throw new Error('No contacts were created. Check your Apollo plan and API key permissions.');\n\nreturn { contactIds, count: contactIds.length };"
+      }
+    },
+    {
+      "id": "buildSequenceParams",
+      "name": "Build sequence enrollment parameters",
+      "type": "code",
+      "code": {
+        "source": "const contactIds = $.steps.collectContactIds.output.contactIds;\nconst sequenceId = $.input.sequenceId;\nconst emailAccountId = $.input.emailAccountId;\n\nconst params = {\n  emailer_campaign_id: sequenceId,\n  send_email_from_email_account_id: emailAccountId,\n  sequence_active_in_other_campaigns: 'true'\n};\ncontactIds.forEach((id, idx) => { params['contact_ids[' + idx + ']'] = id; });\n\nreturn { params, sequenceId };"
+      }
+    },
+    {
+      "id": "addToSequence",
+      "name": "Add contacts to the outreach sequence",
+      "type": "action",
+      "action": {
+        "platform": "apollo",
+        "actionId": "conn_mod_def::GJz2A8rUZLQ::BRe1mfcBRQ2suX0rLoMxnA",
+        "connectionKey": "$.input.apolloConnectionKey",
+        "pathVars": {
+          "sequenceId": "$.input.sequenceId"
+        },
+        "queryParams": "$.steps.buildSequenceParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Compile final summary",
+      "type": "code",
+      "code": {
+        "source": "const searchCount = $.steps.extractPeople.output.count;\nconst totalAvailable = $.steps.extractPeople.output.totalAvailable;\nconst contactsCreated = $.steps.collectContactIds.output.count;\nconst seqResp = $.steps.addToSequence.response || {};\nconst addedContacts = (seqResp.contacts || []).length;\nconst skipped = seqResp.skipped_contact_ids ? Object.keys(seqResp.skipped_contact_ids).length : 0;\nconst campaign = seqResp.emailer_campaign || {};\n\nreturn {\n  pipeline: {\n    peopleFound: totalAvailable,\n    peopleProcessed: searchCount,\n    contactsCreated,\n    addedToSequence: addedContacts,\n    skippedFromSequence: skipped\n  },\n  sequence: {\n    id: campaign.id || $.input.sequenceId,\n    name: campaign.name || 'Unknown',\n    active: campaign.active || false\n  },\n  summary: `Prospected ${searchCount} people from ${totalAvailable.toLocaleString()} matches. Created ${contactsCreated} contacts. Added ${addedContacts} to sequence \"${campaign.name || 'Unknown'}\" (${skipped} skipped).`\n};"
+      }
+    }
+  ]
+}

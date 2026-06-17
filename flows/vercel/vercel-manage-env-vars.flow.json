@@ -1,0 +1,56 @@
+{
+  "key": "vercel-manage-env-vars",
+  "name": "View Vercel Project Environment Variables",
+  "description": "Retrieve environment variables for a Vercel project. Useful for auditing config before deployments.",
+  "version": "1",
+  "inputs": {
+    "vercelConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Vercel connection key",
+      "connection": { "platform": "vercel" }
+    },
+    "projectId": {
+      "type": "string",
+      "required": true,
+      "description": "Project ID or name"
+    },
+    "teamId": {
+      "type": "string",
+      "required": false,
+      "description": "Team ID (if project belongs to a team)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildParams",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const params = {};\nif ($.input.teamId) params.teamId = $.input.teamId;\nreturn { params };"
+      }
+    },
+    {
+      "id": "getEnvVars",
+      "name": "Retrieve environment variables",
+      "type": "action",
+      "action": {
+        "platform": "vercel",
+        "actionId": "conn_mod_def::GIi2iRBxUF4::H5rNeuVHSFqjc9IEVTiweA",
+        "connectionKey": "$.input.vercelConnectionKey",
+        "pathVars": {
+          "IDORNAME": "$.input.projectId"
+        },
+        "queryParams": "$.steps.buildParams.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format env vars list",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.getEnvVars.response || {};\nconst envs = (resp.envs || resp || []);\nconst vars = (Array.isArray(envs) ? envs : []).map(e => ({\n  key: e.key || '',\n  value: e.value ? '***' : '',\n  target: e.target || [],\n  type: e.type || '',\n  id: e.id || ''\n}));\n\nreturn {\n  variables: vars,\n  totalVars: vars.length,\n  summary: `Found ${vars.length} environment variable${vars.length === 1 ? '' : 's'} for project \"${$.input.projectId}\"`\n};"
+      }
+    }
+  ]
+}

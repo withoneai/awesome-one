@@ -1,0 +1,99 @@
+{
+  "key": "postmark-send-email",
+  "name": "Send Email via Postmark",
+  "description": "Send a transactional email through Postmark. Supports HTML and plain text bodies, CC/BCC, open/click tracking, custom headers, and attachments.",
+  "version": "1",
+  "inputs": {
+    "postmarkConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Postmark connection key",
+      "connection": { "platform": "postmark" }
+    },
+    "from": {
+      "type": "string",
+      "required": true,
+      "description": "Sender email (must have a confirmed Sender Signature in Postmark)"
+    },
+    "to": {
+      "type": "string",
+      "required": true,
+      "description": "Recipient email(s), comma-separated (max 50)"
+    },
+    "subject": {
+      "type": "string",
+      "required": true,
+      "description": "Email subject line"
+    },
+    "textBody": {
+      "type": "string",
+      "required": false,
+      "description": "Plain text email body"
+    },
+    "htmlBody": {
+      "type": "string",
+      "required": false,
+      "description": "HTML email body"
+    },
+    "cc": {
+      "type": "string",
+      "required": false,
+      "description": "CC recipients, comma-separated (max 50)"
+    },
+    "bcc": {
+      "type": "string",
+      "required": false,
+      "description": "BCC recipients, comma-separated (max 50)"
+    },
+    "replyTo": {
+      "type": "string",
+      "required": false,
+      "description": "Reply-To address override"
+    },
+    "tag": {
+      "type": "string",
+      "required": false,
+      "description": "Tag for categorizing outgoing emails in Postmark analytics"
+    },
+    "trackOpens": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "Enable open tracking"
+    },
+    "trackLinks": {
+      "type": "string",
+      "required": false,
+      "description": "Click tracking: None, HtmlAndText, HtmlOnly, TextOnly"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildBody",
+      "name": "Build Postmark email payload",
+      "type": "code",
+      "code": {
+        "source": "const { from, to, subject, textBody, htmlBody, cc, bcc, replyTo, tag, trackOpens, trackLinks } = $.input;\nif (!from || !to || !subject) throw new Error('from, to, and subject are required');\nif (!textBody && !htmlBody) throw new Error('At least one of textBody or htmlBody is required');\n\nconst body = { From: from, To: to, Subject: subject };\nif (textBody) body.TextBody = textBody;\nif (htmlBody) body.HtmlBody = htmlBody;\nif (cc) body.Cc = cc;\nif (bcc) body.Bcc = bcc;\nif (replyTo) body.ReplyTo = replyTo;\nif (tag) body.Tag = tag;\nif (trackOpens) body.TrackOpens = true;\nif (trackLinks) body.TrackLinks = trackLinks;\n\nreturn { body };"
+      }
+    },
+    {
+      "id": "sendEmail",
+      "name": "Send email via Postmark API",
+      "type": "action",
+      "action": {
+        "platform": "postmark",
+        "actionId": "conn_mod_def::GJ6JxSsWNaM::sWuMI7zXRNisv_3EaL6L-g",
+        "connectionKey": "$.input.postmarkConnectionKey",
+        "data": "$.steps.buildBody.output.body"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format send result",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.sendEmail.response || {};\nreturn {\n  messageId: resp.MessageID || '',\n  to: resp.To || $.input.to,\n  submittedAt: resp.SubmittedAt || '',\n  errorCode: resp.ErrorCode || 0,\n  message: resp.Message || '',\n  sent: resp.ErrorCode === 0 && !!resp.MessageID,\n  summary: resp.MessageID ? `Sent \"${$.input.subject}\" to ${$.input.to} via Postmark` : `Failed: ${resp.Message || 'Unknown error'}`\n};"
+      }
+    }
+  ]
+}

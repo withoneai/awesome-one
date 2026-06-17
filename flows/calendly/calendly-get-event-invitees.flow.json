@@ -1,0 +1,56 @@
+{
+  "key": "calendly-get-event-invitees",
+  "name": "Get Invitees for a Calendly Event",
+  "description": "Retrieve the list of invitees for a specific Calendly scheduled event, including their names, emails, and response status.",
+  "version": "1",
+  "inputs": {
+    "calendlyConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Calendly connection key",
+      "connection": { "platform": "calendly" }
+    },
+    "eventUuid": {
+      "type": "string",
+      "required": true,
+      "description": "UUID of the scheduled event (from the event URI)"
+    },
+    "status": {
+      "type": "string",
+      "required": false,
+      "description": "Filter invitees by status: 'active' or 'canceled'"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const params = {};\nif ($.input.status) params.status = $.input.status;\nreturn { params };"
+      }
+    },
+    {
+      "id": "listInvitees",
+      "name": "List invitees for the event",
+      "type": "action",
+      "action": {
+        "platform": "calendly",
+        "actionId": "conn_mod_def::GJ1Ct14BaDw::_7gdhEnERJe0AltyvEanUA",
+        "connectionKey": "$.input.calendlyConnectionKey",
+        "pathVars": {
+          "uuid": "$.input.eventUuid"
+        },
+        "queryParams": "$.steps.buildQuery.output.params"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listInvitees.response || {};\nconst invitees = resp.collection || [];\nreturn {\n  invitees: invitees.map(i => ({\n    uri: i.uri,\n    name: i.name,\n    email: i.email,\n    status: i.status,\n    createdAt: i.created_at,\n    timezone: i.timezone,\n    questionsAndAnswers: i.questions_and_answers || []\n  })),\n  count: invitees.length,\n  eventUuid: $.input.eventUuid,\n  summary: `Found ${invitees.length} invitee${invitees.length === 1 ? '' : 's'} for event ${$.input.eventUuid}`\n};"
+      }
+    }
+  ]
+}

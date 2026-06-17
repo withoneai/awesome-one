@@ -1,0 +1,85 @@
+{
+  "key": "activecampaign-create-deal",
+  "name": "Create a Deal in ActiveCampaign",
+  "description": "Create a new deal in ActiveCampaign CRM with title, value, pipeline, stage, and contact association.",
+  "version": "1",
+  "inputs": {
+    "activeCampaignConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "ActiveCampaign connection key",
+      "connection": { "platform": "active-campaign" }
+    },
+    "title": {
+      "type": "string",
+      "required": true,
+      "description": "Deal title"
+    },
+    "value": {
+      "type": "number",
+      "required": false,
+      "default": 0,
+      "description": "Deal value in cents (e.g., 10000 = $100.00)"
+    },
+    "currency": {
+      "type": "string",
+      "required": false,
+      "default": "usd",
+      "description": "3-letter currency code (e.g., 'usd')"
+    },
+    "group": {
+      "type": "string",
+      "required": true,
+      "description": "Pipeline ID (called 'group' in the API)"
+    },
+    "stage": {
+      "type": "string",
+      "required": true,
+      "description": "Stage ID within the pipeline"
+    },
+    "owner": {
+      "type": "string",
+      "required": false,
+      "description": "Deal owner user ID"
+    },
+    "contactId": {
+      "type": "string",
+      "required": false,
+      "description": "Contact ID to associate with the deal"
+    },
+    "description": {
+      "type": "string",
+      "required": false,
+      "description": "Deal description"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildDeal",
+      "name": "Build deal payload",
+      "type": "code",
+      "code": {
+        "source": "const { title, value, currency, group, stage, owner, contactId, description } = $.input;\nif (!title || !group || !stage) throw new Error('title, group (pipeline ID), and stage are required');\nconst deal = { title, group, stage };\ndeal.value = value || 0;\ndeal.currency = currency || 'usd';\nif (owner) deal.owner = owner;\nif (contactId) deal.contact = contactId;\nif (description) deal.description = description;\nreturn { deal };"
+      }
+    },
+    {
+      "id": "createDeal",
+      "name": "Create deal via ActiveCampaign API",
+      "type": "action",
+      "action": {
+        "platform": "active-campaign",
+        "actionId": "conn_mod_def::GJzzlr7LEzc::T-RiAlnkS1G_sapuArW0cg",
+        "connectionKey": "$.input.activeCampaignConnectionKey",
+        "data": "$.steps.buildDeal.output"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createDeal.response || {};\nconst deal = resp.deal || {};\nreturn {\n  dealId: deal.id || '',\n  title: deal.title || $.input.title,\n  value: deal.value || 0,\n  currency: deal.currency || 'usd',\n  stage: deal.stage || '',\n  created: !!deal.id,\n  summary: deal.id ? `Created deal \"${deal.title || $.input.title}\"` : 'Failed to create deal'\n};"
+      }
+    }
+  ]
+}

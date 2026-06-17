@@ -1,0 +1,85 @@
+{
+  "key": "github-webhook-setup",
+  "name": "Setup Repository Webhook",
+  "description": "Create a webhook on a GitHub repository. Configures the URL, events, content type, and optional secret for webhook signature verification.",
+  "version": "1",
+  "inputs": {
+    "githubConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "GitHub connection key",
+      "connection": { "platform": "github" }
+    },
+    "owner": {
+      "type": "string",
+      "required": true,
+      "description": "Repository owner (user or org)"
+    },
+    "repo": {
+      "type": "string",
+      "required": true,
+      "description": "Repository name"
+    },
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "Webhook payload URL (must be HTTPS)"
+    },
+    "events": {
+      "type": "array",
+      "required": false,
+      "default": ["push"],
+      "description": "Events to trigger the webhook (e.g., ['push', 'pull_request', 'issues']). Use ['*'] for all events."
+    },
+    "secret": {
+      "type": "string",
+      "required": false,
+      "description": "Webhook secret for signature verification (recommended)"
+    },
+    "contentType": {
+      "type": "string",
+      "required": false,
+      "default": "json",
+      "description": "Content type: json or form"
+    },
+    "active": {
+      "type": "boolean",
+      "required": false,
+      "default": true,
+      "description": "Whether the webhook is active immediately"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildPayload",
+      "name": "Build webhook creation payload",
+      "type": "code",
+      "code": {
+        "source": "const { url, events, secret, contentType, active } = $.input;\nif (!url) throw new Error('url is required');\nif (!url.startsWith('https://')) throw new Error('Webhook URL must use HTTPS');\n\nconst config = {\n  url,\n  content_type: contentType || 'json',\n  insecure_ssl: '0'\n};\nif (secret) config.secret = secret;\n\nconst payload = {\n  name: 'web',\n  active: active !== false,\n  events: events && events.length > 0 ? events : ['push'],\n  config\n};\n\nreturn { payload };"
+      }
+    },
+    {
+      "id": "createWebhook",
+      "name": "Create the webhook via GitHub API",
+      "type": "action",
+      "action": {
+        "platform": "github",
+        "actionId": "conn_mod_def::GDHSvhKb8ko::DQOx2Fk7Sciape8SudQxAA",
+        "connectionKey": "$.input.githubConnectionKey",
+        "pathVars": {
+          "owner": "$.input.owner",
+          "repo": "$.input.repo"
+        },
+        "data": "$.steps.buildPayload.output.payload"
+      }
+    },
+    {
+      "id": "formatResult",
+      "name": "Format the response",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.createWebhook.response || {};\nreturn {\n  webhookId: resp.id,\n  url: resp.config?.url || $.input.url,\n  events: resp.events || $.input.events || ['push'],\n  active: resp.active,\n  createdAt: resp.created_at,\n  testUrl: resp.test_url,\n  pingUrl: resp.ping_url,\n  created: !!resp.id,\n  summary: resp.id\n    ? 'Created webhook #' + resp.id + ' on ' + $.input.owner + '/' + $.input.repo + ' for events: ' + (resp.events || []).join(', ')\n    : 'Failed to create webhook'\n};"
+      }
+    }
+  ]
+}

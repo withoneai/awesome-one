@@ -1,0 +1,69 @@
+{
+  "key": "stripe-get-payment-intents",
+  "name": "List Stripe Payment Intents",
+  "description": "Lists Stripe payment intents with filtering by customer and date range. Compresses responses by removing internal fields (client_secret, payment_method_options, shipping, etc.).",
+  "version": "1",
+  "inputs": {
+    "stripeConnectionKey": {
+      "type": "string",
+      "required": true,
+      "description": "Stripe connection key",
+      "connection": { "platform": "stripe" }
+    },
+    "customer": {
+      "type": "string",
+      "required": false,
+      "description": "Filter by customer ID"
+    },
+    "createdAfter": {
+      "type": "number",
+      "required": false,
+      "description": "Filter payment intents created after this Unix timestamp"
+    },
+    "createdBefore": {
+      "type": "number",
+      "required": false,
+      "description": "Filter payment intents created before this Unix timestamp"
+    },
+    "limit": {
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Number of payment intents to return (1-100)"
+    },
+    "startingAfter": {
+      "type": "string",
+      "required": false,
+      "description": "Cursor for pagination (payment intent ID to start after)"
+    }
+  },
+  "steps": [
+    {
+      "id": "buildQuery",
+      "name": "Build query parameters",
+      "type": "code",
+      "code": {
+        "source": "const { customer, createdAfter, createdBefore, limit, startingAfter } = $.input;\n\nconst params = {};\nif (customer) params.customer = customer;\nif (createdAfter) params['created[gte]'] = String(createdAfter);\nif (createdBefore) params['created[lte]'] = String(createdBefore);\nif (limit) params.limit = String(Math.max(1, Math.min(100, limit)));\nif (startingAfter) params.starting_after = startingAfter;\n\nreturn { params };"
+      }
+    },
+    {
+      "id": "listPaymentIntents",
+      "name": "Fetch payment intents from Stripe",
+      "type": "action",
+      "action": {
+        "platform": "stripe",
+        "actionId": "conn_mod_def::GHEgLeGEpAg::IWvl0S_nS_CUDugp36BGjQ",
+        "connectionKey": "$.input.stripeConnectionKey",
+        "queryParams": "$.steps.buildQuery.output.params"
+      }
+    },
+    {
+      "id": "compressResults",
+      "name": "Strip verbose internal fields from each payment intent",
+      "type": "code",
+      "code": {
+        "source": "const resp = $.steps.listPaymentIntents.response || {};\nconst intents = resp.data || [];\n\nconst keysToRemove = [\n  'object', 'amount_details', 'application', 'application_fee_amount',\n  'canceled_at', 'cancellation_reason', 'client_secret', 'confirmation_method',\n  'invoice', 'last_payment_error', 'latest_charge', 'livemode', 'next_action',\n  'on_behalf_of', 'payment_method_options', 'processing', 'receipt_email',\n  'review', 'setup_future_usage', 'shipping', 'source', 'statement_descriptor',\n  'statement_descriptor_suffix', 'transfer_data', 'transfer_group'\n];\n\nconst compressed = intents.map(intent => {\n  const c = { ...intent };\n  keysToRemove.forEach(k => delete c[k]);\n  return c;\n});\n\nreturn {\n  paymentIntents: compressed,\n  totalReturned: compressed.length,\n  hasMore: resp.has_more || false,\n  summary: `Retrieved ${compressed.length} payment intent${compressed.length === 1 ? '' : 's'}`\n};"
+      }
+    }
+  ]
+}
