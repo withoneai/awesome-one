@@ -1,0 +1,35 @@
+{
+  "name": "inbox-run",
+  "version": "1.0.0",
+  "description": "Jev reads the inbox, One does something about it. Typed classification of a Gmail mailbox, written back to Gmail, Google Sheets, HubSpot and Slack.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/withoneai/awesome-one.git",
+    "directory": "inbox-run"
+  },
+  "homepage": "https://github.com/withoneai/awesome-one/tree/main/inbox-run#readme",
+  "bugs": {
+    "url": "https://github.com/withoneai/awesome-one/issues"
+  },
+  "keywords": [
+    "jev",
+    "typesafe",
+    "one",
+    "gmail",
+    "email-classification",
+    "hubspot",
+    "slack",
+    "google-sheets"
+  ],
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "fetch": "node fetch-batch.js",
+    "sort": "node sort-cache.js",
+    "undo": "node undo.js"
+  }
+}
