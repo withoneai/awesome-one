@@ -39,6 +39,18 @@ one flow execute n8n-1954-ai-agent-chat --input question="What is RAG?"
 
 ---
 
+**[Inbox Run](./inbox-run/)**
+
+*Two thousand emails triaged in five seconds. [TypeSafe Jev](https://typesafe.ai) answers four typed questions about every conversation in a Gmail mailbox — what it is, whether it was sent to a list, whether it needs you, how urgent it is — and One acts on the answers: labels the mail, archives the bulk, writes a ledger to Google Sheets, creates a HubSpot contact for every lead, and posts a summary to Slack. Zero npm dependencies, and every archive is reversible.*
+
+```bash
+cd inbox-run && cp .env.example .env && node fetch-batch.js 5000 && node server.js
+```
+
+[View Inbox Run →](./inbox-run/)
+
+---
+
 **[Dev Pulse](./dev-pulse/)**
 
 *Real-time engineering command center. Connects GitHub, Linear, Slack, and Google Calendar with live webhook streaming, an AI chat panel powered by One's MCP server, and natural-language automations. Built with Next.js, Claude, and SQLite.*

@@ -1,0 +1,15 @@
+.env
+cache/
+node_modules/
+
+# Mail metadata, run history and the demo cursor all live here.
+# Subjects and senders are real — this must never be pushed.
+cache/
+*.log
+.DS_Store
+
+# Footage notes and takes. SCRIPT.md names the real mailbox used for the
+# recording, and .mov files are large — neither belongs in the repo.
+recording/
+*.mov
+*.mp4

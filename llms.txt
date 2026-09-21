@@ -46,6 +46,8 @@ All flows are listed at: flows/n8n/README.md
 ## Other resources
 
 - Link (./link/) — Drop-in connection onboarding page for agencies
+- Dev Pulse (./dev-pulse/) — Real-time engineering command center over GitHub, Linear, Slack and Calendar
+- Inbox Run (./inbox-run/) — Gmail triage: TypeSafe Jev classifies, One labels, archives, and writes to Sheets, HubSpot and Slack
 - Website: https://withone.ai
 - Docs: https://withone.ai/docs
 - Dashboard: https://app.withone.ai

@@ -1,0 +1,461 @@
+<title>Inbox Run</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --background:120 12.5% 96.9%; --background-secondary:132 12.2% 92%; --background-tertiary:135 12.5% 93.7%;
+  --foreground:162.9 36.8% 7.5%;
+  --card:0 0% 100%; --card-elevated:132 12.2% 92%; --card-hover:135 12.5% 93.7%;
+  --muted:132 12.2% 92%; --muted-foreground:158.8 9.8% 33.9%;
+  --accent:135 12.5% 93.7%;
+  --border:137.1 11.1% 87.6%; --border-secondary:144 8.9% 78%; --border-strong:144 8.9% 78%;
+  --text-primary:162.9 36.8% 7.5%; --text-secondary:158.8 9.8% 33.9%; --text-muted:161.1 9.4% 39.8%;
+  --success:162.7 78.9% 24.1%; --success-muted:154.7 54.3% 93.1%;
+  --warning:39.9 84.3% 37.5%; --warning-fg:39.5 87.8% 28.8%; --warning-muted:40.6 79.5% 92.4%;
+  --destructive:8.1 70.6% 41.4%; --destructive-muted:11.4 72.4% 94.3%;
+  --one-yellow:72 100% 50%; --one-yellow-light:72.8 100% 65.1%; --one-yellow-foreground:92.7 52.4% 8.2%;
+  --ring:162.9 36.8% 7.5%;
+  --overlay:162.9 36.8% 7.5%;
+  --radius:0.5rem;
+  --shadow-card:0 1px 2px hsl(var(--foreground)/0.04);
+  --font-sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  /* category inks — light */
+  --c-newsletter:210 45% 42%; --c-alert:265 38% 48%; --c-calendar:190 55% 33%;
+  --c-recruiting:22 62% 42%; --c-invoice:162.7 78.9% 24.1%; --c-lead:330 52% 45%;
+  --c-customer:255 48% 50%; --c-personal:40 70% 35%; --c-other:161.1 9.4% 39.8%;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --background:150 9.1% 4.3%; --background-secondary:156 13.5% 7.3%; --background-tertiary:154.3 13.7% 10%;
+  --foreground:150 15.8% 92.5%;
+  --card:156 13.5% 7.3%; --card-elevated:154.3 13.7% 10%; --card-hover:153.3 13.8% 12.7%;
+  --muted:154.3 13.7% 10%; --muted-foreground:157.5 8.8% 64.3%;
+  --accent:153.3 13.8% 12.7%;
+  --border:157.5 10.3% 15.3%; --border-secondary:155 11.5% 20.4%; --border-strong:155 11.5% 20.4%;
+  --text-primary:150 15.8% 92.5%; --text-secondary:157.5 8.8% 64.3%; --text-muted:157.5 6.5% 51.8%;
+  --success:157.3 74.5% 56.9%; --success-muted:156.9 24.5% 10.4%;
+  --warning:40 83.3% 64.7%; --warning-fg:40 83.3% 64.7%; --warning-muted:40 71.4% 8.2%;
+  --destructive:12.6 100% 71%; --destructive-muted:8 55.6% 10.6%;
+  --ring:72 100% 50%;
+  --overlay:150 9.1% 4.3%;
+  --shadow-card:0 1px 2px hsl(0 0% 0%/0.4);
+  --c-newsletter:210 70% 68%; --c-alert:265 62% 74%; --c-calendar:188 62% 58%;
+  --c-recruiting:24 78% 64%; --c-invoice:157.3 74.5% 56.9%; --c-lead:330 72% 70%;
+  --c-customer:255 70% 74%; --c-personal:42 82% 62%; --c-other:157.5 6.5% 51.8%;
+}}
+:root[data-theme="dark"]{
+  --background:150 9.1% 4.3%; --background-secondary:156 13.5% 7.3%; --background-tertiary:154.3 13.7% 10%;
+  --foreground:150 15.8% 92.5%;
+  --card:156 13.5% 7.3%; --card-elevated:154.3 13.7% 10%; --card-hover:153.3 13.8% 12.7%;
+  --muted:154.3 13.7% 10%; --muted-foreground:157.5 8.8% 64.3%;
+  --accent:153.3 13.8% 12.7%;
+  --border:157.5 10.3% 15.3%; --border-secondary:155 11.5% 20.4%; --border-strong:155 11.5% 20.4%;
+  --text-primary:150 15.8% 92.5%; --text-secondary:157.5 8.8% 64.3%; --text-muted:157.5 6.5% 51.8%;
+  --success:157.3 74.5% 56.9%; --success-muted:156.9 24.5% 10.4%;
+  --warning:40 83.3% 64.7%; --warning-fg:40 83.3% 64.7%; --warning-muted:40 71.4% 8.2%;
+  --destructive:12.6 100% 71%; --destructive-muted:8 55.6% 10.6%;
+  --ring:72 100% 50%;
+  --overlay:150 9.1% 4.3%;
+  --shadow-card:0 1px 2px hsl(0 0% 0%/0.4);
+  --c-newsletter:210 70% 68%; --c-alert:265 62% 74%; --c-calendar:188 62% 58%;
+  --c-recruiting:24 78% 64%; --c-invoice:157.3 74.5% 56.9%; --c-lead:330 72% 70%;
+  --c-customer:255 70% 74%; --c-personal:42 82% 62%; --c-other:157.5 6.5% 51.8%;
+}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:hsl(var(--background));color:hsl(var(--text-primary));
+  font-family:var(--font-sans);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+button{font-family:inherit;cursor:pointer}
+button:focus-visible,[tabindex]:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px;border-radius:4px}
+
+/* ---- top bar ---- */
+.topbar{display:flex;align-items:center;gap:12px;padding:10px 16px;
+  border-bottom:1px solid hsl(var(--border));background:hsl(var(--card));flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:9px;font-weight:600;font-size:13px;letter-spacing:-0.01em}
+.brand .mark{display:block;flex:none}
+/* The Jev mark ships as a dark glyph on a pink disc. Both twins here are the
+   glyph alone, keyed to transparent and recoloured to the theme's ink, so it
+   sits beside the One wordmark as one lockup rather than a sticker. */
+.brand .jevlock{display:inline-flex;align-items:center;gap:3px}
+.brand .jevmark{display:none;flex:none;width:24px;height:24px}
+.brand .jevword{font-family:var(--font-sans);font-weight:600;font-size:13px;
+  letter-spacing:-0.01em;color:hsl(var(--text-primary))}
+.brand .onelogo{display:none;height:22px;width:auto;flex:none}
+.brand .onelogo.light,.brand .jevmark.light{display:block}
+.brand .onelogo.dark,.brand .jevmark.dark{display:none}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]) .brand .onelogo.light,
+  :root:not([data-theme="light"]) .brand .jevmark.light{display:none}
+  :root:not([data-theme="light"]) .brand .onelogo.dark,
+  :root:not([data-theme="light"]) .brand .jevmark.dark{display:block}
+}
+:root[data-theme="dark"] .brand .onelogo.light,
+:root[data-theme="dark"] .brand .jevmark.light{display:none}
+:root[data-theme="dark"] .brand .onelogo.dark,
+:root[data-theme="dark"] .brand .jevmark.dark{display:block}
+:root[data-theme="light"] .brand .onelogo.light,
+:root[data-theme="light"] .brand .jevmark.light{display:block}
+:root[data-theme="light"] .brand .onelogo.dark,
+:root[data-theme="light"] .brand .jevmark.dark{display:none}
+.brand .x{color:hsl(var(--text-muted));font-size:11px;font-weight:400}
+.brand .name{padding-left:9px;margin-left:1px;border-left:1px solid hsl(var(--border));
+  color:hsl(var(--text-primary))}
+.conns{display:flex;align-items:center;gap:6px;margin-left:auto;flex-wrap:wrap}
+.conn{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border-radius:6px;
+  background:hsl(var(--card-elevated));border:1px solid hsl(var(--border));
+  font-family:var(--font-mono);font-size:10px;color:hsl(var(--text-secondary));letter-spacing:0.02em}
+.conn i{width:5px;height:5px;border-radius:50%;background:hsl(var(--success));flex:none}
+.conn.slice{background:hsl(var(--one-yellow)/0.14);border-color:hsl(var(--one-yellow)/0.4);
+  color:hsl(var(--text-primary));font-weight:500}
+.icon-btn{height:28px;width:28px;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:6px;border:1px solid hsl(var(--border));background:hsl(var(--card));
+  color:hsl(var(--text-secondary))}
+.icon-btn:hover{background:hsl(var(--card-hover))}
+.btn-run{height:28px;padding:0 14px;border-radius:6px;border:none;
+  background:hsl(var(--one-yellow));color:hsl(var(--one-yellow-foreground));
+  font-weight:600;font-size:12px;display:inline-flex;align-items:center;gap:6px}
+.btn-run:hover{background:hsl(var(--one-yellow-light))}
+.btn-run[disabled]{opacity:.45;cursor:default}
+.btn-ghost{height:28px;padding:0 10px;border-radius:6px;border:1px solid hsl(var(--border));
+  background:hsl(var(--card));color:hsl(var(--text-secondary));font-size:12px;font-weight:500}
+.btn-ghost:hover{background:hsl(var(--card-hover))}
+.btn-ghost[aria-pressed="true"]{background:hsl(var(--card-elevated));color:hsl(var(--text-primary));
+  border-color:hsl(var(--border-strong))}
+
+/* ---- shell ---- */
+.shell{padding:16px;display:flex;flex-direction:column;gap:12px;max-width:1500px;margin:0 auto}
+
+/* ---- metric strip ---- */
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:1px;
+  background:hsl(var(--border));border:1px solid hsl(var(--border));border-radius:var(--radius);overflow:hidden}
+.metric{background:hsl(var(--card));padding:12px 14px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.metric .k{font-family:var(--font-mono);font-size:10px;letter-spacing:0.05em;text-transform:uppercase;
+  color:hsl(var(--text-muted));display:flex;align-items:center;gap:6px}
+.metric .v{font-family:var(--font-mono);font-size:30px;font-weight:500;line-height:1;
+  letter-spacing:-0.02em;font-variant-numeric:tabular-nums;color:hsl(var(--text-primary))}
+.metric .v.lime{color:hsl(var(--foreground))}
+.metric .n{font-size:11px;color:hsl(var(--text-muted));line-height:1.3}
+.metric.hero{background:hsl(var(--card))}
+.metric.hero .v{font-size:38px}
+
+/* ---- panels ---- */
+.grid{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(280px,1fr);gap:12px;align-items:start}
+@media (max-width:1020px){.grid{grid-template-columns:1fr}}
+.panel{background:hsl(var(--card));border:1px solid hsl(var(--border));border-radius:var(--radius);
+  box-shadow:var(--shadow-card);overflow:hidden;display:flex;flex-direction:column}
+.panel-h{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid hsl(var(--border));
+  background:hsl(var(--card));min-height:37px}
+.panel-h h2{margin:0;font-size:12px;font-weight:600;letter-spacing:-0.005em}
+.panel-h .meta{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:hsl(var(--text-muted));
+  letter-spacing:0.03em}
+.panel-h svg{color:hsl(var(--text-muted));flex:none}
+
+/* ---- the wall ---- */
+.wall{height:428px;overflow-y:auto;overflow-x:hidden;position:relative;
+  background:hsl(var(--background-secondary));scrollbar-width:thin}
+.wall::-webkit-scrollbar{width:10px}
+.wall::-webkit-scrollbar-thumb{background:hsl(var(--border-strong));border-radius:5px;
+  border:3px solid hsl(var(--background-secondary))}
+/* Virtualised: the inner div is sized to the full list, but only the rows in
+   view are in the DOM. 32,000 real rows would otherwise lock up the tab. */
+.wall-inner{position:relative;padding:6px}
+.row{position:absolute;left:6px;right:6px;height:32px;
+  display:grid;grid-template-columns:96px 58px minmax(0,1fr) 128px 62px;gap:10px;align-items:center;
+  padding:0 8px;border-radius:5px;background:hsl(var(--card));border:1px solid hsl(var(--border))}
+.row .when{font-family:var(--font-mono);font-size:10px;color:hsl(var(--text-muted));
+  white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}
+.row .chip{font-family:var(--font-mono);font-size:9.5px;letter-spacing:0.05em;text-transform:uppercase;
+  padding:2px 6px;border-radius:4px;text-align:center;line-height:1.35;
+  background:hsl(var(--cat)/0.13);color:hsl(var(--cat));border:1px solid hsl(var(--cat)/0.3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .subj{min-width:0;display:flex;flex-direction:column;gap:1px}
+.row .subj b{font-weight:500;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  color:hsl(var(--text-primary))}
+.row .subj span{font-family:var(--font-mono);font-size:9.5px;color:hsl(var(--text-muted));
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .flags{display:flex;gap:3px;justify-content:flex-end;flex-wrap:nowrap}
+.flag{font-family:var(--font-mono);font-size:9px;letter-spacing:0.04em;padding:2px 5px;border-radius:3px;
+  white-space:nowrap;background:hsl(var(--muted));color:hsl(var(--text-muted))}
+.flag.arch{background:hsl(var(--warning-muted));color:hsl(var(--warning-fg))}
+.flag.you{background:hsl(var(--success-muted));color:hsl(var(--success))}
+.flag.urg{background:hsl(var(--destructive-muted));color:hsl(var(--destructive))}
+.row .cf{display:flex;align-items:center;gap:5px;justify-content:flex-end}
+.cfbar{width:30px;height:4px;border-radius:2px;background:hsl(var(--muted));overflow:hidden;flex:none}
+.cfbar i{display:block;height:100%;background:hsl(var(--cat));border-radius:2px}
+.cfv{font-family:var(--font-mono);font-size:9.5px;color:hsl(var(--text-muted));min-width:22px;text-align:right}
+.wall-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:8px;color:hsl(var(--text-muted));font-size:12px;text-align:center;padding:24px}
+.wall-empty svg{opacity:.4}
+
+/* ---- tally ---- */
+.tally{padding:10px 12px;display:flex;flex-direction:column;gap:7px}
+.trow{display:grid;grid-template-columns:82px minmax(0,1fr) 52px;gap:8px;align-items:center}
+.tname{font-family:var(--font-mono);font-size:10px;letter-spacing:0.04em;text-transform:uppercase;
+  color:hsl(var(--cat));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tbar{height:7px;border-radius:4px;background:hsl(var(--muted));overflow:hidden}
+.tbar i{display:block;height:100%;background:hsl(var(--cat));border-radius:4px;
+  transition:width .2s linear;width:0}
+.tval{font-family:var(--font-mono);font-size:10.5px;color:hsl(var(--text-secondary));text-align:right;
+  font-variant-numeric:tabular-nums}
+
+/* ---- short list ---- */
+.short{padding:8px 10px;display:flex;flex-direction:column;gap:4px;max-height:196px;overflow-y:auto}
+.sitem{padding:6px 8px;border-radius:5px;background:hsl(var(--background-secondary));
+  border:1px solid hsl(var(--border));display:flex;flex-direction:column;gap:2px}
+.sitem b{font-size:11.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sitem span{font-family:var(--font-mono);font-size:9.5px;color:hsl(var(--text-muted));
+  display:flex;gap:6px;align-items:center}
+.short-empty{padding:18px 10px;text-align:center;font-size:11.5px;color:hsl(var(--text-muted))}
+
+/* ---- action rail ---- */
+.rail{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.act{background:hsl(var(--card));border:1px solid hsl(var(--border));border-radius:var(--radius);
+  padding:11px 13px;display:flex;flex-direction:column;gap:8px;box-shadow:var(--shadow-card);
+  opacity:.5;transition:opacity .2s}
+.act.on{opacity:1;border-color:hsl(var(--success)/0.45)}
+.act-h{display:flex;align-items:center;gap:7px}
+.act-h svg{color:hsl(var(--text-muted));flex:none}
+.act.on .act-h svg{color:hsl(var(--success))}
+.act-h b{font-size:12px;font-weight:600;letter-spacing:-0.005em}
+.act-h .pf{margin-left:auto;font-family:var(--font-mono);font-size:9px;letter-spacing:0.05em;
+  text-transform:uppercase;color:hsl(var(--text-muted));padding:1px 5px;border-radius:3px;
+  background:hsl(var(--muted))}
+.act.on .act-h .pf{background:hsl(var(--success-muted));color:hsl(var(--success))}
+.act .n{font-family:var(--font-mono);font-size:21px;font-weight:500;line-height:1;
+  font-variant-numeric:tabular-nums}
+.act .d{font-size:11px;color:hsl(var(--text-muted));line-height:1.35}
+.act .aid{font-family:var(--font-mono);font-size:9px;color:hsl(var(--text-muted));
+  padding-top:7px;border-top:1px solid hsl(var(--border));
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---- run history ---- */
+.hist-wrap{overflow-x:auto}
+table.hist{border-collapse:collapse;width:100%;font-size:11.5px;min-width:900px}
+table.hist th{font-family:var(--font-mono);font-size:9.5px;letter-spacing:0.05em;text-transform:uppercase;
+  color:hsl(var(--text-muted));text-align:left;font-weight:400;padding:8px 10px;
+  border-bottom:1px solid hsl(var(--border));background:hsl(var(--card))}
+table.hist td{padding:8px 10px;border-bottom:1px solid hsl(var(--border));vertical-align:middle;
+  color:hsl(var(--text-secondary))}
+table.hist tr:last-child td{border-bottom:none}
+table.hist td.n,table.hist th.n{font-family:var(--font-mono);font-variant-numeric:tabular-nums;text-align:right;
+  white-space:nowrap;color:hsl(var(--text-primary))}
+table.hist td.idx{font-family:var(--font-mono);color:hsl(var(--text-muted))}
+table.hist tr.totals td{background:hsl(var(--background-secondary));font-weight:600;
+  color:hsl(var(--text-primary));border-top:1px solid hsl(var(--border-strong))}
+.cats{display:flex;gap:3px;flex-wrap:wrap;min-width:180px}
+.cats i{font-family:var(--font-mono);font-size:9px;font-style:normal;padding:1px 4px;border-radius:3px;
+  background:hsl(var(--cat)/0.14);color:hsl(var(--cat));white-space:nowrap}
+.mtag{font-family:var(--font-mono);font-size:9px;letter-spacing:0.04em;padding:1px 5px;border-radius:3px;
+  background:hsl(var(--muted));color:hsl(var(--text-muted))}
+.mtag.live{background:hsl(var(--success-muted));color:hsl(var(--success))}
+.hist a{color:hsl(var(--success));text-decoration:none}
+.hist a:hover{text-decoration:underline}
+.dash{color:hsl(var(--text-muted))}
+
+/* ---- confirmation dialog (mirrors components/ui/app-modal.tsx) ---- */
+.overlay{position:fixed;inset:0;z-index:50;background:hsl(var(--overlay)/0.5);
+  display:flex;align-items:center;justify-content:center;padding:24px;
+  animation:fade .12s ease-out}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.dlg{background:hsl(var(--background)/0.95);backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);
+  border:1px solid hsl(var(--border));border-radius:var(--radius);
+  width:100%;max-width:520px;
+  box-shadow:0 25px 50px -12px hsl(0 0% 0%/0.25);
+  animation:pop .14s ease-out}
+@keyframes pop{from{opacity:0;transform:translateY(6px) scale(.985)}to{opacity:1;transform:none}}
+.dlg-h{display:flex;gap:12px;align-items:flex-start;padding:16px 24px;
+  border-bottom:1px solid hsl(var(--border))}
+.dlg-icon{width:32px;height:32px;border-radius:6px;flex:none;display:flex;align-items:center;
+  justify-content:center;background:hsl(var(--warning-muted));color:hsl(var(--warning-fg))}
+.dlg-ht{min-width:0}
+.dlg-h h2{margin:0;font-size:15px;font-weight:600;color:hsl(var(--text-primary));letter-spacing:-0.01em}
+.dlg-h p{margin:3px 0 0;font-size:12.5px;color:hsl(var(--text-muted))}
+.dlg-b{padding:16px 24px;font-size:12.5px;color:hsl(var(--text-secondary))}
+.dlg-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.dlg-list li{padding-left:14px;position:relative;line-height:1.5}
+.dlg-list li::before{content:"";position:absolute;left:0;top:7px;width:4px;height:4px;
+  border-radius:50%;background:hsl(var(--border-strong))}
+.dlg-list b{color:hsl(var(--text-primary));font-weight:600}
+.dlg-safe{margin:14px 0 0;padding-top:12px;border-top:1px solid hsl(var(--border));
+  font-size:12px;color:hsl(var(--text-muted));line-height:1.5}
+.dlg-f{display:flex;justify-content:flex-end;gap:8px;padding:14px 24px;
+  border-top:1px solid hsl(var(--border))}
+
+/* ---- footer note ---- */
+.note{display:flex;gap:10px;align-items:flex-start;padding:10px 13px;border-radius:var(--radius);
+  background:hsl(var(--background-secondary));border:1px solid hsl(var(--border));
+  font-size:11.5px;color:hsl(var(--text-secondary));line-height:1.5}
+.note svg{color:hsl(var(--text-muted));flex:none;margin-top:1px}
+.note b{color:hsl(var(--text-primary));font-weight:600}
+.note code{font-family:var(--font-mono);font-size:10.5px;background:hsl(var(--muted));
+  padding:1px 4px;border-radius:3px}
+
+.phase-tag{font-family:var(--font-mono);font-size:10px;letter-spacing:0.05em;text-transform:uppercase;
+  padding:2px 7px;border-radius:4px;background:hsl(var(--muted));color:hsl(var(--text-muted))}
+.phase-tag.live{background:hsl(var(--one-yellow)/0.16);color:hsl(var(--foreground));
+  border:1px solid hsl(var(--one-yellow)/0.4)}
+.phase-tag.done{background:hsl(var(--success-muted));color:hsl(var(--success))}
+
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style><div class="topbar">
+  <div class="brand">
+    <img class="onelogo light" src="assets/one-full-light.svg" alt="One" height="22">
+    <img class="onelogo dark" src="assets/one-full-dark.svg" alt="One" height="22">
+    <span class="x">&times;</span>
+    <span class="jevlock">
+      <img class="jevmark light" src="assets/jev-light.png" alt="" width="24" height="24">
+      <img class="jevmark dark" src="assets/jev-dark.png" alt="" width="24" height="24">
+      <span class="jevword">Jev</span>
+    </span>
+    <span class="name">Inbox Run</span>
+  </div>
+  <div class="conns">
+    <span class="conn"><i></i>gmail</span>
+    <span class="conn"><i></i>google-sheets</span>
+    <span class="conn"><i></i>hubspot</span>
+    <span class="conn"><i></i>slack</span>
+    <button class="btn-ghost" id="mode" aria-pressed="true" title="Live writes to your real accounts. Toggle for a dry run that writes nothing.">Live &middot; writes</button>
+    <button class="icon-btn" id="theme" aria-label="Toggle theme">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.25 14.25A8.25 8.25 0 0 1 9.75 3.75a8.25 8.25 0 1 0 10.5 10.5Z"/></svg>
+    </button>
+    <button class="btn-run" id="run">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.75 4.5 19.5 12 6.75 19.5V4.5Z"/></svg>
+      Run
+    </button>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="metrics">
+    <div class="metric hero">
+      <div class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 6.75V12l3.75 2.25"/></svg>Elapsed</div>
+      <div class="v" id="m-time">0.00<span style="font-size:18px">s</span></div>
+      <div class="n" id="m-time-n">Live wall clock</div>
+    </div>
+    <div class="metric">
+      <div class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.25" width="18" height="13.5" rx="2.25"/><path d="M3.75 6.75 12 12.75l8.25-6"/></svg>Conversations</div>
+      <div class="v" id="m-read">0</div>
+      <div class="n" id="m-read-n">classified so far</div>
+    </div>
+    <div class="metric">
+      <div class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3 5.25 13.5h6L10.5 21l8.25-10.5h-6L13.5 3Z"/></svg>Typed decisions</div>
+      <div class="v" id="m-dec">0</div>
+      <div class="n">4 questions each, answered at once</div>
+    </div>
+    <div class="metric">
+      <div class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.75v16.5"/><path d="M16.5 7.5H9.75a2.625 2.625 0 0 0 0 5.25h4.5a2.625 2.625 0 0 1 0 5.25H7.5"/></svg>Model spend</div>
+      <div class="v" id="m-cost">$0.0000</div>
+      <div class="n" id="m-cost-n">jev-1.13.0</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="panel-h">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5"/></svg>
+        <h2>Classification stream</h2>
+        <span class="phase-tag" id="phase">Idle</span>
+        <span class="meta" id="rate">&mdash;</span>
+        <span class="meta" id="wall-count" style="margin-left:0"></span>
+      </div>
+      <div class="wall" id="wall">
+        <div class="wall-inner" id="wall-inner"></div>
+        <div class="wall-empty" id="wall-empty">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.25" width="18" height="13.5" rx="2.25"/><path d="M3.75 6.75 12 12.75l8.25-6"/></svg>
+          <div id="empty-txt">Press Run.</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
+      <div class="panel">
+        <div class="panel-h">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 20.25V9.75M9.75 20.25V4.5M15.75 20.25v-7.5M21 20.25H3"/></svg>
+          <h2>Categories</h2><span class="meta" id="tally-total">0</span>
+        </div>
+        <div class="tally" id="tally"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M6.75 12.75 10.5 16.5l6.75-6.75"/></svg>
+          <h2>Needs you personally</h2><span class="meta" id="short-n">0</span>
+        </div>
+        <div class="short" id="short"><div class="short-empty">Nothing yet.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rail" id="rail">
+    <div class="act" data-a="label">
+      <div class="act-h"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 10.5V5.25a1.5 1.5 0 0 1 1.5-1.5h5.25l9 9-6.75 6.75-9-9Z"/><circle cx="7.875" cy="7.875" r="1.125"/></svg><b>Gmail &middot; label</b><span class="pf">write</span></div>
+      <div class="n" id="a-label">0</div><div class="d" id="d-label">Messages tagged &mdash; a thread labels all its messages</div>
+      <div class="aid">Batch Modify &middot; 1,000 per call</div>
+    </div>
+    <div class="act" data-a="arch">
+      <div class="act-h"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="4.5" rx="1.5"/><path d="M4.5 9v9a1.5 1.5 0 0 0 1.5 1.5h12A1.5 1.5 0 0 0 19.5 18V9M9.75 12.75h4.5"/></svg><b>Gmail &middot; archive</b><span class="pf">reversible</span></div>
+      <div class="n" id="a-arch">0</div><div class="d">Out of the inbox, still in All Mail</div>
+      <div class="aid">removeLabelIds: ["INBOX"]</div>
+    </div>
+    <div class="act" data-a="sheet">
+      <div class="act-h"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="3.75" width="16.5" height="16.5" rx="1.5"/><path d="M3.75 9h16.5M9 9v11.25"/></svg><b>Sheets &middot; ledger</b><span class="pf">audit</span></div>
+      <div class="n" id="a-sheet">0</div><div class="d" id="d-sheet">One row per conversation</div>
+      <div class="aid" id="aid-sheet">Append Values to a Range</div>
+    </div>
+    <div class="act" data-a="hub">
+      <div class="act-h"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="8.25" r="3.75"/><path d="M3.75 19.5a6.75 6.75 0 0 1 13.5 0"/><path d="M18.75 6.75v4.5M21 9h-4.5"/></svg><b>HubSpot &middot; leads</b><span class="pf">write</span></div>
+      <div class="n" id="a-hub">0</div><div class="d" id="d-hub">Buying intent becomes a contact</div>
+      <div class="aid" id="aid-hub">Create a Contact</div>
+    </div>
+    <div class="act" data-a="slack">
+      <div class="act-h"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.25 4.5 3.75 10.5l6 2.25 2.25 6.75 8.25-15Z"/><path d="m9.75 12.75 4.5-4.5"/></svg><b>Slack</b><span class="pf" id="pf-slack">notify</span></div>
+      <div class="n" id="a-slack">0</div><div class="d">Summary card plus the short list</div>
+      <div class="aid" id="aid-slack">chat.postMessage</div>
+    </div>
+  </div>
+
+  <div class="panel" id="hist-panel" hidden>
+    <div class="panel-h">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 6.75V12l3.75 2.25"/></svg>
+      <h2>Completed runs</h2>
+      <span class="meta" id="hist-total">&mdash;</span>
+    </div>
+    <div class="hist-wrap"><table class="hist" id="hist"></table></div>
+  </div>
+
+  <div class="note">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11.25v5.25M12 7.875v.375"/></svg>
+    <div id="note-txt">Loading&hellip;</div>
+  </div>
+</div>
+<div class="overlay" id="overlay" hidden>
+  <div class="dlg" role="alertdialog" aria-modal="true" aria-labelledby="dlg-title" aria-describedby="dlg-desc">
+    <div class="dlg-h">
+      <div class="dlg-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4.5M12 17.25v.375"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>
+      </div>
+      <div class="dlg-ht">
+        <h2 id="dlg-title">Run in live mode?</h2>
+        <p id="dlg-desc">This writes to your real accounts.</p>
+      </div>
+    </div>
+    <div class="dlg-b">
+      <ul class="dlg-list">
+        <li><b>Gmail</b> — creates nine labels and applies them, then archives bulk mail by removing the <code>INBOX</code> label</li>
+        <li><b>Google Sheets</b> — creates a new spreadsheet and writes one row per conversation</li>
+        <li><b>HubSpot</b> — creates a contact for every lead</li>
+        <li><b>Slack</b> — posts a summary to <code id="dlg-channel">#general</code></li>
+      </ul>
+      <p class="dlg-safe">Nothing is deleted, nothing is marked read, and nothing is sent on your behalf. Archiving is reversible with <code>node undo.js</code>.</p>
+    </div>
+    <div class="dlg-f">
+      <button class="btn-ghost" id="dlg-cancel">Cancel</button>
+      <button class="btn-run" id="dlg-confirm">Run live</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
