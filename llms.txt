@@ -100,7 +100,6 @@ Each repo's README has its own setup. To install the One CLI, run `npm install -
 ## In this repo
 
 - [Inbox Run](https://github.com/withoneai/awesome-one/tree/main/inbox-run): Gmail triage with TypeSafe Jev. Jev answers four typed questions about every conversation, and One labels the mail, archives the bulk, writes a ledger and posts a summary. Apps: Gmail, Google Sheets, HubSpot, Slack.
-- [Prompt Sanitizer](https://github.com/withoneai/awesome-one/tree/main/flows/prompt-sanitize): A One CLI flow that strips invisible text, redacts secrets and personal data, and flags prompt injection before a prompt reaches a model. No connections needed.
 
 ## Optional
 
