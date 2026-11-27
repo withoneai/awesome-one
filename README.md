@@ -130,12 +130,11 @@ Apps and pages with real integrations built in. Each one opens in Replit, Bolt.n
 
 ## In this repo
 
-Two examples live&nbsp;here.
+One example lives&nbsp;here.
 
 | Example | What it&nbsp;does |
 |---|---|
 | [Inbox&nbsp;Run](./inbox-run/) | Gmail triage with [TypeSafe Jev](https://typesafe.ai). Jev answers four typed questions about every conversation, and One labels the mail, archives the bulk, writes a ledger and posts a&nbsp;summary.<br><sub>Gmail &middot; Google&nbsp;Sheets &middot; HubSpot &middot;&nbsp;Slack</sub> |
-| [Prompt&nbsp;Sanitizer](./flows/prompt-sanitize/) | A One CLI flow that strips invisible text, redacts secrets and personal data, and flags prompt injection before a prompt reaches a&nbsp;model.<br><sub>No connections&nbsp;needed</sub> |
 
 ## Add yours
 
