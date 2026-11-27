@@ -1,6 +1,6 @@
 # Prompt Sanitizer
 
-A zero-dependency prompt sanitization flow for the [One CLI](https://github.com/withoneai/one). Runs 6 security scanners in sequence to strip PII, redact secrets, detect prompt injection, remove invisible characters, enforce token limits, and block banned substrings -- all in under 5ms.
+A zero-dependency prompt sanitization flow for the [One CLI](https://github.com/withoneai/cli). Runs 6 security scanners in sequence to strip PII, redact secrets, detect prompt injection, remove invisible characters, enforce token limits, and block banned substrings -- all in under 5ms.
 
 Inspired by [LLM Guard](https://github.com/protectai/llm-guard) by [Protect AI](https://protectai.com), reimplemented as a pure One CLI flow (no Python, no external dependencies).
 

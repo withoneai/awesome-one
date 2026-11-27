@@ -1,53 +1,111 @@
 # Awesome One
 
-Open-source tools, templates, and automation flows built on the One platform.
+> Open source agents and templates built on One (https://withone.ai). Every entry is a working repo you can clone and run, and each one reaches its apps through One.
 
-## What is One CLI?
+Each repo's README has its own setup. To install the One CLI, run `npm install -g @withone/cli`, then `one init`, which signs you in through the browser, installs the One skill into the coding agents you pick and offers to connect your first app.
 
-One CLI (`one`) connects 200+ third-party platforms (Gmail, Slack, Shopify, HubSpot, Stripe, GitHub, Notion, Salesforce, etc.) through a single command-line interface. Install with `npm i -g @anthropic/one`.
+## Start here
 
-## Flows
+- [CLI](https://github.com/withoneai/cli): Every app, from the terminal. A CLI built for agents to run actions, build flows, sync data and receive webhooks.
+- [MCP](https://github.com/withoneai/mcp): Three tools. Every agent. Every app. One's MCP server, hosted at mcp.withone.ai or run locally from npm.
+- [Connect](https://github.com/withoneai/connect): Enterprise auth for every user, for free. Embeddable authentication that lets your users connect their own apps to your product, with scoped access they can revoke.
+- [Knowledge](https://github.com/withoneai/knowledge): The world's largest API knowledge base, built for agents.
 
-This repository contains 218+ ready-to-run automation flows converted from the most popular n8n workflow templates. Each flow runs with a single command via One CLI.
+## Agents, go-to-market
 
-### How to use a flow
+- [gtm-lead-agent](https://github.com/withoneai/gtm-lead-agent): Research, score, and draft outreach for every inbound lead. Apps: Exa, Claude, Google Sheets, Gmail.
+- [higgsfield-launch-kit](https://github.com/withoneai/higgsfield-launch-kit): One product photo in, a launch kit out, and an agent that only pays for the shot worth animating. Apps: Higgsfield, Shopify, Claude, Google Drive, Slack.
+- [mastra-inbound-router](https://github.com/withoneai/mastra-inbound-router): Route your shared inbox, and approve every move before it happens. Apps: Mastra, TypeSafe, Anthropic, Gmail, HubSpot, Slack.
+- [speed-to-lead](https://github.com/withoneai/speed-to-lead): Answer every new lead in minutes, with the right reply for who they are. Apps: HubSpot, Claude, Gmail, Slack.
+- [winback-segment-builder](https://github.com/withoneai/winback-segment-builder): Find the customers who bought twice and went quiet, then build the winback. Apps: Klaviyo, Shopify, Claude, Slack.
+- [you-research-agent](https://github.com/withoneai/you-research-agent): Walk into every sales call already knowing the account. Apps: You.com, Claude, Slack, Google Sheets.
 
-1. Install One CLI: `npm i -g @anthropic/one`
-2. Connect required platforms: `one add <platform>` (e.g., `one add slack`, `one add gmail`)
-3. Run the flow: `one flow execute <flow-key> --input <param>=<value>`
+## Agents, sales ops
 
-### Example
+- [followup-debt](https://github.com/withoneai/followup-debt): Find every promise you broke in email, and draft the follow-up. Apps: Gmail, Claude, Slack.
+- [meeting-to-crm](https://github.com/withoneai/meeting-to-crm): Every external meeting becomes a CRM update, without opening the CRM. Apps: Google Calendar, Salesforce, Claude, Slack.
+- [pipeline-hygiene-agent](https://github.com/withoneai/pipeline-hygiene-agent): Find the deals that are lying to your pipeline report. Apps: Salesforce, Claude, Slack.
+- [renewal-risk-radar](https://github.com/withoneai/renewal-risk-radar): Find the renewals that are slipping while you can still do something. Apps: HubSpot, Claude, Gmail, Slack.
+- [target-list-builder](https://github.com/withoneai/target-list-builder): Build the quarter's target list off a live source instead of buying a stale one. Apps: Apify, Claude, HubSpot, Google Sheets.
+- [usage-to-outreach](https://github.com/withoneai/usage-to-outreach): Find the accounts whose usage just spiked or cratered, and draft the outreach. Apps: PostHog, Stripe, Gmail.
 
-```bash
-one add exa
-one add slack
-one flow execute n8n-1954-ai-agent-chat --input question="How does RAG work?" --input slackChannel="C01ABC123"
-```
+## Agents, finance
 
-### Flow structure
+- [ar-collections-agent](https://github.com/withoneai/ar-collections-agent): Chase every overdue invoice without writing a single email. Apps: QuickBooks, Claude, Gmail.
+- [expense-policy-auditor](https://github.com/withoneai/expense-policy-auditor): Read the month's card spend against a policy you actually wrote down. Apps: Brex, QuickBooks, Claude, Slack.
+- [failed-payment-recovery](https://github.com/withoneai/failed-payment-recovery): Recover failed payments with the email their decline reason actually deserves. Apps: Stripe, Claude, Gmail, Slack.
+- [revenue-reconciler](https://github.com/withoneai/revenue-reconciler): Match every Stripe payout to your ledger, and know why the ones that don't. Apps: Stripe, Xero, Claude, Slack.
+- [vendor-renewal-watch](https://github.com/withoneai/vendor-renewal-watch): Catch the subscriptions nobody uses before they renew. Apps: QuickBooks, Notion, Claude, Slack.
 
-Each flow lives in `flows/n8n/<slug>/` with:
-- `README.md` — what it does, required platforms, quick start command, inputs
-- `n8n-<id>-<slug>.flow.json` — the executable flow definition
+## Agents, people operations
 
-### Browse flows
+- [candidate-screener](https://github.com/withoneai/candidate-screener): Screen every applicant blind, with the reasoning attached. Apps: Workable, Claude, Gmail.
+- [onboarding-agent](https://github.com/withoneai/onboarding-agent): Onboard a new hire without the four-tab scramble. Apps: Google Sheets, Google Calendar, Gmail, Slack.
+- [onboarding-followthrough](https://github.com/withoneai/onboarding-followthrough): Know what actually happened in a new hire's first two weeks. Apps: Asana, Google Calendar, Claude, Slack.
+- [review-cycle-nudger](https://github.com/withoneai/review-cycle-nudger): Chase the empty performance reviews with the goals already quoted. Apps: Notion, Claude, Slack.
 
-All flows are listed at: flows/n8n/README.md
+## Agents, operations
 
-### Key commands
+- [backlog-groomer](https://github.com/withoneai/backlog-groomer): Groom the Linear backlog nobody has time to go through. Apps: Linear, Claude, Slack.
+- [company-pulse](https://github.com/withoneai/company-pulse): Wake up knowing how the company did yesterday. Apps: Inngest, Stripe, Linear, Slack.
+- [deepgram-demo](https://github.com/withoneai/deepgram-demo): Talk to your calendar, inbox and CRM, and decide exactly what the agent may touch. Apps: Deepgram, OpenAI, Google Calendar, Gmail, Attio, Notion.
+- [doc-rot-auditor](https://github.com/withoneai/doc-rot-auditor): Find the wiki pages that are quietly lying to your team. Apps: Notion, Claude, Slack.
+- [jev-email-classifier](https://github.com/withoneai/jev-email-classifier): Sort your inbox into categories you write in plain English. Apps: TypeSafe, Gmail.
+- [oncall-week-in-review](https://github.com/withoneai/oncall-week-in-review): The on-call week in one page, with the tuning ticket already written. Apps: Datadog, Claude, Linear, Slack.
+- [release-notes-writer](https://github.com/withoneai/release-notes-writer): Turn this week's shipped tickets into release notes someone would read. Apps: Linear, Claude, Notion.
+- [shopify-store-ops](https://github.com/withoneai/shopify-store-ops): Know what broke in your store overnight, and what to do about it. Apps: Shopify, Claude, Slack.
+- [support-signal-router](https://github.com/withoneai/support-signal-router): Turn a week of support tickets into the three product problems behind them. Apps: Intercom, Claude, Linear.
 
-- `one list` — see connected platforms
-- `one add <platform>` — connect a new platform
-- `one flow execute <key>` — run a flow
-- `one flow list` — list available flows
-- `one --agent actions search <platform> "<query>"` — find platform actions
-- `one --agent guide` — full documentation
+## Agents, more
 
-## Other resources
+- [competitor-radar](https://github.com/withoneai/competitor-radar): Know what your competitors shipped before your next sales call. Apps: Exa, Claude, Google Sheets, Slack.
+- [customer-360](https://github.com/withoneai/customer-360): Find the paying customers you've gone quiet on. Apps: Inngest, Stripe, Gmail, Google Calendar.
+- [funnel-triage-agent](https://github.com/withoneai/funnel-triage-agent): Turn the funnel step that broke this week into a Linear ticket. Apps: PostHog, Claude, Linear.
+- [hermes-agent](https://github.com/withoneai/hermes-agent): Give a self-improving agent hands on 500+ platforms. Apps: Hermes Agent, Slack, Gmail, Stripe.
 
-- Link (./link/) — Drop-in connection onboarding page for agencies
-- Dev Pulse (./dev-pulse/) — Real-time engineering command center over GitHub, Linear, Slack and Calendar
-- Inbox Run (./inbox-run/) — Gmail triage: TypeSafe Jev classifies, One labels, archives, and writes to Sheets, HubSpot and Slack
-- Website: https://withone.ai
-- Docs: https://withone.ai/docs
-- Dashboard: https://app.withone.ai
+## Templates, apps
+
+- [Sales Agent](https://github.com/withoneai/template-sales-agent): An AI sales teammate that works inside your users' own CRM and inbox. Apps: Attio, HubSpot, Gmail, Resend.
+- [CRM Enrichment Desk](https://github.com/withoneai/template-crm-enrichment-desk): Every Attio person missing a job title, phone or LinkedIn, checked against the last email they sent you. Apps: Attio, Gmail.
+- [Content Calendar](https://github.com/withoneai/template-content-calendar): An editorial calendar read straight from a Notion database, grouped into in progress, scheduled and published. Apps: Notion, Google Calendar.
+- [Support SLA Monitor](https://github.com/withoneai/template-support-sla-monitor): Open Zendesk tickets ranked by how close they are to breaching SLA. Apps: Zendesk, Slack.
+- [Invoice Chaser](https://github.com/withoneai/template-invoice-chaser): Overdue invoices read straight from Xero, each with a chase email already drafted. Apps: Xero, Gmail.
+- [Applicant Tracker](https://github.com/withoneai/template-applicant-tracker): Inbound job applications read straight from Gmail, each one scored against the open role by Claude and logged to a Google Sheet. Apps: Gmail, Google Sheets.
+- [Order Ops Console](https://github.com/withoneai/template-order-ops-console): Recent Shopify orders with fulfillment status, read straight from the store. Apps: Shopify, Slack.
+- [Bug Triage Desk](https://github.com/withoneai/template-bug-triage-desk): New GitHub issues classified by severity and area, read straight from the repo. Apps: GitHub, Linear.
+- [Meeting Prep Brief](https://github.com/withoneai/template-meeting-prep-brief): A one-page brief on every attendee before each meeting on today's calendar, read from Google Calendar and matched against HubSpot by email. Apps: Google Calendar, HubSpot.
+- [Standup Board](https://github.com/withoneai/template-standup-board): Yesterday, today and blockers for every person, read straight from Linear and written in plain English. Apps: Linear, Slack.
+- [Churn Radar](https://github.com/withoneai/template-churn-radar): Every account leaving your Stripe account in one view, each with a save offer already drafted. Apps: Stripe, Slack.
+- [Support Inbox Agent](https://github.com/withoneai/template-support-inbox): A support dashboard where an agent triages your Gmail inbox, tags each message by urgency, and drafts replies you approve with one click. Apps: Gmail.
+- [Revenue Dashboard](https://github.com/withoneai/template-revenue-dashboard): A live dashboard of your Stripe revenue: MRR, new customers, and recent charges, refreshed on load with alerts posted to Slack. Apps: Stripe, Slack.
+
+## Templates, landing pages
+
+- [Live Pricing Page](https://github.com/withoneai/template-live-pricing-page): A pricing page whose plans, prices and feature lists come straight from your Stripe products. Apps: Stripe.
+- [Shopify Product Launch Page](https://github.com/withoneai/template-shopify-storefront): A launch page that pulls live products, prices, and images straight from your Shopify store, with buy links that stay in sync. Apps: Shopify.
+- [Waitlist Landing Page](https://github.com/withoneai/template-waitlist): A polished waitlist page for your next launch. Apps: Google Sheets, Slack.
+
+## Templates, lead capture
+
+- [AI Lead Capture Form](https://github.com/withoneai/template-lead-capture): A lead form that scores every submission with Claude against your ICP, logs it to Google Sheets, and drafts a personalized follow-up in Gmail. Apps: Google Sheets, Gmail.
+- [Event RSVP Page](https://github.com/withoneai/template-event-rsvp): An event page where every RSVP creates a Google Calendar invite and sends a confirmation email, no ticketing platform needed. Apps: Google Calendar, Gmail.
+
+## Integrations
+
+- [Mastra](https://github.com/withoneai/mastra): `@withone/mastra`. Apps as tools, workflow steps and triggers for Mastra agents, with no OAuth code to write.
+- [Claude plugin](https://github.com/withoneai/claude-plugin): One for Claude Code and Cowork, through One's remote MCP server. Sign in from the browser, with nothing to install.
+- [Agent plugin](https://github.com/withoneai/one-agent-plugin): One packaged to the Agent Plugins 1.0.0 standard, which ChatGPT, Codex, Cursor, GitHub Copilot, Kiro and VS Code all read the same way.
+- [App icons](https://github.com/withoneai/app-icons): SVG logos for every platform on One.
+
+## In this repo
+
+- [Inbox Run](https://github.com/withoneai/awesome-one/tree/main/inbox-run): Gmail triage with TypeSafe Jev. Jev answers four typed questions about every conversation, and One labels the mail, archives the bulk, writes a ledger and posts a summary. Apps: Gmail, Google Sheets, HubSpot, Slack.
+- [Prompt Sanitizer](https://github.com/withoneai/awesome-one/tree/main/flows/prompt-sanitize): A One CLI flow that strips invisible text, redacts secrets and personal data, and flags prompt injection before a prompt reaches a model. No connections needed.
+
+## Optional
+
+- [Use cases](https://withone.ai/use-cases): A page for each agent that walks through what it does and how to run it.
+- [Templates](https://withone.ai/templates-vibe): The templates gallery. Each template opens in Replit, Bolt.new or Lovable.
+- [Docs](https://withone.ai/docs): One's documentation.
+- [Dashboard](https://app.withone.ai): One's dashboard.
+- [Support](https://github.com/withoneai/awesome-one/issues): Open an issue, or email support@withone.ai.
